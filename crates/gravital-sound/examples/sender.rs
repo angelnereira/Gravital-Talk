@@ -1,7 +1,9 @@
 //! Envía una onda sinusoidal de 440 Hz a un receptor Gravital Sound.
 //!
 //! Uso:
-//!   cargo run --release --example sender -- 127.0.0.1:9000
+//!   cargo run --release --example sender -- <peer_addr> [local_bind]
+//! Por ejemplo:
+//!   cargo run --release --example sender -- 127.0.0.1:9000 127.0.0.1:9100
 
 use std::env;
 use std::net::SocketAddr;
@@ -16,16 +18,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .nth(1)
         .unwrap_or_else(|| "127.0.0.1:9000".to_string())
         .parse()?;
+    let bind: SocketAddr = env::args()
+        .nth(2)
+        .unwrap_or_else(|| "127.0.0.1:9100".to_string())
+        .parse()?;
 
     let transport = Arc::new(
         UdpTransport::bind(UdpConfig {
-            bind_addr: "0.0.0.0:0".parse()?,
+            bind_addr: bind,
             ..Default::default()
         })
         .await?,
     );
 
-    let config = Config::default();
+    // 10 ms frames para que 480 samples PCM16 mono = 960 B quepan en la MTU
+    // default (1200) después del header de 24 B y trailer de 4 B.
+    let config = Config {
+        frame_duration_ms: 10,
+        ..Config::default()
+    };
     let session = Session::new(transport, config.clone());
     session.handshake(SessionRole::Client, peer).await?;
     println!("handshake ok, session_id=0x{:08X}", session.session_id());
