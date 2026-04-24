@@ -1,0 +1,19 @@
+[build.env]
+passthrough = ["RUSTFLAGS", "CARGO_PROFILE_RELEASE_LTO"]
+
+[target.aarch64-unknown-linux-gnu]
+image = "ghcr.io/cross-rs/aarch64-unknown-linux-gnu:main"
+
+[target.armv7-unknown-linux-gnueabihf]
+image = "ghcr.io/cross-rs/armv7-unknown-linux-gnueabihf:main"
+
+[target.aarch64-unknown-linux-musl]
+image = "ghcr.io/cross-rs/aarch64-unknown-linux-musl:main"
+
+[target.x86_64-unknown-linux-musl]
+image = "ghcr.io/cross-rs/x86_64-unknown-linux-musl:main"
+
+[target.wasm32-unknown-unknown]
+# Usamos wasm-pack para el SDK web, pero `cross build` también funciona
+# para validar que el core sigue siendo no_std compatible.
+xargo = false

@@ -1,0 +1,120 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/gravital-sound-core",
+    "crates/gravital-sound-metrics",
+    "crates/gravital-sound-transport",
+    "crates/gravital-sound",
+    "crates/gravital-sound-ffi",
+    "crates/gravital-sound-cli",
+]
+
+# Los SDKs de Python y WASM se construyen con sus propias herramientas
+# (maturin y wasm-pack) y no se incluyen en el workspace porque dependen
+# de entornos de build distintos.
+exclude = [
+    "sdks/python",
+    "sdks/web",
+]
+
+default-members = [
+    "crates/gravital-sound-core",
+    "crates/gravital-sound-metrics",
+    "crates/gravital-sound-transport",
+    "crates/gravital-sound",
+    "crates/gravital-sound-ffi",
+    "crates/gravital-sound-cli",
+]
+
+[workspace.package]
+version = "0.1.0-alpha.1"
+edition = "2021"
+rust-version = "1.78"
+authors = ["Angel Nereira <angelnereira15@gmail.com>"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/angelnereira/gravital-sound"
+homepage = "https://gravitalsound.dev"
+documentation = "https://docs.rs/gravital-sound"
+readme = "README.md"
+keywords = ["audio", "realtime", "protocol", "udp", "voip"]
+categories = ["multimedia::audio", "network-programming"]
+
+[workspace.dependencies]
+# Internal crates
+gravital-sound-core      = { path = "crates/gravital-sound-core", version = "0.1.0-alpha.1", default-features = false }
+gravital-sound-metrics   = { path = "crates/gravital-sound-metrics", version = "0.1.0-alpha.1" }
+gravital-sound-transport = { path = "crates/gravital-sound-transport", version = "0.1.0-alpha.1" }
+gravital-sound           = { path = "crates/gravital-sound", version = "0.1.0-alpha.1" }
+
+# Async runtime + networking
+tokio             = { version = "1.40", default-features = false }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "handshake"] }
+socket2           = { version = "0.5", features = ["all"] }
+bytes             = "1.7"
+
+# Concurrency + data structures
+crossbeam-queue = "0.3"
+smallvec        = { version = "1.13", features = ["const_generics", "const_new"] }
+
+# Observability
+tracing            = { version = "0.1", default-features = false }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# CLI
+clap  = { version = "4.5", features = ["derive", "env"] }
+hound = "3.5"
+
+# Error / utils
+thiserror = "1.0"
+anyhow    = "1.0"
+
+# FFI
+cbindgen = "0.27"
+
+# Benchmarks + profiling
+criterion     = { version = "0.5", features = ["html_reports"] }
+iai           = "0.1"
+hdrhistogram  = "7.5"
+dhat          = "0.3"
+proptest      = "1.5"
+
+# Allocator
+mimalloc = { version = "0.1", default-features = false }
+
+# Python SDK
+pyo3    = { version = "0.22", features = ["extension-module", "abi3-py39"] }
+
+# Web SDK
+wasm-bindgen         = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys               = "0.3"
+web-sys              = "0.3"
+serde                = { version = "1.0", features = ["derive"] }
+serde-wasm-bindgen   = "0.6"
+
+# ───────────────────────────────────────────────────────────
+# Release profile: grado militar
+# ───────────────────────────────────────────────────────────
+
+[profile.release]
+opt-level        = 3
+lto              = "fat"
+codegen-units    = 1
+panic            = "abort"
+strip            = "symbols"
+debug            = false
+overflow-checks  = false
+incremental      = false
+
+[profile.bench]
+inherits   = "release"
+debug      = true
+strip      = "none"
+
+[profile.dev]
+opt-level = 1
+debug     = true
+
+[profile.test]
+opt-level = 1
+debug     = true
