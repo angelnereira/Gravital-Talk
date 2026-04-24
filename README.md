@@ -97,14 +97,24 @@ session.onAudio((pcm) => {
 ## Quickstart — CLI
 
 ```bash
-# Terminal 1: receptor que escribe a WAV.
-gs receive --bind 0.0.0.0:9000 --output out.wav
+# Lista input/output devices disponibles.
+gs devices
 
-# Terminal 2: emisor con onda sinusoidal de prueba.
-gs send --host 127.0.0.1:9000 --input sine:440
+# Terminal 1: receptor que escribe WAV + reproduce por altavoz.
+gs receive --bind 0.0.0.0 --port 9000 \
+           --peer 127.0.0.1 --peer-port 9100 \
+           --device default --codec opus \
+           --output out.wav
+
+# Terminal 2: emisor desde micrófono con codec Opus.
+gs send --host 127.0.0.1 --port 9000 \
+        --device default --codec opus
+
+# Emisor con onda sinusoidal sintética (sin hardware).
+gs send --host 127.0.0.1 --port 9000 --input sine --codec pcm
 
 # Benchmark de latencia loopback con histogramas p50/p99/p99.9.
-gs bench --mode loopback --duration 30s
+gs bench --mode loopback --duration 30
 ```
 
 ---
