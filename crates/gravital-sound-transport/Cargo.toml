@@ -1,0 +1,36 @@
+[package]
+name         = "gravital-sound-transport"
+version.workspace    = true
+edition.workspace    = true
+rust-version.workspace = true
+authors.workspace    = true
+license.workspace    = true
+repository.workspace = true
+description = "Gravital Sound — UDP transport, jitter buffer, session manager."
+readme       = "../../README.md"
+
+[lib]
+name = "gravital_sound_transport"
+path = "src/lib.rs"
+
+[features]
+default = []
+
+[dependencies]
+gravital-sound-core    = { workspace = true, default-features = false, features = ["alloc", "std"] }
+gravital-sound-metrics = { workspace = true }
+tokio             = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync", "macros", "io-util"] }
+socket2           = { workspace = true }
+bytes             = { workspace = true }
+crossbeam-queue   = { workspace = true }
+smallvec          = { workspace = true }
+tracing           = { workspace = true }
+thiserror         = { workspace = true }
+async-trait       = "0.1"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync", "macros", "io-util", "test-util"] }
+tracing-subscriber = { workspace = true }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"

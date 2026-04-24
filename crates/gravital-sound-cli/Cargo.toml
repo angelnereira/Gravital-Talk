@@ -1,0 +1,27 @@
+[package]
+name         = "gravital-sound-cli"
+version.workspace    = true
+edition.workspace    = true
+rust-version.workspace = true
+authors.workspace    = true
+license.workspace    = true
+repository.workspace = true
+description = "Gravital Sound — CLI `gs` (send, receive, bench, info, doctor, relay)."
+readme       = "../../README.md"
+
+[[bin]]
+name = "gs"
+path = "src/main.rs"
+
+[dependencies]
+gravital-sound    = { workspace = true }
+tokio             = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync", "macros", "signal", "io-util"] }
+clap              = { workspace = true }
+hound             = { workspace = true }
+tracing           = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow            = { workspace = true }
+bytes             = { workspace = true }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"

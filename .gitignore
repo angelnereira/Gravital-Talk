@@ -1,0 +1,44 @@
+# Rust
+/target
+**/target
+**/*.rs.bk
+*.pdb
+Cargo.lock.bak
+
+# Generated FFI header (tracked in crates/gravital-sound-ffi/include instead)
+/gravital_sound.h
+
+# Python SDK
+sdks/python/target
+sdks/python/.venv
+sdks/python/dist
+sdks/python/*.egg-info
+sdks/python/**/__pycache__
+sdks/python/.pytest_cache
+sdks/python/.maturin
+
+# Web SDK
+sdks/web/target
+sdks/web/pkg
+sdks/web/node_modules
+sdks/web/dist
+sdks/web/.parcel-cache
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Profiling
+*.profraw
+perf.data*
+flamegraph.svg
+callgrind.out.*
+massif.out.*
+dhat-heap.json
+
+# Criterion baseline
+criterion/

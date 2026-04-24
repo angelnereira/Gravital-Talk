@@ -1,0 +1,55 @@
+[package]
+name         = "gravital-sound"
+version.workspace    = true
+edition.workspace    = true
+rust-version.workspace = true
+authors.workspace    = true
+license.workspace    = true
+repository.workspace = true
+description = "Gravital Sound — facade crate re-exporting core, metrics y transport para uso ergonómico."
+readme       = "../../README.md"
+
+[lib]
+name = "gravital_sound"
+path = "src/lib.rs"
+
+[features]
+default = ["std"]
+std = ["gravital-sound-core/std"]
+alloc = ["gravital-sound-core/alloc"]
+
+[dependencies]
+gravital-sound-core      = { workspace = true, default-features = false }
+gravital-sound-metrics   = { workspace = true }
+gravital-sound-transport = { workspace = true }
+
+[dev-dependencies]
+tokio             = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync", "macros"] }
+hound             = { workspace = true }
+hdrhistogram      = { workspace = true }
+tracing-subscriber = { workspace = true }
+criterion         = { workspace = true }
+
+[[bench]]
+name = "encode_decode"
+harness = false
+
+[[bench]]
+name = "checksum"
+harness = false
+
+[[example]]
+name = "sender"
+path = "examples/sender.rs"
+
+[[example]]
+name = "receiver"
+path = "examples/receiver.rs"
+
+[[example]]
+name = "loopback"
+path = "examples/loopback.rs"
+
+[[example]]
+name = "relay_server"
+path = "examples/relay_server.rs"
