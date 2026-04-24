@@ -32,7 +32,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?,
     );
 
-    let config = Config::default();
+    let config = Config {
+        frame_duration_ms: 10,
+        ..Config::default()
+    };
     let session = Session::new(transport, config.clone());
     session.handshake(SessionRole::Server, peer).await?;
     println!("handshake ok, session_id=0x{:08X}", session.session_id());

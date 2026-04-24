@@ -237,15 +237,34 @@ impl Session {
 
     async fn handshake_server(&self, peer: SocketAddr) -> Result<(), TransportError> {
         let mut buf = vec![0u8; self.config.mtu];
-        let (n, from) = self.transport.recv(&mut buf).await?;
-        if from != peer {
-            return Err(TransportError::Handshake("unexpected peer"));
-        }
-        let view = PacketView::decode(&buf[..n]).map_err(TransportError::Protocol)?;
-        if view.header().msg_type != MessageType::HandshakeInit.code() {
-            return Err(TransportError::Handshake("expected HANDSHAKE_INIT"));
-        }
-        let init = HandshakeInit::decode(view.payload()).map_err(TransportError::Protocol)?;
+        // Descarta datagramas de otros peers (o malformados) hasta encontrar
+        // un HANDSHAKE_INIT válido del peer esperado. Evita que un tercer
+        // host interrumpa el handshake.
+        let init: HandshakeInit = loop {
+            let (n, from) = self.transport.recv(&mut buf).await?;
+            if from != peer {
+                tracing::debug!(?from, expected = ?peer, "dropping datagram from wrong peer");
+                continue;
+            }
+            let view = match PacketView::decode(&buf[..n]) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::debug!(?e, "dropping malformed packet during handshake");
+                    continue;
+                }
+            };
+            if view.header().msg_type != MessageType::HandshakeInit.code() {
+                tracing::debug!(
+                    msg_type = view.header().msg_type,
+                    "dropping non-INIT packet during handshake"
+                );
+                continue;
+            }
+            match HandshakeInit::decode(view.payload()) {
+                Ok(i) => break i,
+                Err(e) => return Err(TransportError::Protocol(e)),
+            }
+        };
         if init.protocol_version != 1 {
             return Err(TransportError::Handshake("protocol version mismatch"));
         }
@@ -272,13 +291,31 @@ impl Session {
         self.send_control(MessageType::HandshakeAccept, session_id, &payload, peer)
             .await?;
 
-        // Espera CONFIRM.
-        let (n, _from) = self.transport.recv(&mut buf).await?;
-        let view = PacketView::decode(&buf[..n]).map_err(TransportError::Protocol)?;
-        if view.header().msg_type != MessageType::HandshakeConfirm.code() {
-            return Err(TransportError::Handshake("expected HANDSHAKE_CONFIRM"));
-        }
-        let confirm = HandshakeConfirm::decode(view.payload()).map_err(TransportError::Protocol)?;
+        // Espera CONFIRM, ignorando tráfico de otros peers.
+        let confirm: HandshakeConfirm = loop {
+            let (n, from) = self.transport.recv(&mut buf).await?;
+            if from != peer {
+                tracing::debug!(
+                    ?from,
+                    "dropping datagram from wrong peer during CONFIRM wait"
+                );
+                continue;
+            }
+            let view = match PacketView::decode(&buf[..n]) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::debug!(?e, "dropping malformed packet during CONFIRM wait");
+                    continue;
+                }
+            };
+            if view.header().msg_type != MessageType::HandshakeConfirm.code() {
+                continue;
+            }
+            match HandshakeConfirm::decode(view.payload()) {
+                Ok(c) => break c,
+                Err(e) => return Err(TransportError::Protocol(e)),
+            }
+        };
         if confirm.session_id != session_id {
             return Err(TransportError::Handshake("session_id mismatch"));
         }

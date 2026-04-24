@@ -42,3 +42,5 @@ dhat-heap.json
 
 # Criterion baseline
 criterion/
+sdks/python/gravital_sound/*.so
+sdks/python/.venv

@@ -1,11 +1,12 @@
 """Smoke tests del SDK Python.
 
-Estos tests requieren el módulo nativo construido con `maturin develop`.
-Si el módulo no está disponible, los tests se skippean.
+Requiere el módulo nativo construido con `maturin develop`. Si no está
+disponible, los tests se skippean con importorskip.
 """
 
 from __future__ import annotations
 
+import queue
 import threading
 import time
 
@@ -35,63 +36,62 @@ def test_config_overrides():
 def test_session_create_and_close():
     session = gs.Session(bind_addr="127.0.0.1", bind_port=0)
     assert session.session_id == 0
+    assert session.local_port > 0
+    session.close()
+
+
+def test_local_addr_exposed():
+    session = gs.Session(bind_addr="127.0.0.1", bind_port=0)
+    assert session.local_addr.startswith("127.0.0.1:")
+    port = session.local_port
+    assert 1024 <= port <= 65535
     session.close()
 
 
 def test_loopback_handshake_and_send():
+    """Two sessions en localhost hacen handshake 3-way y envían un frame."""
     server = gs.Session(config=gs.Config(), bind_addr="127.0.0.1", bind_port=0)
     client = gs.Session(config=gs.Config(), bind_addr="127.0.0.1", bind_port=0)
 
-    # Hand off real ports via Python-level side channel.
-    server_ready = threading.Event()
-    server_error: list[BaseException] = []
+    server_port = server.local_port
+    client_port = client.local_port
 
-    def server_main():
+    result: queue.Queue = queue.Queue()
+
+    def server_thread():
         try:
-            # El peer "real" lo descubre el handshake al recibir el primer paquete.
-            server.accept("127.0.0.1", client_port_holder[0])
-            server_ready.set()
-        except BaseException as e:  # pragma: no cover - debug
-            server_error.append(e)
-            server_ready.set()
+            server.accept("127.0.0.1", client_port)
+            result.put(("ok", None))
+        except BaseException as e:
+            result.put(("err", e))
 
-    # Conocemos el bind port del cliente via metrics no está disponible.
-    # En su lugar hacemos handshake en dos threads intercambiando puertos.
-    client_port_holder = [0]
-    # Extraer el bind port del cliente a partir de un campo interno — el SDK
-    # Python no lo expone todavía, así que usamos un socket dummy para picks
-    # un puerto libre antes de arrancar el cliente real.
-    import socket
-
-    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    probe.bind(("127.0.0.1", 0))
-    client_port_holder[0] = probe.getsockname()[1]
-    probe.close()
-
-    # Reinicia el cliente en ese puerto específico para que el server sepa a dónde responder.
-    client = gs.Session(config=gs.Config(), bind_addr="127.0.0.1", bind_port=client_port_holder[0])
-
-    # Mismo truco para el servidor.
-    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    probe.bind(("127.0.0.1", 0))
-    server_port = probe.getsockname()[1]
-    probe.close()
-    server = gs.Session(config=gs.Config(), bind_addr="127.0.0.1", bind_port=server_port)
-
-    t = threading.Thread(target=server_main, daemon=True)
+    t = threading.Thread(target=server_thread, daemon=True)
     t.start()
 
-    time.sleep(0.1)
+    # El servidor ya está listen-blocking; ahora el cliente envía INIT.
+    # Un pequeño delay para ceder el CPU al thread del servidor.
+    time.sleep(0.05)
     client.connect("127.0.0.1", server_port)
-    server_ready.wait(timeout=5.0)
-    if server_error:
-        raise server_error[0]
+
+    status, err = result.get(timeout=5.0)
+    if status == "err":
+        raise err
 
     assert client.session_id != 0
     assert client.session_id == server.session_id
 
-    payload = b"\x00\x10" * 480  # 960 bytes = 480 samples PCM16 mono
+    payload = b"\x00\x10" * 480  # 960 bytes = 480 samples PCM16 mono @ 20 ms
     client.send_audio(payload)
 
     client.close()
     server.close()
+
+
+def test_metrics_snapshot_shape():
+    session = gs.Session(bind_addr="127.0.0.1", bind_port=0)
+    m = session.metrics()
+    assert m.rtt_ms >= 0.0
+    assert m.estimated_mos >= 1.0
+    assert m.estimated_mos <= 5.0
+    assert m.packets_sent == 0
+    session.close()

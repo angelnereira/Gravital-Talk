@@ -3,9 +3,10 @@
 SDK de Gravital Sound para navegadores. Combina un módulo WASM (encode/decode
 del protocolo) con un transport WebSocket en JavaScript.
 
-> El MVP depende de un relay WebSocket externo (ver
-> `examples/relay_server.rs` en la raíz del repo para un relay UDP que puede
-> extenderse a WebSocket).
+> **Requiere un relay WebSocket externo.** El MVP sólo entrega relay UDP. El
+> relay WebSocket (`tokio-tungstenite` + proxy a UDP) está planeado para
+> Track C (producción y seguridad). Hasta entonces, el demo
+> `examples/browser-demo/` marca la funcionalidad como WIP.
 
 ## Build
 
