@@ -4,6 +4,8 @@ members = [
     "crates/gravital-sound-core",
     "crates/gravital-sound-metrics",
     "crates/gravital-sound-transport",
+    "crates/gravital-sound-codec",
+    "crates/gravital-sound-io",
     "crates/gravital-sound",
     "crates/gravital-sound-ffi",
     "crates/gravital-sound-cli",
@@ -21,6 +23,8 @@ default-members = [
     "crates/gravital-sound-core",
     "crates/gravital-sound-metrics",
     "crates/gravital-sound-transport",
+    "crates/gravital-sound-codec",
+    "crates/gravital-sound-io",
     "crates/gravital-sound",
     "crates/gravital-sound-ffi",
     "crates/gravital-sound-cli",
@@ -44,6 +48,8 @@ categories = ["multimedia::audio", "network-programming"]
 gravital-sound-core      = { path = "crates/gravital-sound-core", version = "0.1.0-alpha.1", default-features = false }
 gravital-sound-metrics   = { path = "crates/gravital-sound-metrics", version = "0.1.0-alpha.1" }
 gravital-sound-transport = { path = "crates/gravital-sound-transport", version = "0.1.0-alpha.1" }
+gravital-sound-codec     = { path = "crates/gravital-sound-codec", version = "0.1.0-alpha.1" }
+gravital-sound-io        = { path = "crates/gravital-sound-io", version = "0.1.0-alpha.1" }
 gravital-sound           = { path = "crates/gravital-sound", version = "0.1.0-alpha.1" }
 
 # Async runtime + networking
