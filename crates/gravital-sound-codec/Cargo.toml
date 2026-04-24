@@ -1,0 +1,30 @@
+[package]
+name         = "gravital-sound-codec"
+version.workspace    = true
+edition.workspace    = true
+rust-version.workspace = true
+authors.workspace    = true
+license.workspace    = true
+repository.workspace = true
+description = "Gravital Sound — codecs (PCM passthrough + Opus)."
+readme       = "../../README.md"
+
+[lib]
+name = "gravital_sound_codec"
+path = "src/lib.rs"
+
+[features]
+default = ["opus"]
+opus    = ["dep:audiopus"]
+
+[dependencies]
+gravital-sound-core = { workspace = true, default-features = false, features = ["alloc", "std"] }
+thiserror           = { workspace = true }
+audiopus            = { version = "0.2", optional = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+hound    = { workspace = true }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
