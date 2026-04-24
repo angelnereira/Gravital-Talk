@@ -15,7 +15,7 @@ path = "src/lib.rs"
 
 [dependencies]
 gravital-sound = { path = "../../crates/gravital-sound" }
-pyo3           = { version = "0.22", features = ["extension-module", "abi3-py39"] }
+pyo3           = { version = "0.23", features = ["extension-module", "abi3-py39"] }
 tokio          = { version = "1.40", features = ["rt-multi-thread", "net", "time", "sync", "macros"] }
 once_cell      = "1.19"
 

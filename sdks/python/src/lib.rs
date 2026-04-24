@@ -115,6 +115,7 @@ impl PyMetrics {
 #[pyclass(name = "Session")]
 struct PySession {
     inner: Arc<RustSession>,
+    local_addr: SocketAddr,
 }
 
 #[pymethods]
@@ -122,6 +123,7 @@ impl PySession {
     #[new]
     #[pyo3(signature = (config=None, bind_addr="0.0.0.0", bind_port=0))]
     fn new(config: Option<PyConfig>, bind_addr: &str, bind_port: u16) -> PyResult<Self> {
+        use gravital_sound::Transport;
         let cfg = config.map(|c| c.inner).unwrap_or_default();
         let ip: std::net::IpAddr = bind_addr
             .parse()
@@ -133,59 +135,81 @@ impl PySession {
                 ..Default::default()
             }))
             .map_err(|e| PyIOError::new_err(e.to_string()))?;
+        let local_addr = transport
+            .local_addr()
+            .map_err(|e| PyIOError::new_err(e.to_string()))?;
         Ok(Self {
             inner: Arc::new(RustSession::new(Arc::new(transport), cfg)),
+            local_addr,
         })
     }
 
-    fn connect(&self, host: &str, port: u16) -> PyResult<()> {
+    fn connect(&self, py: Python<'_>, host: &str, port: u16) -> PyResult<()> {
         let peer: SocketAddr = format!("{host}:{port}")
             .parse()
             .map_err(|e: std::net::AddrParseError| PyValueError::new_err(e.to_string()))?;
         let s = self.inner.clone();
-        RUNTIME
-            .block_on(async move { s.handshake(SessionRole::Client, peer).await })
-            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        py.allow_threads(|| {
+            RUNTIME
+                .block_on(async move { s.handshake(SessionRole::Client, peer).await })
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
     }
 
-    fn accept(&self, host: &str, port: u16) -> PyResult<()> {
+    fn accept(&self, py: Python<'_>, host: &str, port: u16) -> PyResult<()> {
         let peer: SocketAddr = format!("{host}:{port}")
             .parse()
             .map_err(|e: std::net::AddrParseError| PyValueError::new_err(e.to_string()))?;
         let s = self.inner.clone();
-        RUNTIME
-            .block_on(async move { s.handshake(SessionRole::Server, peer).await })
-            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        py.allow_threads(|| {
+            RUNTIME
+                .block_on(async move { s.handshake(SessionRole::Server, peer).await })
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        })
     }
 
-    fn send_audio(&self, data: &[u8]) -> PyResult<()> {
+    fn send_audio(&self, py: Python<'_>, data: &[u8]) -> PyResult<()> {
         let s = self.inner.clone();
         let owned = data.to_vec();
-        RUNTIME
-            .block_on(async move { s.send_audio(&owned).await })
-            .map_err(|e| PyIOError::new_err(e.to_string()))
-    }
-
-    fn recv_audio(&self) -> PyResult<Py<pyo3::types::PyBytes>> {
-        let s = self.inner.clone();
-        let frame = RUNTIME
-            .block_on(async move { s.recv_audio().await })
-            .map_err(|e| PyIOError::new_err(e.to_string()))?;
-        Python::with_gil(|py| {
-            Ok(pyo3::types::PyBytes::new_bound(py, &frame.payload).unbind())
+        py.allow_threads(|| {
+            RUNTIME
+                .block_on(async move { s.send_audio(&owned).await })
+                .map_err(|e| PyIOError::new_err(e.to_string()))
         })
     }
 
-    fn close(&self) -> PyResult<()> {
+    fn recv_audio(&self, py: Python<'_>) -> PyResult<Py<pyo3::types::PyBytes>> {
         let s = self.inner.clone();
-        RUNTIME
-            .block_on(async move { s.close().await })
-            .map_err(|e| PyIOError::new_err(e.to_string()))
+        let frame = py.allow_threads(|| {
+            RUNTIME
+                .block_on(async move { s.recv_audio().await })
+                .map_err(|e| PyIOError::new_err(e.to_string()))
+        })?;
+        Python::with_gil(|py| Ok(pyo3::types::PyBytes::new(py, &frame.payload).unbind()))
+    }
+
+    fn close(&self, py: Python<'_>) -> PyResult<()> {
+        let s = self.inner.clone();
+        py.allow_threads(|| {
+            RUNTIME
+                .block_on(async move { s.close().await })
+                .map_err(|e| PyIOError::new_err(e.to_string()))
+        })
     }
 
     #[getter]
     fn session_id(&self) -> u32 {
         self.inner.session_id()
+    }
+
+    #[getter]
+    fn local_port(&self) -> u16 {
+        self.local_addr.port()
+    }
+
+    #[getter]
+    fn local_addr(&self) -> String {
+        self.local_addr.to_string()
     }
 
     fn metrics(&self) -> PyMetrics {
