@@ -18,10 +18,7 @@ use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(start)]
-pub fn start() {
-    #[cfg(feature = "console_error_panic_hook")]
-    console_error_panic_hook::set_once();
-}
+pub fn start() {}
 
 /// Versión del crate.
 #[wasm_bindgen(js_name = version)]
