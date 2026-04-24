@@ -1,0 +1,44 @@
+[package]
+name         = "gravital-sound-web"
+version      = "0.1.0-alpha.1"
+edition      = "2021"
+rust-version = "1.78"
+authors      = ["Angel Nereira <angelnereira15@gmail.com>"]
+license      = "MIT OR Apache-2.0"
+repository   = "https://github.com/angelnereira/gravital-sound"
+description  = "Gravital Sound — wasm-bindgen bindings para navegadores."
+
+[lib]
+name       = "gravital_sound_web"
+crate-type = ["cdylib", "rlib"]
+path       = "src/lib.rs"
+
+[dependencies]
+gravital-sound-core = { path = "../../crates/gravital-sound-core", default-features = false, features = ["alloc"] }
+wasm-bindgen        = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys              = "0.3"
+serde               = { version = "1", features = ["derive"] }
+serde-wasm-bindgen  = "0.6"
+
+[dependencies.web-sys]
+version = "0.3"
+features = [
+    "BinaryType",
+    "Event",
+    "MessageEvent",
+    "Blob",
+    "ErrorEvent",
+    "CloseEvent",
+    "WebSocket",
+    "console",
+]
+
+[workspace]
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

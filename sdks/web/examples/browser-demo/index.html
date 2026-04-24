@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Gravital Sound — Browser demo</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
+  h1 { margin-bottom: 0.2rem; }
+  .status { color: #555; font-size: 0.9rem; }
+  button { padding: 0.6rem 1rem; margin: 0.2rem; }
+  #log { background: #111; color: #0f0; padding: 0.6rem; height: 240px; overflow: auto; font-family: ui-monospace, monospace; font-size: 0.85rem; }
+</style>
+</head>
+<body>
+  <h1>Gravital Sound</h1>
+  <p class="status">WebSocket relay demo (requiere un relay WS corriendo)</p>
+  <p>
+    Relay URL:
+    <input id="url" value="ws://localhost:9100/ws" style="width: 60%;" />
+    <button id="connect">Connect</button>
+    <button id="disconnect" disabled>Disconnect</button>
+  </p>
+  <p>
+    <button id="sendSine" disabled>Send 1s sine burst</button>
+  </p>
+  <pre id="log"></pre>
+
+  <script type="module">
+    import { GravitalSoundSession, version, protocolVersion } from "../../js/index.ts";
+
+    const $log = document.getElementById("log");
+    const $connect = document.getElementById("connect");
+    const $disconnect = document.getElementById("disconnect");
+    const $send = document.getElementById("sendSine");
+    const $url = document.getElementById("url");
+    let session = null;
+
+    function log(msg) {
+      $log.textContent += msg + "\n";
+      $log.scrollTop = $log.scrollHeight;
+    }
+
+    log(`SDK v${await version ?? ""} proto v${await protocolVersion ?? ""}`);
+
+    $connect.addEventListener("click", async () => {
+      try {
+        session = await GravitalSoundSession.connect({ url: $url.value });
+        log(`connected, session_id=0x${session.id.toString(16)}`);
+        session.onAudio((f) => log(`rx seq=${f.sequence} bytes=${f.payload.length}`));
+        $connect.disabled = true;
+        $disconnect.disabled = false;
+        $send.disabled = false;
+      } catch (e) {
+        log(`ERROR: ${e.message}`);
+      }
+    });
+
+    $send.addEventListener("click", async () => {
+      if (!session) return;
+      const sampleRate = 48000;
+      const frameSamples = 960; // 20 ms mono
+      const total = 50; // 1s
+      let phase = 0;
+      const step = (2 * Math.PI * 440) / sampleRate;
+      for (let f = 0; f < total; f++) {
+        const buf = new Uint8Array(frameSamples * 2);
+        for (let i = 0; i < frameSamples; i++) {
+          const s = Math.round(Math.sin(phase) * 16000);
+          buf[i * 2] = s & 0xff;
+          buf[i * 2 + 1] = (s >> 8) & 0xff;
+          phase += step;
+          if (phase > Math.PI * 2) phase -= Math.PI * 2;
+        }
+        await session.sendAudio(buf);
+      }
+      log(`sent ${total} frames`);
+    });
+
+    $disconnect.addEventListener("click", () => {
+      session?.close();
+      session = null;
+      $connect.disabled = false;
+      $disconnect.disabled = true;
+      $send.disabled = true;
+      log("disconnected");
+    });
+  </script>
+</body>
+</html>
