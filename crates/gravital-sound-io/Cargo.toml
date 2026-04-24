@@ -1,0 +1,22 @@
+[package]
+name         = "gravital-sound-io"
+version.workspace    = true
+edition.workspace    = true
+rust-version.workspace = true
+authors.workspace    = true
+license.workspace    = true
+repository.workspace = true
+description = "Gravital Sound — captura y playback de audio cross-platform (cpal)."
+readme       = "../../README.md"
+
+[lib]
+name = "gravital_sound_io"
+path = "src/lib.rs"
+
+[dependencies]
+cpal    = "0.15"
+tracing = { workspace = true }
+thiserror = { workspace = true }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
