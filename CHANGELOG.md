@@ -2,6 +2,60 @@
 
 Todos los cambios notables de Gravital Sound se documentan aquí. El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y el proyecto usa [SemVer](https://semver.org/lang/es/).
 
+## [0.2.0-alpha.1] — 2026-04-24
+
+Fase 5 completa — Track A: codec Opus + audio hardware + CLI de producción.
+
+### Added
+
+**Crate `gravital-sound-codec`**
+- Traits `Encoder` / `Decoder` (`Send`, frame-granular) con `CodecId` negociable.
+- `PcmCodec` — passthrough i16-LE, zero-copy.
+- `OpusCodec` — wrapper sobre libopus vía `audiopus`; `Application::Voip`, 64 kbps, FEC, PLC.
+- `build_pair(id, sample_rate, channels, frame_ms)` — factory ergonómica.
+- 9 tests unitarios: roundtrip PCM, roundtrip Opus, frame-size validation, rate/channel rejection.
+
+**Crate `gravital-sound-io`**
+- `AudioCapture::start(config, device_hint)` — captura desde micrófono vía cpal (ALSA/CoreAudio/WASAPI). Entrega `mpsc::Receiver<Vec<i16>>` con frames de tamaño fijo.
+- `AudioPlayback::start(config, device_hint)` — playback a altavoz con pump thread desacoplado del callback de tiempo real.
+- `list_input_devices()` / `list_output_devices()` — enumeración de devices con flag `is_default`.
+
+**Crate `gravital-sound` (facade)**
+- `CodecSession` — wrapper de alto nivel sobre `Session` + `Encoder`/`Decoder`:
+  - `send_samples(&[i16])` — codifica y envía.
+  - `recv_samples() -> Vec<i16>` — recibe y decodifica.
+- Re-exports de `CodecId`, `CodecError`, `Encoder`, `Decoder`, `PcmCodec` (+ `OpusCodec` con feature `opus`).
+- Feature `opus` (por defecto activada) propaga a `gravital-sound-codec/opus`.
+- Ejemplos `mic_to_speaker` (latencia e2e con hdrhistogram) y `voip_peer` (full-duplex bidireccional).
+- Integration test `opus_roundtrip`: PCM SNR > 60 dB, Opus energía > 10 % original.
+- Benchmark `opus_encode`: PCM y Opus encode/decode criterion.
+
+**CLI `gs`**
+- `gs send --device <name> --codec <pcm|opus>` — captura desde micrófono o genera sinusoidal/WAV.
+- `gs receive --device <name> --codec <pcm|opus>` — escribe WAV + reproduce por altavoz en paralelo.
+- `gs devices` — lista input/output devices del sistema.
+
+**CI**
+- Instala `libopus-dev libasound2-dev pkg-config` en jobs Ubuntu.
+- Instala `opus` vía Homebrew en el job macOS.
+- Job `test-no-default-features` valida que `core`, `metrics` y `transport` compilan sin features extra.
+- Cross-check aarch64 usa `--no-default-features` para evitar dependencias de libopus.
+
+**Docs**
+- `docs/codecs.md` — arquitectura de codecs, rangos de bitrate, negociación, extensión.
+- `docs/audio-io.md` — diseño de captura/playback, backpressure, sample-rate mismatch, CI headless.
+- `docs/adr/006-opus-codec.md` — decisión de usar Opus + alternativas descartadas.
+- `docs/adr/007-cpal-audio-io.md` — decisión de usar cpal + diseño del adaptador RT.
+
+### Changed
+- `gravital-sound-transport::session::handshake_server` rechaza paquetes de peers no esperados (hardening).
+- `Cargo.toml` del workspace: `gravital-sound-codec` y `gravital-sound-io` añadidos como members y deps.
+
+### Notes
+- La negociación automática de codec en el handshake wire llega en Track B.
+- El resampling automático por sample-rate mismatch llega en Track B (hoy emite `warn`).
+- El protocolo sigue siendo `draft` hasta `0.1.0` final.
+
 ## [Unreleased]
 
 ### Roadmap
