@@ -1,0 +1,20 @@
+[package]
+name         = "gravital-sound-metrics"
+version.workspace    = true
+edition.workspace    = true
+rust-version.workspace = true
+authors.workspace    = true
+license.workspace    = true
+repository.workspace = true
+description = "Gravital Sound — RTT, jitter, loss, MOS metrics (lock-free atomic counters)."
+readme       = "../../README.md"
+
+[lib]
+name = "gravital_sound_metrics"
+path = "src/lib.rs"
+
+[dependencies]
+gravital-sound-core = { workspace = true, default-features = false, features = ["alloc"] }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"

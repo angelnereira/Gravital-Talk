@@ -1,0 +1,33 @@
+[package]
+name         = "gravital-sound-core"
+version.workspace    = true
+edition.workspace    = true
+rust-version.workspace = true
+authors.workspace    = true
+license.workspace    = true
+repository.workspace = true
+description = "Gravital Sound protocol core — no_std framing, state machine, CRC."
+readme       = "../../README.md"
+keywords.workspace   = true
+categories.workspace = true
+
+[lib]
+name = "gravital_sound_core"
+path = "src/lib.rs"
+
+[features]
+default   = ["alloc"]
+alloc     = []
+std       = ["alloc"]
+simd-crc  = []
+
+[dependencies]
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+todo = "warn"
