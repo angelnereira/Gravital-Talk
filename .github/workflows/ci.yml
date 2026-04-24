@@ -31,6 +31,8 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Install native audio deps
+        run: sudo apt-get update && sudo apt-get install -y libopus-dev libasound2-dev pkg-config
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
   test:
@@ -39,12 +41,32 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            audio_deps: sudo apt-get update && sudo apt-get install -y libopus-dev libasound2-dev pkg-config
+          - os: macos-latest
+            audio_deps: brew install opus
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Install native audio deps
+        run: ${{ matrix.audio_deps }}
       - run: cargo test --workspace --all-targets
+
+  test-no-default:
+    name: test (no-default-features)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: >
+          cargo test
+          -p gravital-sound-core
+          -p gravital-sound-metrics
+          -p gravital-sound-transport
+          --no-default-features
 
   ffi-header:
     name: cbindgen header + gcc smoke
@@ -53,6 +75,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Install native audio deps
+        run: sudo apt-get update && sudo apt-get install -y libopus-dev libasound2-dev pkg-config
       - run: cargo build -p gravital-sound-ffi --release
       - run: cc -I crates/gravital-sound-ffi/include -c crates/gravital-sound-ffi/tests/c_smoke.c -o /tmp/c_smoke.o
 
@@ -79,7 +103,12 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
       - env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-        run: cargo check --target aarch64-unknown-linux-gnu -p gravital-sound -p gravital-sound-transport
+        run: >
+          cargo check
+          --target aarch64-unknown-linux-gnu
+          --no-default-features
+          -p gravital-sound-core
+          -p gravital-sound-transport
 
   python-sdk:
     name: python sdk
