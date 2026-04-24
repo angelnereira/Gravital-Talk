@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 gravital-sound    = { workspace = true }
+gravital-sound-io = { workspace = true }
 tokio             = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync", "macros", "signal", "io-util"] }
 clap              = { workspace = true }
 hound             = { workspace = true }
@@ -22,6 +23,10 @@ tracing           = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow            = { workspace = true }
 bytes             = { workspace = true }
+
+[features]
+default = ["opus"]
+opus = ["gravital-sound/opus"]
 
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

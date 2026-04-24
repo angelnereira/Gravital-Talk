@@ -14,14 +14,18 @@ name = "gravital_sound"
 path = "src/lib.rs"
 
 [features]
-default = ["std"]
+default = ["std", "opus"]
 std = ["gravital-sound-core/std"]
 alloc = ["gravital-sound-core/alloc"]
+opus = ["gravital-sound-codec/opus"]
 
 [dependencies]
 gravital-sound-core      = { workspace = true, default-features = false }
 gravital-sound-metrics   = { workspace = true }
 gravital-sound-transport = { workspace = true }
+gravital-sound-codec     = { workspace = true }
+tokio                    = { workspace = true, features = ["rt-multi-thread", "sync", "macros"] }
+thiserror                = { workspace = true }
 
 [dev-dependencies]
 tokio             = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync", "macros"] }
@@ -29,6 +33,9 @@ hound             = { workspace = true }
 hdrhistogram      = { workspace = true }
 tracing-subscriber = { workspace = true }
 criterion         = { workspace = true }
+anyhow            = { workspace = true }
+gravital-sound-io = { workspace = true }
+tracing           = { workspace = true }
 
 [[bench]]
 name = "encode_decode"
@@ -36,6 +43,10 @@ harness = false
 
 [[bench]]
 name = "checksum"
+harness = false
+
+[[bench]]
+name = "opus_encode"
 harness = false
 
 [[example]]
@@ -53,3 +64,11 @@ path = "examples/loopback.rs"
 [[example]]
 name = "relay_server"
 path = "examples/relay_server.rs"
+
+[[example]]
+name = "mic_to_speaker"
+path = "examples/mic_to_speaker.rs"
+
+[[example]]
+name = "voip_peer"
+path = "examples/voip_peer.rs"

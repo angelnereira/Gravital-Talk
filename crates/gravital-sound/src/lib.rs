@@ -24,6 +24,15 @@
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
+pub mod codec_session;
+pub use codec_session::CodecSession;
+
+#[cfg(feature = "opus")]
+pub use gravital_sound_codec::OpusCodec;
+pub use gravital_sound_codec::{
+    build_pair as build_codec_pair, CodecError, CodecId, Decoder, Encoder, PcmCodec,
+};
+
 pub use gravital_sound_core::{
     checksum, constants,
     error::Error as CoreError,

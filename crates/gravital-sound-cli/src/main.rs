@@ -2,12 +2,16 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use gravital_sound::{Config, Session, SessionRole, Transport, UdpConfig, UdpTransport};
+use gravital_sound::{
+    CodecId, CodecSession, Config, Session, SessionRole, Transport, UdpConfig, UdpTransport,
+};
+use gravital_sound_io::{AudioCapture, AudioPlayback, StreamConfig};
 use hound::{SampleFormat, WavSpec, WavWriter};
 use tracing_subscriber::EnvFilter;
 
@@ -23,9 +27,38 @@ struct Cli {
     cmd: Command,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum CodecArg {
+    Pcm,
+    #[cfg(feature = "opus")]
+    Opus,
+}
+
+impl CodecArg {
+    fn to_codec_id(self) -> CodecId {
+        match self {
+            CodecArg::Pcm => CodecId::Pcm,
+            #[cfg(feature = "opus")]
+            CodecArg::Opus => CodecId::Opus,
+        }
+    }
+}
+
+impl FromStr for CodecArg {
+    type Err = String;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "pcm" => Ok(CodecArg::Pcm),
+            #[cfg(feature = "opus")]
+            "opus" => Ok(CodecArg::Opus),
+            other => Err(format!("unknown codec '{other}'")),
+        }
+    }
+}
+
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Envía audio PCM a un peer (`--input` puede ser `sine` o un archivo WAV).
+    /// Envía audio a un peer (`--input` puede ser `sine`, un WAV, o `--device` para micrófono).
     Send {
         /// Host destino.
         #[arg(long)]
@@ -33,10 +66,16 @@ enum Command {
         /// Puerto destino.
         #[arg(long, default_value_t = 9000)]
         port: u16,
-        /// `sine` (sintetiza tono) o ruta a WAV PCM 16 bits.
+        /// `sine` (sintetiza tono) o ruta a WAV PCM 16 bits. Ignorado si `--device` está activo.
         #[arg(long, default_value = "sine")]
         input: String,
-        /// Duración en segundos para el modo `sine`.
+        /// Nombre del input device (p. ej. `default`). Activa captura desde micrófono.
+        #[arg(long)]
+        device: Option<String>,
+        /// Codec de audio a usar.
+        #[arg(long, default_value = "pcm")]
+        codec: CodecArg,
+        /// Duración en segundos (ignorado con `--device`).
         #[arg(long, default_value_t = 10)]
         duration: u64,
         /// Sample rate.
@@ -46,7 +85,7 @@ enum Command {
         #[arg(long, default_value_t = 1)]
         channels: u8,
     },
-    /// Recibe audio y lo escribe a un WAV.
+    /// Recibe audio y lo escribe a un WAV (+ playback si `--device` activo).
     Receive {
         /// Dirección de bind.
         #[arg(long, default_value = "0.0.0.0")]
@@ -54,7 +93,7 @@ enum Command {
         /// Puerto.
         #[arg(long, default_value_t = 9000)]
         port: u16,
-        /// Peer esperado (requerido para handshake server).
+        /// Peer esperado.
         #[arg(long)]
         peer: String,
         /// Puerto del peer.
@@ -63,7 +102,13 @@ enum Command {
         /// Ruta de salida WAV.
         #[arg(long)]
         output: PathBuf,
-        /// Duración máxima en segundos antes de detener la captura.
+        /// Nombre del output device (p. ej. `default`). Activa playback de altavoz en paralelo.
+        #[arg(long)]
+        device: Option<String>,
+        /// Codec de audio a usar (debe coincidir con el sender).
+        #[arg(long, default_value = "pcm")]
+        codec: CodecArg,
+        /// Duración máxima en segundos.
         #[arg(long, default_value_t = 30)]
         duration: u64,
         /// Sample rate para el WAV.
@@ -73,9 +118,11 @@ enum Command {
         #[arg(long, default_value_t = 1)]
         channels: u8,
     },
+    /// Lista los audio devices de input y output disponibles.
+    Devices,
     /// Benchmark loopback: mide latencia encode→socket→decode en localhost.
     Bench {
-        /// `loopback` es el único modo soportado en MVP.
+        /// `loopback` es el único modo soportado actualmente.
         #[arg(long, default_value = "loopback")]
         mode: String,
         /// Duración en segundos.
@@ -117,16 +164,32 @@ async fn dispatch(cmd: Command) -> Result<()> {
             host,
             port,
             input,
+            device,
+            codec,
             duration,
             sample_rate,
             channels,
-        } => cmd_send(host, port, input, duration, sample_rate, channels).await,
+        } => {
+            cmd_send(
+                host,
+                port,
+                input,
+                device.as_deref(),
+                codec,
+                duration,
+                sample_rate,
+                channels,
+            )
+            .await
+        }
         Command::Receive {
             bind,
             port,
             peer,
             peer_port,
             output,
+            device,
+            codec,
             duration,
             sample_rate,
             channels,
@@ -137,12 +200,15 @@ async fn dispatch(cmd: Command) -> Result<()> {
                 peer,
                 peer_port,
                 output,
+                device.as_deref(),
+                codec,
                 duration,
                 sample_rate,
                 channels,
             )
             .await
         }
+        Command::Devices => cmd_devices(),
         Command::Bench { mode, duration } => cmd_bench(mode, duration).await,
         Command::Info { host, port } => cmd_info(host, port).await,
         Command::Doctor => cmd_doctor(),
@@ -150,10 +216,13 @@ async fn dispatch(cmd: Command) -> Result<()> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn cmd_send(
     host: String,
     port: u16,
     input: String,
+    device: Option<&str>,
+    codec_arg: CodecArg,
     duration_s: u64,
     sample_rate: u32,
     channels: u8,
@@ -171,54 +240,68 @@ async fn cmd_send(
     let config = Config {
         sample_rate,
         channels,
+        frame_duration_ms: 10,
         ..Config::default()
     };
-    let session = Session::new(transport, config.clone());
-    session.handshake(SessionRole::Client, peer).await?;
-    tracing::info!(session_id = session.session_id(), "handshake OK");
+    let codec_id = codec_arg.to_codec_id();
+    let cs = CodecSession::new(transport, config.clone(), codec_id)?;
+    cs.handshake(SessionRole::Client, peer).await?;
+    tracing::info!(session_id = cs.session().session_id(), codec = ?codec_id, "handshake OK");
 
     let samples_per_frame =
-        (config.sample_rate as u64 * config.frame_duration_ms as u64 / 1000) as usize;
-    let frames_per_sec = 1000 / config.frame_duration_ms.max(1) as u64;
-    let total_frames = duration_s * frames_per_sec;
+        (sample_rate as usize * config.frame_duration_ms as usize) / 1000 * channels as usize;
 
-    let iter: Box<dyn Iterator<Item = Vec<u8>>> = if input == "sine" {
-        Box::new(sine_frames(
-            samples_per_frame,
-            config.channels,
-            config.sample_rate,
-        ))
-    } else {
-        Box::new(wav_frames(
-            PathBuf::from(input),
-            samples_per_frame,
-            config.channels,
-        )?)
-    };
-
-    let start = Instant::now();
-    let mut frame_deadline = start;
-    let frame_period = Duration::from_millis(config.frame_duration_ms as u64);
-    let mut sent = 0u64;
-
-    for frame in iter.take(total_frames as usize) {
-        session.send_audio(&frame).await?;
-        sent += 1;
-        frame_deadline += frame_period;
-        let now = Instant::now();
-        if frame_deadline > now {
-            tokio::time::sleep(frame_deadline - now).await;
+    if let Some(dev) = device {
+        // Mic capture mode: stream until Ctrl-C.
+        let stream_cfg = StreamConfig {
+            sample_rate,
+            channels,
+            frame_duration_ms: config.frame_duration_ms,
+        };
+        let (_cap, rx) = AudioCapture::start(stream_cfg, Some(dev))?;
+        tracing::info!(device = dev, "capturing from mic — press Ctrl-C to stop");
+        while let Ok(samples) = rx.recv() {
+            cs.send_samples(&samples).await?;
         }
+    } else {
+        // Synthetic or WAV source.
+        let frames_per_sec = 1000 / config.frame_duration_ms.max(1) as u64;
+        let total_frames = duration_s * frames_per_sec;
+
+        let iter: Box<dyn Iterator<Item = Vec<i16>>> = if input == "sine" {
+            Box::new(sine_frames_i16(samples_per_frame, channels, sample_rate))
+        } else {
+            Box::new(wav_frames_i16(
+                PathBuf::from(input),
+                samples_per_frame,
+                channels,
+            )?)
+        };
+
+        let start = Instant::now();
+        let mut frame_deadline = start;
+        let frame_period = Duration::from_millis(config.frame_duration_ms as u64);
+        let mut sent = 0u64;
+
+        for samples in iter.take(total_frames as usize) {
+            cs.send_samples(&samples).await?;
+            sent += 1;
+            frame_deadline += frame_period;
+            let now = Instant::now();
+            if frame_deadline > now {
+                tokio::time::sleep(frame_deadline - now).await;
+            }
+        }
+
+        let elapsed = start.elapsed();
+        tracing::info!(
+            frames = sent,
+            elapsed_s = elapsed.as_secs_f32(),
+            "send complete"
+        );
     }
 
-    let elapsed = start.elapsed();
-    tracing::info!(
-        frames = sent,
-        elapsed_s = elapsed.as_secs_f32(),
-        kbps = (sent * samples_per_frame as u64 * 2 * 8) as f32 / elapsed.as_secs_f32() / 1000.0,
-        "send complete"
-    );
-    session.close().await?;
+    cs.close().await?;
     Ok(())
 }
 
@@ -229,6 +312,8 @@ async fn cmd_receive(
     peer: String,
     peer_port: u16,
     output: PathBuf,
+    device: Option<&str>,
+    codec_arg: CodecArg,
     duration_s: u64,
     sample_rate: u32,
     channels: u8,
@@ -246,11 +331,13 @@ async fn cmd_receive(
     let config = Config {
         sample_rate,
         channels,
+        frame_duration_ms: 10,
         ..Config::default()
     };
-    let session = Session::new(transport, config.clone());
-    session.handshake(SessionRole::Server, peer_addr).await?;
-    tracing::info!(session_id = session.session_id(), "handshake OK");
+    let codec_id = codec_arg.to_codec_id();
+    let cs = CodecSession::new(transport, config.clone(), codec_id)?;
+    cs.handshake(SessionRole::Server, peer_addr).await?;
+    tracing::info!(session_id = cs.session().session_id(), codec = ?codec_id, "handshake OK");
 
     let spec = WavSpec {
         channels: channels as u16,
@@ -260,17 +347,32 @@ async fn cmd_receive(
     };
     let mut writer = WavWriter::create(&output, spec)?;
 
+    let playback = if let Some(dev) = device {
+        let stream_cfg = StreamConfig {
+            sample_rate,
+            channels,
+            frame_duration_ms: config.frame_duration_ms,
+        };
+        let pb = AudioPlayback::start(stream_cfg, Some(dev))?;
+        tracing::info!(device = dev, "playback to speaker active");
+        Some(pb)
+    } else {
+        None
+    };
+
     let deadline = tokio::time::Instant::now() + Duration::from_secs(duration_s);
     loop {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() {
             break;
         }
-        match tokio::time::timeout(remaining, session.recv_audio()).await {
-            Ok(Ok(frame)) => {
-                for chunk in frame.payload.chunks_exact(2) {
-                    let s = i16::from_le_bytes([chunk[0], chunk[1]]);
+        match tokio::time::timeout(remaining, cs.recv_samples()).await {
+            Ok(Ok(samples)) => {
+                for &s in &samples {
                     writer.write_sample(s)?;
+                }
+                if let Some(ref pb) = playback {
+                    let _ = pb.push(samples);
                 }
             }
             Ok(Err(e)) => {
@@ -283,13 +385,40 @@ async fn cmd_receive(
 
     writer.finalize()?;
     tracing::info!(path = %output.display(), "wav written");
-    session.close().await?;
+    cs.close().await?;
+    Ok(())
+}
+
+fn cmd_devices() -> Result<()> {
+    println!("─── Input devices ───");
+    match gravital_sound_io::list_input_devices() {
+        Ok(devs) if devs.is_empty() => println!("  (none)"),
+        Ok(devs) => {
+            for d in devs {
+                let tag = if d.is_default { " [default]" } else { "" };
+                println!("  {}{}", d.name, tag);
+            }
+        }
+        Err(e) => println!("  error: {e}"),
+    }
+
+    println!("─── Output devices ───");
+    match gravital_sound_io::list_output_devices() {
+        Ok(devs) if devs.is_empty() => println!("  (none)"),
+        Ok(devs) => {
+            for d in devs {
+                let tag = if d.is_default { " [default]" } else { "" };
+                println!("  {}{}", d.name, tag);
+            }
+        }
+        Err(e) => println!("  error: {e}"),
+    }
     Ok(())
 }
 
 async fn cmd_bench(mode: String, duration_s: u64) -> Result<()> {
     if mode != "loopback" {
-        bail!("only 'loopback' bench mode is supported in MVP");
+        bail!("only 'loopback' bench mode is supported");
     }
     use gravital_sound::{PacketBuilder, PacketHeader, PacketView};
     let header = PacketHeader::new(0x10, 0xDEAD_BEEF, 0, 0);
@@ -373,7 +502,6 @@ async fn cmd_relay(bind: String, port: u16) -> Result<()> {
     })
     .await?;
     tracing::info!(local = ?t.local_addr(), "relay listening");
-    // Relay naive: mantiene la última dirección vista por session_id y reenvía.
     use std::collections::HashMap;
     let mut routes: HashMap<u32, SocketAddr> = HashMap::new();
     let mut buf = vec![0u8; 1500];
@@ -398,19 +526,20 @@ async fn cmd_relay(bind: String, port: u16) -> Result<()> {
     }
 }
 
-fn sine_frames(
+fn sine_frames_i16(
     samples_per_frame: usize,
     channels: u8,
     sample_rate: u32,
-) -> impl Iterator<Item = Vec<u8>> {
+) -> impl Iterator<Item = Vec<i16>> {
     let mut phase: f32 = 0.0;
     let step = 2.0 * std::f32::consts::PI * 440.0 / sample_rate as f32;
     std::iter::from_fn(move || {
-        let mut buf = Vec::with_capacity(samples_per_frame * channels as usize * 2);
-        for _ in 0..samples_per_frame {
+        let mut buf = Vec::with_capacity(samples_per_frame);
+        let mono_samples = samples_per_frame / channels as usize;
+        for _ in 0..mono_samples {
             let sample = (phase.sin() * 16_000.0) as i16;
             for _c in 0..channels {
-                buf.extend_from_slice(&sample.to_le_bytes());
+                buf.push(sample);
             }
             phase += step;
             if phase > std::f32::consts::TAU {
@@ -421,11 +550,11 @@ fn sine_frames(
     })
 }
 
-fn wav_frames(
+fn wav_frames_i16(
     path: PathBuf,
     samples_per_frame: usize,
     channels: u8,
-) -> Result<impl Iterator<Item = Vec<u8>>> {
+) -> Result<impl Iterator<Item = Vec<i16>>> {
     let reader = hound::WavReader::open(&path)?;
     let spec = reader.spec();
     if spec.channels != channels as u16 {
@@ -438,17 +567,12 @@ fn wav_frames(
     let mut samples: Vec<i16> = reader
         .into_samples::<i16>()
         .collect::<std::result::Result<Vec<_>, _>>()?;
-    let per_frame = samples_per_frame * channels as usize;
+    let per_frame = samples_per_frame;
     Ok(std::iter::from_fn(move || {
         if samples.is_empty() {
             return None;
         }
         let take = per_frame.min(samples.len());
-        let chunk: Vec<i16> = samples.drain(..take).collect();
-        let mut buf = Vec::with_capacity(chunk.len() * 2);
-        for s in chunk {
-            buf.extend_from_slice(&s.to_le_bytes());
-        }
-        Some(buf)
+        Some(samples.drain(..take).collect())
     }))
 }
