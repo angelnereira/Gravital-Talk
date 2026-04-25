@@ -1,0 +1,60 @@
+#!/bin/bash
+# Cloud-init para el nodo relay de Gravital Sound (Debian/Ubuntu).
+# Descarga el binario gs-relay desde GitHub Releases, lo instala como
+# systemd unit, y abre el firewall UFW.
+set -euo pipefail
+
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    curl ca-certificates jq ufw
+
+# Firewall (idempotente).
+ufw default deny incoming
+ufw default allow outgoing
+ufw allow 22/tcp || true
+ufw allow ${udp_port}/udp
+ufw allow ${ws_port}/tcp
+ufw --force enable
+
+# Usuario sin shell.
+if ! id gravital >/dev/null 2>&1; then
+    useradd --system --no-create-home --shell /usr/sbin/nologin gravital
+fi
+
+# Descarga y verifica el binario.
+TMPDIR="$(mktemp -d)"
+cd "$TMPDIR"
+curl -fsSL -o gs-relay.tar.gz "${binary_url}"
+tar xzf gs-relay.tar.gz
+INSTALL_DIR="$(find . -maxdepth 1 -type d -name 'gs-*' | head -n1)"
+install -m 0755 -o root -g root "$INSTALL_DIR/gs" /usr/local/bin/gs-relay
+cd /
+rm -rf "$TMPDIR"
+
+# systemd unit.
+cat > /etc/systemd/system/gravital-sound-relay.service <<'UNIT'
+[Unit]
+Description=Gravital Sound relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gravital
+Group=gravital
+ExecStart=/usr/local/bin/gs-relay --udp-bind 0.0.0.0:${udp_port} --ws-bind 0.0.0.0:${ws_port} --observability-bind 127.0.0.1:${metrics_port}
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable --now gravital-sound-relay.service
