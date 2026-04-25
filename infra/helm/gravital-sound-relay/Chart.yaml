@@ -1,0 +1,19 @@
+apiVersion: v2
+name: gravital-sound-relay
+description: Gravital Sound — relay productivo (UDP audio + WebSocket + Prometheus metrics)
+type: application
+version: 0.1.0
+appVersion: "0.2.0-alpha.1"
+keywords:
+  - audio
+  - voip
+  - real-time
+  - opus
+  - udp
+home: https://github.com/angelnereira/gravital-sound
+sources:
+  - https://github.com/angelnereira/gravital-sound
+maintainers:
+  - name: Angel Nereira
+    email: angelnereira15@gmail.com
+icon: https://gravitalsound.dev/favicon.svg

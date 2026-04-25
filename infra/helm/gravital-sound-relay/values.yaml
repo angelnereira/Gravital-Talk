@@ -1,0 +1,99 @@
+# Default values for gravital-sound-relay.
+
+image:
+  repository: ghcr.io/angelnereira/gravital-sound-relay
+  tag: ""  # Si vacío, usa Chart.appVersion
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+replicaCount: 1
+
+# Recursos por pod. El relay es lightweight; un pod soporta cientos de
+# sesiones simultáneas con < 100 MB RAM.
+resources:
+  requests:
+    cpu: 100m
+    memory: 64Mi
+  limits:
+    cpu: 1000m
+    memory: 256Mi
+
+# Puertos expuestos por el contenedor (deben coincidir con la config del relay).
+ports:
+  udp: 9000
+  ws: 9090
+  metrics: 9100
+
+# Configuración del relay (montada como ConfigMap → /etc/gs-relay/config.toml).
+config:
+  session_ttl_secs: 300
+  max_sessions: 10000
+
+service:
+  # ClusterIP / NodePort / LoadBalancer.
+  type: LoadBalancer
+  # IMPORTANTE: preserva la IP del cliente para rate limiting / abuso.
+  externalTrafficPolicy: Local
+  annotations: {}
+
+# Service separado para /metrics (ClusterIP) para que ServiceMonitor lo
+# scrapee sin exponer al exterior.
+metricsService:
+  enabled: true
+  type: ClusterIP
+  port: 9100
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+podSecurityContext:
+  fsGroup: 10001
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
+  readOnlyRootFilesystem: true
+
+# HorizontalPodAutoscaler basado en CPU. Para autoscaling por sesiones
+# activas se necesita un custom metric (Prometheus Adapter).
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
+
+# Anti-affinity para que pods no terminen en el mismo nodo.
+affinity: {}
+nodeSelector: {}
+tolerations: []
+
+# ServiceMonitor de prometheus-operator (opcional).
+serviceMonitor:
+  enabled: false
+  interval: 15s
+  scrapeTimeout: 10s
+  labels: {}
+
+# NetworkPolicy que solo permite egress a DNS y al cluster.
+networkPolicy:
+  enabled: false
+
+# Liveness y readiness — apuntan a /healthz.
+probes:
+  liveness:
+    initialDelaySeconds: 5
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readiness:
+    initialDelaySeconds: 2
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3

@@ -9,6 +9,7 @@ members = [
     "crates/gravital-sound",
     "crates/gravital-sound-ffi",
     "crates/gravital-sound-cli",
+    "crates/gravital-sound-relay",
 ]
 
 # Los SDKs de Python y WASM se construyen con sus propias herramientas
@@ -28,6 +29,7 @@ default-members = [
     "crates/gravital-sound",
     "crates/gravital-sound-ffi",
     "crates/gravital-sound-cli",
+    "crates/gravital-sound-relay",
 ]
 
 [workspace.package]

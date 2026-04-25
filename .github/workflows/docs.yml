@@ -1,0 +1,62 @@
+name: Docs
+
+# Genera la documentación API con `cargo doc` y la publica en GitHub Pages
+# en cada push a `main` y a tags `v*`.
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ "v*" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Solo un deploy concurrente; cancela el viejo si llega uno nuevo.
+concurrency:
+  group: docs
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install native deps
+        run: sudo apt-get update && sudo apt-get install -y libopus-dev libasound2-dev pkg-config
+
+      - name: Build docs
+        env:
+          RUSTDOCFLAGS: "-D warnings --cfg docsrs"
+        run: |
+          cargo doc --workspace --all-features --no-deps
+
+      - name: Add index redirect
+        run: |
+          cat > target/doc/index.html <<'HTML'
+          <!DOCTYPE html>
+          <meta charset="utf-8">
+          <title>Gravital Sound</title>
+          <meta http-equiv="refresh" content="0; url=gravital_sound/index.html">
+          <link rel="canonical" href="gravital_sound/index.html">
+          HTML
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: target/doc
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,59 @@
+#!/bin/bash
+# Edge node bootstrap: descarga el CLI gs y lo arranca como systemd unit
+# que captura del micrófono y envía al relay.
+set -euo pipefail
+
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    curl ca-certificates alsa-utils libasound2 libopus0 ufw
+
+# Firewall: outbound libre, inbound solo SSH (el edge es cliente).
+ufw default deny incoming
+ufw default allow outgoing
+ufw allow 22/tcp || true
+ufw --force enable
+
+if ! id gravital >/dev/null 2>&1; then
+    useradd --system --no-create-home --shell /usr/sbin/nologin --groups audio gravital
+fi
+
+# Descarga del binario.
+TMPDIR="$(mktemp -d)"
+cd "$TMPDIR"
+curl -fsSL -o gs.tar.gz "${binary_url}"
+tar xzf gs.tar.gz
+DIR="$(find . -maxdepth 1 -type d -name 'gs-*' | head -n1)"
+install -m 0755 -o root -g root "$DIR/gs" /usr/local/bin/gs
+cd /
+rm -rf "$TMPDIR"
+
+cat > /etc/default/gravital-sound <<'EOF'
+GS_RELAY_HOST=${relay_host}
+GS_RELAY_PORT=${relay_udp_port}
+GS_DEVICE=${device}
+GS_CODEC=${codec}
+GS_LOG=info
+EOF
+
+cat > /etc/systemd/system/gravital-sound.service <<'UNIT'
+[Unit]
+Description=Gravital Sound edge daemon
+After=sound.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/default/gravital-sound
+User=gravital
+Group=audio
+ExecStart=/usr/local/bin/gs send --host $${GS_RELAY_HOST} --port $${GS_RELAY_PORT} --device $${GS_DEVICE} --codec $${GS_CODEC}
+Restart=on-failure
+RestartSec=10
+Nice=-5
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable --now gravital-sound.service

@@ -1,0 +1,234 @@
+name: Release
+
+# Disparado por tags `v*` (ej. v0.2.0, v0.2.0-alpha.1).
+# Construye binarios `gs` para 5 plataformas, wheels Python, y bundle WASM.
+# Sube todo como artefactos a un GitHub Release del mismo tag.
+
+on:
+  push:
+    tags: [ "v*" ]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag a re-construir (ej. v0.2.0-alpha.1)'
+        required: true
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ------------------------------------------------------------------
+  # 1) Crea el GitHub Release (sin assets aún) para que los demás jobs
+  #    puedan subir artefactos en paralelo.
+  # ------------------------------------------------------------------
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.set-tag.outputs.tag }}
+      upload_url: ${{ steps.create.outputs.upload_url }}
+    steps:
+      - id: set-tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Extract changelog section
+        id: changelog
+        run: |
+          TAG="${{ steps.set-tag.outputs.tag }}"
+          VERSION="${TAG#v}"
+          # Extrae la sección de la versión del CHANGELOG.
+          awk -v ver="$VERSION" '
+            /^## \[/ { found = ($0 ~ "\\[" ver "\\]"); }
+            found { print }
+          ' CHANGELOG.md > release_notes.md
+          if [ ! -s release_notes.md ]; then
+            echo "Release ${TAG}" > release_notes.md
+          fi
+      - id: create
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.set-tag.outputs.tag }}
+          name: ${{ steps.set-tag.outputs.tag }}
+          body_path: release_notes.md
+          draft: true
+          prerelease: ${{ contains(steps.set-tag.outputs.tag, 'alpha') || contains(steps.set-tag.outputs.tag, 'beta') || contains(steps.set-tag.outputs.tag, 'rc') }}
+
+  # ------------------------------------------------------------------
+  # 2) Compila el binario `gs` para cada target y lo sube como asset.
+  # ------------------------------------------------------------------
+  build-binaries:
+    name: ${{ matrix.target }}
+    needs: create-release
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            os: linux
+            arch: x86_64
+            apt: libopus-dev libasound2-dev pkg-config
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-latest
+            os: linux
+            arch: aarch64
+            apt: gcc-aarch64-linux-gnu
+            cross_linker: aarch64-linux-gnu-gcc
+            no_default_features: true
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+            os: macos
+            arch: x86_64
+            brew: opus
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            os: macos
+            arch: aarch64
+            brew: opus
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            os: windows
+            arch: x86_64
+            no_default_features: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install apt deps (Linux)
+        if: matrix.apt != ''
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.apt }}
+
+      - name: Install brew deps (macOS)
+        if: matrix.brew != ''
+        run: brew install ${{ matrix.brew }}
+
+      - name: Build binary
+        shell: bash
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.cross_linker }}
+          PKG_CONFIG_PATH: /opt/homebrew/opt/opus/lib/pkgconfig:/usr/local/opt/opus/lib/pkgconfig
+        run: |
+          if [ "${{ matrix.no_default_features }}" = "true" ]; then
+            cargo build --release --target ${{ matrix.target }} \
+              -p gravital-sound-cli --no-default-features
+          else
+            cargo build --release --target ${{ matrix.target }} \
+              -p gravital-sound-cli
+          fi
+
+      - name: Package archive
+        shell: bash
+        run: |
+          TAG="${{ needs.create-release.outputs.tag }}"
+          NAME="gs-${TAG}-${{ matrix.os }}-${{ matrix.arch }}"
+          mkdir -p "dist/${NAME}"
+          cp README.md LICENSE-MIT LICENSE-APACHE CHANGELOG.md "dist/${NAME}/" || true
+          if [ "${{ matrix.os }}" = "windows" ]; then
+            cp "target/${{ matrix.target }}/release/gs.exe" "dist/${NAME}/"
+            7z a "dist/${NAME}.zip" "./dist/${NAME}/*"
+            echo "ASSET=dist/${NAME}.zip" >> "$GITHUB_ENV"
+          else
+            cp "target/${{ matrix.target }}/release/gs" "dist/${NAME}/"
+            tar -C dist -czf "dist/${NAME}.tar.gz" "${NAME}"
+            echo "ASSET=dist/${NAME}.tar.gz" >> "$GITHUB_ENV"
+          fi
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.create-release.outputs.tag }}
+          files: ${{ env.ASSET }}
+
+  # ------------------------------------------------------------------
+  # 3) Wheels de Python (manylinux + macOS + Windows).
+  # ------------------------------------------------------------------
+  python-wheels:
+    name: python wheel ${{ matrix.os }}
+    needs: create-release
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build wheel
+        working-directory: sdks/python
+        shell: bash
+        run: |
+          pip install maturin
+          maturin build --release --strip --out dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.create-release.outputs.tag }}
+          files: sdks/python/dist/*
+
+  # ------------------------------------------------------------------
+  # 4) Bundle WASM para distribuir como artefacto npm.
+  # ------------------------------------------------------------------
+  wasm-bundle:
+    name: wasm bundle
+    needs: create-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install --locked wasm-pack
+      - name: Build wasm
+        working-directory: sdks/web
+        run: wasm-pack build --target web --out-dir pkg --release
+      - name: Package
+        run: |
+          TAG="${{ needs.create-release.outputs.tag }}"
+          tar -C sdks/web -czf "gravital-sound-web-${TAG}.tar.gz" pkg
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.create-release.outputs.tag }}
+          files: gravital-sound-web-*.tar.gz
+
+  # ------------------------------------------------------------------
+  # 5) Marca el release como público una vez que todos los assets
+  #    están subidos. Si algún job upstream falla, se queda en draft.
+  # ------------------------------------------------------------------
+  publish-release:
+    name: Mark release as published
+    needs: [create-release, build-binaries, python-wheels, wasm-bundle]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.create-release.outputs.tag }}
+          draft: false

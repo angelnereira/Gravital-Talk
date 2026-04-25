@@ -1,0 +1,101 @@
+#cloud-config
+# Gravital Sound — cloud-init para Raspberry Pi (Pi 4/5 con Raspberry Pi OS Lite ARM64).
+#
+# Aprovisiona el binario `gs` como daemon edge: capturando del micrófono local
+# y enviándolo a un relay público vía UDP o WebSocket.
+#
+# Uso (escribir en boot partition de la SD card):
+#   sudo cp raspberry-pi.yml /boot/firmware/user-data
+#   # editar /boot/firmware/user-data y poner el relay_endpoint y session_id
+#
+# Variables de entorno se leen en /etc/default/gravital-sound
+
+package_update: true
+package_upgrade: false
+package_reboot_if_required: false
+
+packages:
+  - curl
+  - alsa-utils
+  - libasound2
+  - libopus0
+  - jq
+  - ufw
+
+users:
+  - name: gravital
+    system: true
+    shell: /usr/sbin/nologin
+    groups: [audio]
+    no-create-home: true
+
+write_files:
+  - path: /etc/default/gravital-sound
+    content: |
+      # Gravital Sound — config del daemon edge.
+      # Editar después del primer boot con los datos reales del relay.
+      GS_RELAY_HOST=relay.example.com
+      GS_RELAY_PORT=9000
+      GS_DEVICE=default
+      GS_CODEC=opus
+      GS_LOG=info
+    owner: root:root
+    permissions: '0640'
+
+  - path: /etc/systemd/system/gravital-sound.service
+    content: |
+      [Unit]
+      Description=Gravital Sound edge daemon (mic → relay)
+      After=sound.target network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=simple
+      EnvironmentFile=/etc/default/gravital-sound
+      User=gravital
+      Group=audio
+      ExecStart=/usr/local/bin/gs send \
+        --host ${GS_RELAY_HOST} --port ${GS_RELAY_PORT} \
+        --device ${GS_DEVICE} --codec ${GS_CODEC}
+      Restart=on-failure
+      RestartSec=10
+      Nice=-5
+      IOSchedulingClass=realtime
+      IOSchedulingPriority=4
+
+      [Install]
+      WantedBy=multi-user.target
+    owner: root:root
+    permissions: '0644'
+
+runcmd:
+  # Firewall: outbound libre, inbound solo SSH (el daemon es cliente, no servidor).
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow 22/tcp
+  - ufw --force enable
+
+  # Descarga el binario gs aarch64 desde el último Release.
+  - |
+    set -eux
+    TAG="${GS_RELEASE_TAG:-v0.2.0-alpha.1}"
+    URL="https://github.com/angelnereira/gravital-sound/releases/download/${TAG}/gs-${TAG}-linux-aarch64.tar.gz"
+    TMP=$(mktemp -d)
+    cd "$TMP"
+    curl -fsSL -o gs.tar.gz "$URL"
+    tar xzf gs.tar.gz
+    DIR=$(find . -maxdepth 1 -type d -name 'gs-*' | head -n1)
+    install -m 0755 -o root -g root "$DIR/gs" /usr/local/bin/gs
+
+  # Habilita el servicio. Por defecto lo deja stopped: el operador debe
+  # editar /etc/default/gravital-sound antes de arrancarlo.
+  - systemctl daemon-reload
+  - systemctl enable gravital-sound.service
+  - 'echo "Edit /etc/default/gravital-sound y luego: systemctl start gravital-sound" | tee /etc/motd'
+
+final_message: |
+  Gravital Sound edge node aprovisionado.
+  - Binario: /usr/local/bin/gs
+  - Config:  /etc/default/gravital-sound
+  - Servicio: gravital-sound.service (no iniciado por defecto)
+  - Devices:  gs devices

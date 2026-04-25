@@ -1,0 +1,44 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gravital-sound-relay.fullname" . }}
+  labels:
+    {{- include "gravital-sound-relay.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  {{- if and (eq .Values.service.type "LoadBalancer") .Values.service.externalTrafficPolicy }}
+  externalTrafficPolicy: {{ .Values.service.externalTrafficPolicy }}
+  {{- end }}
+  selector:
+    {{- include "gravital-sound-relay.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: audio-udp
+      port: {{ .Values.ports.udp }}
+      targetPort: audio-udp
+      protocol: UDP
+    - name: ws
+      port: {{ .Values.ports.ws }}
+      targetPort: ws
+      protocol: TCP
+{{- if .Values.metricsService.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gravital-sound-relay.fullname" . }}-metrics
+  labels:
+    {{- include "gravital-sound-relay.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.metricsService.type }}
+  selector:
+    {{- include "gravital-sound-relay.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: metrics
+      port: {{ .Values.metricsService.port }}
+      targetPort: metrics
+      protocol: TCP
+{{- end }}

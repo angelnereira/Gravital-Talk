@@ -37,6 +37,12 @@ pub enum CodecSessionError {
     Transport(#[from] TransportError),
     #[error(transparent)]
     Codec(#[from] CodecError),
+    /// El peer eligió un codec distinto al configurado en este `CodecSession`.
+    #[error("codec mismatch: requested {requested:?}, peer chose {negotiated:?}")]
+    CodecMismatch {
+        requested: CodecId,
+        negotiated: CodecId,
+    },
 }
 
 pub struct CodecSession {
@@ -61,9 +67,13 @@ impl core::fmt::Debug for CodecSession {
 
 impl CodecSession {
     /// Crea un `CodecSession` adjuntando un codec a una sesión ya construida.
+    ///
+    /// Sincroniza `config.codec_preferred` con el codec elegido para que el
+    /// handshake pida exactamente ese codec, y se asegura que esté en
+    /// `config.supported_codecs`.
     pub fn new(
         transport: Arc<dyn Transport>,
-        config: Config,
+        mut config: Config,
         codec: CodecId,
     ) -> Result<Self, CodecSessionError> {
         let (encoder, decoder) = build_pair(
@@ -75,6 +85,10 @@ impl CodecSession {
         let frame_samples = encoder.frame_samples();
         let channels = config.channels;
         let mtu = config.mtu;
+        config.codec_preferred = codec.code();
+        if !config.supported_codecs.contains(&codec.code()) {
+            config.supported_codecs.insert(0, codec.code());
+        }
         Ok(Self {
             inner: Arc::new(Session::new(transport, config)),
             codec_id: codec,
@@ -96,12 +110,33 @@ impl CodecSession {
         self.inner.clone()
     }
 
+    /// Codec acordado en el handshake. Devuelve `None` antes de completarlo.
+    #[must_use]
+    pub fn negotiated_codec(&self) -> Option<CodecId> {
+        match self.inner.negotiated_codec() {
+            0 => None,
+            code => Some(CodecId::from_code(code)),
+        }
+    }
+
+    /// Ejecuta el handshake y valida que el codec negociado coincida con el
+    /// configurado en este `CodecSession`. Devuelve `CodecMismatch` si el peer
+    /// eligió otro codec — el caller debe reconfigurar la sesión con el codec
+    /// negociado o rechazar la conexión.
     pub async fn handshake(
         &self,
         role: SessionRole,
         peer: SocketAddr,
     ) -> Result<(), CodecSessionError> {
         self.inner.handshake(role, peer).await?;
+        let negotiated_code = self.inner.negotiated_codec();
+        let negotiated = CodecId::from_code(negotiated_code);
+        if negotiated != self.codec_id {
+            return Err(CodecSessionError::CodecMismatch {
+                requested: self.codec_id,
+                negotiated,
+            });
+        }
         Ok(())
     }
 

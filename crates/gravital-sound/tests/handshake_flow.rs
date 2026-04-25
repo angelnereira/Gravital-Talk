@@ -95,6 +95,106 @@ async fn rejects_unexpected_peer_during_handshake() {
     assert_eq!(client.session_id(), server.session_id());
 }
 
+/// El client pide Opus (codec 0x02), el server sólo soporta PCM (0x01).
+/// Server hace fallback a PCM y client lo acepta porque PCM está en su lista
+/// soportada.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codec_negotiation_falls_back_when_not_supported() {
+    let server_transport = Arc::new(
+        UdpTransport::bind(UdpConfig {
+            bind_addr: "127.0.0.1:0".parse().unwrap(),
+            ..Default::default()
+        })
+        .await
+        .unwrap(),
+    );
+    let server_addr = server_transport.local_addr().unwrap();
+    let client_transport = Arc::new(
+        UdpTransport::bind(UdpConfig {
+            bind_addr: "127.0.0.1:0".parse().unwrap(),
+            ..Default::default()
+        })
+        .await
+        .unwrap(),
+    );
+    let client_addr = client_transport.local_addr().unwrap();
+
+    let server_cfg = Config {
+        supported_codecs: vec![0x01], // PCM only
+        ..Config::default()
+    };
+    let client_cfg = Config {
+        codec_preferred: 0x02,              // Pide Opus
+        supported_codecs: vec![0x01, 0x02], // Pero acepta PCM como fallback
+        ..Config::default()
+    };
+
+    let server = Arc::new(Session::new(server_transport, server_cfg));
+    let client = Arc::new(Session::new(client_transport, client_cfg));
+
+    let s = server.clone();
+    let sjh = tokio::spawn(async move { s.handshake(SessionRole::Server, client_addr).await });
+    let c = client.clone();
+    let cjh = tokio::spawn(async move { c.handshake(SessionRole::Client, server_addr).await });
+
+    cjh.await.unwrap().unwrap();
+    sjh.await.unwrap().unwrap();
+
+    assert_eq!(client.negotiated_codec(), 0x01, "client should see PCM");
+    assert_eq!(server.negotiated_codec(), 0x01, "server should see PCM");
+}
+
+/// El client pide Opus pero el server elige PCM y el client tiene Opus como
+/// único codec soportado: el client debe rechazar con `Handshake` error.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codec_negotiation_rejects_unsupported_response() {
+    let server_transport = Arc::new(
+        UdpTransport::bind(UdpConfig {
+            bind_addr: "127.0.0.1:0".parse().unwrap(),
+            ..Default::default()
+        })
+        .await
+        .unwrap(),
+    );
+    let server_addr = server_transport.local_addr().unwrap();
+    let client_transport = Arc::new(
+        UdpTransport::bind(UdpConfig {
+            bind_addr: "127.0.0.1:0".parse().unwrap(),
+            ..Default::default()
+        })
+        .await
+        .unwrap(),
+    );
+    let client_addr = client_transport.local_addr().unwrap();
+
+    let server_cfg = Config {
+        supported_codecs: vec![0x01], // sólo PCM
+        ..Config::default()
+    };
+    let client_cfg = Config {
+        codec_preferred: 0x02,
+        supported_codecs: vec![0x02], // sólo Opus, sin fallback
+        ..Config::default()
+    };
+
+    let server = Arc::new(Session::new(server_transport, server_cfg));
+    let client = Arc::new(Session::new(client_transport, client_cfg));
+
+    let s = server.clone();
+    let sjh = tokio::spawn(async move { s.handshake(SessionRole::Server, client_addr).await });
+    let c = client.clone();
+    let cjh = tokio::spawn(async move { c.handshake(SessionRole::Client, server_addr).await });
+
+    let client_result = cjh.await.unwrap();
+    let _ = sjh.await; // server completes normally; we only care about client failure
+    let err = client_result.expect_err("client should reject unsupported codec");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("unsupported codec") || msg.contains("retries"),
+        "unexpected error: {msg}"
+    );
+}
+
 #[tokio::test]
 async fn client_timeout_without_server() {
     let client_transport = Arc::new(

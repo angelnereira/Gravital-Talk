@@ -1,0 +1,40 @@
+[package]
+name         = "gravital-sound-relay"
+version.workspace    = true
+edition.workspace    = true
+rust-version.workspace = true
+authors.workspace    = true
+license.workspace    = true
+repository.workspace = true
+description = "Gravital Sound — relay server productivo (UDP + WebSocket, métricas Prometheus)."
+readme       = "../../README.md"
+
+[lib]
+name = "gravital_sound_relay"
+path = "src/lib.rs"
+
+[[bin]]
+name = "gs-relay"
+path = "src/main.rs"
+
+[dependencies]
+gravital-sound-core      = { workspace = true }
+gravital-sound-transport = { workspace = true }
+tokio             = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync", "macros", "signal"] }
+tokio-tungstenite = { workspace = true }
+futures-util      = "0.3"
+bytes             = { workspace = true }
+clap              = { workspace = true }
+tracing           = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow            = { workspace = true }
+serde             = { workspace = true }
+toml              = "0.8"
+hyper             = { version = "1.5", features = ["server", "http1"] }
+hyper-util        = { version = "0.1", features = ["tokio"] }
+http-body-util    = "0.1"
+prometheus        = { version = "0.13", default-features = false }
+dashmap           = "6.1"
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"

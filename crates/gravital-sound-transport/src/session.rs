@@ -4,7 +4,7 @@
 //! core, llevando el ciclo de vida y las métricas.
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -44,6 +44,11 @@ pub struct Config {
     pub max_bitrate: u32,
     /// Codec preferido (1 = PCM, 2 = Opus reservado).
     pub codec_preferred: u8,
+    /// Codecs aceptables del lado server (en orden de preferencia local).
+    /// El server elige el `codec_preferred` del cliente si está en esta lista;
+    /// si no, hace fallback al primer codec local. El cliente valida que el
+    /// codec aceptado por el server esté en su propia lista soportada.
+    pub supported_codecs: Vec<u8>,
     /// Flags de capacidad (bitfield definido por la aplicación).
     pub capability_flags: u32,
     /// Profundidad del jitter buffer en ms.
@@ -60,6 +65,7 @@ impl Default for Config {
             frame_duration_ms: DEFAULT_FRAME_DURATION_MS,
             max_bitrate: DEFAULT_MAX_BITRATE,
             codec_preferred: 0x01,
+            supported_codecs: vec![0x01, 0x02],
             capability_flags: 0,
             jitter_buffer_ms: DEFAULT_JITTER_BUFFER_MS,
             mtu: DEFAULT_MTU,
@@ -78,6 +84,8 @@ pub struct Session {
     session_id: AtomicU32,
     tx_sequence: AtomicU32,
     last_rx: AtomicU64,
+    /// Codec acordado tras el handshake (0 antes de negociar).
+    negotiated_codec: AtomicU8,
     epoch: Instant,
 }
 
@@ -104,8 +112,21 @@ impl Session {
             session_id: AtomicU32::new(0),
             tx_sequence: AtomicU32::new(0),
             last_rx: AtomicU64::new(0),
+            negotiated_codec: AtomicU8::new(0),
             epoch: Instant::now(),
         }
+    }
+
+    /// Codec acordado tras el handshake. Devuelve `0` si aún no se completó.
+    #[must_use]
+    pub fn negotiated_codec(&self) -> u8 {
+        self.negotiated_codec.load(Ordering::Acquire)
+    }
+
+    /// Configuración inmutable de esta sesión.
+    #[must_use]
+    pub fn config(&self) -> &Config {
+        &self.config
     }
 
     #[must_use]
@@ -217,6 +238,17 @@ impl Session {
                     if accept.nonce != nonce {
                         return Err(TransportError::Handshake("nonce mismatch"));
                     }
+                    if !self
+                        .config
+                        .supported_codecs
+                        .contains(&accept.codec_accepted)
+                    {
+                        return Err(TransportError::Handshake(
+                            "server selected unsupported codec",
+                        ));
+                    }
+                    self.negotiated_codec
+                        .store(accept.codec_accepted, Ordering::Release);
                     self.session_id.store(accept.session_id, Ordering::Release);
                     let confirm = HandshakeConfirm {
                         session_id: accept.session_id,
@@ -272,9 +304,22 @@ impl Session {
         let session_id = rand_u32();
         self.session_id.store(session_id, Ordering::Release);
 
+        // Codec negotiation: prefer client's choice if locally supported,
+        // else fall back to first locally-supported codec; reject if list empty.
+        let chosen_codec = if self.config.supported_codecs.contains(&init.codec_preferred) {
+            init.codec_preferred
+        } else {
+            *self
+                .config
+                .supported_codecs
+                .first()
+                .ok_or(TransportError::Handshake("no supported codecs configured"))?
+        };
+        self.negotiated_codec.store(chosen_codec, Ordering::Release);
+
         let accept = HandshakeAccept {
             protocol_version: 1,
-            codec_accepted: init.codec_preferred,
+            codec_accepted: chosen_codec,
             sample_rate: init.sample_rate,
             channels: init.channels,
             frame_duration_ms: init.frame_duration_ms,

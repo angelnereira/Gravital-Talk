@@ -1,0 +1,86 @@
+name: Terraform
+
+# Valida sintaxis y formato de los módulos Terraform en cada cambio
+# bajo `infra/terraform/`. No aplica nada — solo `validate` y `plan` con
+# backend local.
+
+on:
+  push:
+    branches: [main, "claude/**", "feat/**", "verify/**"]
+    paths:
+      - 'infra/terraform/**'
+      - '.github/workflows/terraform.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'infra/terraform/**'
+      - '.github/workflows/terraform.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  fmt:
+    name: terraform fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.9.x'
+      - name: terraform fmt -check -recursive
+        working-directory: infra/terraform
+        run: terraform fmt -check -recursive
+
+  validate:
+    name: validate ${{ matrix.module }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - modules/relay-aws
+          - modules/relay-hetzner
+          - modules/relay-digitalocean
+          - modules/edge-node
+          - examples/single-region-aws
+          - examples/self-hosted-hetzner
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.9.x'
+      - name: terraform init -backend=false
+        working-directory: infra/terraform/${{ matrix.module }}
+        run: terraform init -backend=false
+      - name: terraform validate
+        working-directory: infra/terraform/${{ matrix.module }}
+        run: terraform validate
+
+  tflint:
+    name: tflint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+      - name: Run tflint recursively
+        run: |
+          cd infra/terraform
+          tflint --init
+          tflint --recursive
+
+  checkov:
+    name: checkov security scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: infra/terraform
+          quiet: true
+          soft_fail: true  # No bloquea merge — solo reporta findings.
+          framework: terraform

@@ -1,0 +1,113 @@
+{
+  "title": "Gravital Sound — Fleet Overview",
+  "uid": "gs-fleet-overview",
+  "schemaVersion": 38,
+  "editable": true,
+  "tags": ["gravital-sound", "audio", "voip"],
+  "timezone": "browser",
+  "time": { "from": "now-1h", "to": "now" },
+  "refresh": "10s",
+  "templating": {
+    "list": [
+      {
+        "name": "relay",
+        "label": "Relay",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(gs_relay_active_sessions, instance)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Active sessions",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+      "targets": [
+        {
+          "expr": "sum(gs_relay_active_sessions{instance=~\"$relay\"})",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "WebSocket connections",
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
+      "targets": [
+        {
+          "expr": "sum(gs_relay_ws_connections{instance=~\"$relay\"})",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Packets/sec in",
+      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
+      "targets": [
+        {
+          "expr": "sum(rate(gs_relay_packets_in_total{instance=~\"$relay\"}[1m]))",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Mbit/sec in",
+      "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+      "targets": [
+        {
+          "expr": "sum(rate(gs_relay_bytes_in_total{instance=~\"$relay\"}[1m])) * 8 / 1e6",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "Mbits" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Throughput (in vs out)",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(gs_relay_bytes_in_total{instance=~\"$relay\"}[1m])) * 8",
+          "legendFormat": "in",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(gs_relay_bytes_out_total{instance=~\"$relay\"}[1m])) * 8",
+          "legendFormat": "out",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bps" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Drop reasons (1m rate)",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum by (reason) (rate(gs_relay_dropped_total{instance=~\"$relay\"}[1m]))",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Active sessions over time",
+      "gridPos": { "x": 0, "y": 12, "w": 24, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum by (instance) (gs_relay_active_sessions{instance=~\"$relay\"})",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

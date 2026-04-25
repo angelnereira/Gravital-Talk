@@ -114,6 +114,7 @@ impl From<&GsConfig> for RustConfig {
             frame_duration_ms: c.frame_duration_ms,
             max_bitrate: c.max_bitrate,
             codec_preferred: c.codec_preferred,
+            supported_codecs: vec![0x01, 0x02],
             capability_flags: c.capability_flags,
             jitter_buffer_ms: c.jitter_buffer_ms,
             mtu: c.mtu as usize,
