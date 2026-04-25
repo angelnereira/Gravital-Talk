@@ -17,11 +17,13 @@ pub mod capture;
 pub mod devices;
 pub mod error;
 pub mod playback;
+pub mod resampler;
 
 pub use capture::AudioCapture;
 pub use devices::{list_input_devices, list_output_devices, DeviceInfo};
 pub use error::IoError;
 pub use playback::AudioPlayback;
+pub use resampler::Resampler;
 
 pub type Result<T> = core::result::Result<T, IoError>;
 

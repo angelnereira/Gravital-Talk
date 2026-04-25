@@ -14,9 +14,13 @@ name = "gravital_sound_io"
 path = "src/lib.rs"
 
 [dependencies]
-cpal    = "0.15"
-tracing = { workspace = true }
+cpal      = "0.15"
+rubato    = "0.15"
+tracing   = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+hound = { workspace = true }
 
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
