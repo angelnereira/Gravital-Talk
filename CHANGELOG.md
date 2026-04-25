@@ -2,6 +2,90 @@
 
 Todos los cambios notables de Gravital Sound se documentan aquí. El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y el proyecto usa [SemVer](https://semver.org/lang/es/).
 
+## [0.2.0-alpha.2] — 2026-04-25
+
+Track A.1 (follow-ups Fase 5) + Track C (relay productivo) + Track D parcial (release infrastructure) + Track E (Infraestructura as Code con Terraform/Helm).
+
+### Added
+
+**Track A.1 — Negociación de codec en handshake (`transport`, `facade`)**
+- `Config.supported_codecs: Vec<u8>` lista los codecs aceptables del lado server.
+- Server elige `codec_preferred` del client si está en su lista; si no, hace fallback al primer codec local.
+- Client valida que el codec aceptado esté en su propia lista; aborta con `Handshake("server selected unsupported codec")` si no.
+- `Session::negotiated_codec()` y `Session::config()` expuestos para capas superiores.
+- `CodecSession::handshake()` valida coincidencia con su `codec_id` y retorna `CodecMismatch { requested, negotiated }` si difiere.
+- `CodecSession::new()` ahora sincroniza automáticamente `config.codec_preferred` con el codec elegido.
+- 3 tests integración: fallback ok, rechazo cliente, mismatch CodecSession.
+
+**Track A.1 — Resampler (`gravital-sound-io`)**
+- `Resampler::new(in_rate, out_rate, channels, out_frames_per_channel)` basado en `rubato::FftFixedOut`.
+- Conversión `i16 → f32 → resample → i16` con buffers reutilizables (zero-alloc en hot path).
+- Soporta channels arbitrarios (deinterleave/interleave automático).
+- 3 tests: 44.1→48 kHz preserva energía, 48→48 kHz produce salida, rechaza 0 channels.
+
+**Track C — Crate `gravital-sound-relay`** (relay productivo stand-alone)
+- Servidor que acepta tráfico UDP **y** WebSocket en el mismo proceso.
+- `Router` con `DashMap<u32, RouteEntry>` y políticas: 2 peers/sesión, drop de tercer peer interviniendo, GC de sesiones idle por TTL.
+- Loop UDP usando `PacketView` para extraer `session_id` sin parsear más.
+- Bridge WebSocket con `tokio-tungstenite`; cada conexión es endpoint válido al mismo router (cross-transport relay browser↔native).
+- HTTP `/metrics` (Prometheus text format) y `/healthz` en `hyper 1.x`.
+- Métricas: `gs_relay_packets_in/out_total`, `bytes_in/out_total`, `active_sessions`, `ws_connections`, `dropped_total{reason}`.
+- Config TOML con override por flags CLI (`--udp-bind`, `--ws-bind`, `--observability-bind`, `--config`).
+- Defaults sensatos: UDP 9000, WS 9090, observabilidad 9100, TTL 5min, max 10k sessions.
+- Binario `gs-relay` con manejo de Ctrl-C y GC thread (cada 30s).
+- 9 tests unitarios.
+
+**Track C — Containerización del relay**
+- `Dockerfile` multi-stage (rust:1.78-slim builder → debian:bookworm-slim runtime con usuario `gravital` uid 10001).
+- `docker-compose.yml` con relay + Prometheus para stack local de testing.
+- `prometheus.yml` con scrape config preconfigurado.
+- `relay.example.toml` con todos los campos comentados.
+
+**Track D — Workflows CI/CD**
+- `.github/workflows/release.yml`: disparado por tags `v*`, construye binarios `gs` para `linux-x86_64`, `linux-aarch64`, `macos-x86_64`, `macos-aarch64`, `windows-x86_64`. Empaqueta tar.gz/zip con README+LICENSE+CHANGELOG. Construye wheels Python (manylinux + macOS + Windows) vía maturin. Construye bundle WASM vía wasm-pack. Crea draft release y lo publica solo si todos los jobs pasan.
+- `.github/workflows/docs.yml`: en cada push a main y tag `v*`, publica `cargo doc --workspace --all-features` a GitHub Pages con redirect de raíz a `gravital_sound/`. Usa `RUSTDOCFLAGS=-D warnings` para garantizar que docs no se rompan en silencio.
+- `.github/workflows/terraform.yml`: en cambios bajo `infra/terraform/**`, ejecuta `terraform fmt -check -recursive`, `terraform validate` por cada módulo (matrix), `tflint --recursive` y `checkov` security scan (soft fail).
+- `.github/workflows/ci.yml`: triggers extendidos a `feat/**` y `verify/**` + `workflow_dispatch` para relanzar desde la UI.
+
+**Track E.1 — Módulos Terraform multi-cloud (`infra/terraform/modules/`)**
+- `relay-aws`: EC2 t4g.small (ARM64, ~$12/mes), Security Group con UDP/WS abiertos, Route53 record A opcional, Debian 12, IMDSv2 obligatorio, EBS gp3 cifrado. Outputs estandarizados (`relay_endpoint`, `udp_port`, `ws_url`).
+- `relay-hetzner`: CX22 (~€4/mes), Cloud Firewall, IPv4+IPv6, datacenters EU+US. La opción más barata para self-host.
+- `relay-digitalocean`: Droplet con DO Firewall, monitoring activado, 13 regiones globales (~$6/mes el más chico).
+
+**Track E.3 — Edge nodes**
+- `infra/terraform/modules/edge-node`: produce `user_data` cloud-init agnóstico que cualquier provider de compute puede consumir. Configura systemd unit con el daemon `gs send` capturando del mic local, `Nice=-5` para latencia.
+- `infra/cloud-init/raspberry-pi.yml`: cloud-config descargable directo a SD card (`/boot/firmware/user-data`) para Raspberry Pi 4/5 con Pi OS Lite ARM64. Instala libopus, libasound, configura UFW y systemd unit que arranca tras editar `/etc/default/gravital-sound`.
+- `infra/terraform/examples/single-region-aws` y `self-hosted-hetzner` con `terraform apply` listo.
+
+**Track E.2 — Helm chart `gravital-sound-relay`**
+- Chart.yaml v0.1.0 con appVersion = 0.2.0-alpha.1.
+- `Deployment` con `securityContext` estricto (`runAsNonRoot`, `readOnlyRootFilesystem`, drop ALL capabilities), liveness/readiness en `/healthz`.
+- `Service` `LoadBalancer` con `externalTrafficPolicy: Local` (preserva IP del cliente para rate limiting).
+- `Service` separado `ClusterIP` solo para `/metrics` (no expone al exterior).
+- `ServiceMonitor` opcional compatible con prometheus-operator.
+- `HorizontalPodAutoscaler` por CPU (autoscaling.enabled=false por defecto).
+- `ConfigMap` que monta `config.toml` derivado de `values.yaml`.
+
+**Track E.4 — Dashboards Grafana**
+- `infra/grafana/dashboards/gravital-fleet-overview.json`: stat panels (sesiones, conexiones WS, paquetes/s, Mbit/s), timeseries (throughput in vs out, drop reasons, sesiones activas histórico), filtro por instance.
+- Compatible con la convención `grafana_dashboard=1` de kube-prometheus-stack.
+
+**Documentación**
+- `infra/README.md` con tabla comparativa de proveedores, runbook de operaciones (health, métricas, update, troubleshooting).
+- `infra/terraform/modules/relay-aws/README.md` con todas las variables y outputs.
+- `infra/helm/gravital-sound-relay/README.md` con 3 modos de instalación.
+- `infra/grafana/README.md` con guía de import.
+- README principal completamente reescrito reflejando el alcance actual.
+
+### Changed
+- README principal: nuevo árbol de directorios, tabla de estado expandida, quickstarts para relay y Terraform, sección de CI/CD.
+
+### Notes
+- El relay actual no tiene cifrado ni rate limiting (planificado para 0.3 con Noise Protocol y tower-rate-limit).
+- El HPA del Helm chart está basado en CPU; autoscaling por sesiones activas requiere prometheus-adapter (documentado).
+- Routing del relay es per-pod (en memoria); para escalar horizontalmente con peers en pods distintos se necesita backend compartido (Redis/etcd) — pendiente.
+- Terraform: ningún módulo se valida automáticamente sin proveedor configurado en el sandbox local; CI lo valida con `terraform validate` + `tflint` + `checkov`.
+
 ## [0.2.0-alpha.1] — 2026-04-24
 
 Fase 5 completa — Track A: codec Opus + audio hardware + CLI de producción.
