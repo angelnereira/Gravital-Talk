@@ -9,7 +9,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gravital_sound::{
-    CodecId, CodecSession, Config, SessionRole, Transport, UdpConfig, UdpTransport,
+    codec_session::CodecSessionError, CodecId, CodecSession, Config, SessionRole, Transport,
+    UdpConfig, UdpTransport,
 };
 
 fn sine_samples(n: usize, sample_rate: u32) -> Vec<i16> {
@@ -118,6 +119,60 @@ async fn pcm_roundtrip_snr_above_60db() {
     assert!(!recovered.is_empty(), "received no samples");
     let snr = snr_db(&original, &recovered);
     assert!(snr > 60.0, "PCM SNR {snr:.1} dB < 60 dB");
+}
+
+/// El client pide Opus, el server sólo soporta PCM. CodecSession del client
+/// debe retornar `CodecMismatch` aunque el handshake del transport tenga éxito.
+#[cfg(feature = "opus")]
+#[tokio::test(flavor = "multi_thread")]
+async fn codec_session_rejects_mismatch() {
+    let ts = Arc::new(
+        UdpTransport::bind(UdpConfig {
+            bind_addr: "127.0.0.1:0".parse().unwrap(),
+            ..Default::default()
+        })
+        .await
+        .unwrap(),
+    );
+    let tc = Arc::new(
+        UdpTransport::bind(UdpConfig {
+            bind_addr: "127.0.0.1:0".parse().unwrap(),
+            ..Default::default()
+        })
+        .await
+        .unwrap(),
+    );
+    let srv_local = ts.local_addr().unwrap();
+    let cli_local = tc.local_addr().unwrap();
+
+    let server_cfg = Config {
+        supported_codecs: vec![0x01], // sólo PCM
+        ..Config::default()
+    };
+    let client_cfg = Config {
+        codec_preferred: 0x02,
+        supported_codecs: vec![0x01, 0x02], // acepta fallback
+        ..Config::default()
+    };
+
+    let srv = Arc::new(CodecSession::new(ts, server_cfg, CodecId::Pcm).unwrap());
+    let cli = Arc::new(CodecSession::new(tc, client_cfg, CodecId::Opus).unwrap());
+
+    let s = srv.clone();
+    let hs_srv = tokio::spawn(async move { s.handshake(SessionRole::Server, cli_local).await });
+    let cli_result = cli.handshake(SessionRole::Client, srv_local).await;
+    let _ = hs_srv.await;
+
+    match cli_result {
+        Err(CodecSessionError::CodecMismatch {
+            requested,
+            negotiated,
+        }) => {
+            assert_eq!(requested, CodecId::Opus);
+            assert_eq!(negotiated, CodecId::Pcm);
+        }
+        other => panic!("expected CodecMismatch, got {other:?}"),
+    }
 }
 
 #[cfg(feature = "opus")]
