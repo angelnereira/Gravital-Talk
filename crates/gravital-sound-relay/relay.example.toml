@@ -1,0 +1,19 @@
+# Gravital Sound — config del relay (ejemplo).
+#
+# Uso: gs-relay --config relay.toml
+# Todos los campos son opcionales; los omitidos usan el default.
+
+# Bind para tráfico de audio UDP.
+udp_bind = "0.0.0.0:9000"
+
+# Bind para conexiones WebSocket (browser u otros clientes sin UDP).
+ws_bind = "0.0.0.0:9090"
+
+# Bind para el endpoint HTTP de observabilidad (/metrics, /healthz).
+observability_bind = "0.0.0.0:9100"
+
+# Tiempo (segundos) tras el cual una sesión sin tráfico se purga.
+session_ttl_secs = 300
+
+# Límite duro de sesiones simultáneas (protección de memoria).
+max_sessions = 10000
