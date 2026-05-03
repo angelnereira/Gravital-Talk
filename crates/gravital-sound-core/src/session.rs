@@ -24,6 +24,10 @@ pub enum SessionState {
     Paused,
     Closing,
     Closed,
+    /// Error irrecuperable (sin reconexión automática pendiente).
+    Error,
+    /// Reconexión en curso tras un fallo.
+    Reconnecting,
 }
 
 impl SessionState {
@@ -37,6 +41,8 @@ impl SessionState {
             Self::Paused => 3,
             Self::Closing => 4,
             Self::Closed => 5,
+            Self::Error => 6,
+            Self::Reconnecting => 7,
         }
     }
 
@@ -48,8 +54,22 @@ impl SessionState {
             3 => Self::Paused,
             4 => Self::Closing,
             5 => Self::Closed,
+            6 => Self::Error,
+            7 => Self::Reconnecting,
             _ => return Err(Error::MalformedPayload),
         })
+    }
+
+    /// `true` si la sesión puede enviar o recibir audio en este estado.
+    #[must_use]
+    pub const fn is_operational(self) -> bool {
+        matches!(self, Self::Active | Self::Paused)
+    }
+
+    /// `true` si la sesión terminó de forma definitiva (sin posibilidad de reconexión).
+    #[must_use]
+    pub const fn is_terminal(self) -> bool {
+        matches!(self, Self::Closed | Self::Error)
     }
 }
 
@@ -65,6 +85,12 @@ pub enum SessionEvent {
     Close,
     PeerClosed,
     PeerTimeout,
+    /// Error fatal que no puede recuperarse en el estado actual.
+    FatalError,
+    /// Inicio de intento de reconexión desde `Error`.
+    Reconnect,
+    /// Reconexión completada: vuelve al handshake.
+    ReconnectOk,
 }
 
 /// Error de transición. Diferente de `Error::InvalidStateTransition` para
@@ -108,25 +134,47 @@ impl SessionStateMachine {
         event: SessionEvent,
     ) -> Result<SessionState, StateTransitionError> {
         let next = match (self.state, event) {
+            // ── Conexión inicial ──────────────────────────────────────────
             (SessionState::Idle, SessionEvent::StartConnect)
             | (SessionState::Idle, SessionEvent::StartAccept) => SessionState::Handshaking,
 
+            // ── Handshake ─────────────────────────────────────────────────
             (SessionState::Handshaking, SessionEvent::HandshakeOk) => SessionState::Active,
             (SessionState::Handshaking, SessionEvent::HandshakeTimeout)
             | (SessionState::Handshaking, SessionEvent::Close) => SessionState::Closed,
+            (SessionState::Handshaking, SessionEvent::FatalError) => SessionState::Error,
 
+            // ── Activo ────────────────────────────────────────────────────
             (SessionState::Active, SessionEvent::Pause) => SessionState::Paused,
             (SessionState::Active, SessionEvent::Close) => SessionState::Closing,
             (SessionState::Active, SessionEvent::PeerClosed) => SessionState::Closing,
             (SessionState::Active, SessionEvent::PeerTimeout) => SessionState::Closing,
+            (SessionState::Active, SessionEvent::FatalError) => SessionState::Error,
 
+            // ── En pausa ──────────────────────────────────────────────────
             (SessionState::Paused, SessionEvent::Resume) => SessionState::Active,
             (SessionState::Paused, SessionEvent::Close) => SessionState::Closing,
             (SessionState::Paused, SessionEvent::PeerClosed) => SessionState::Closing,
             (SessionState::Paused, SessionEvent::PeerTimeout) => SessionState::Closing,
+            (SessionState::Paused, SessionEvent::FatalError) => SessionState::Error,
 
+            // ── Cerrando ──────────────────────────────────────────────────
             (SessionState::Closing, SessionEvent::PeerClosed) => SessionState::Closed,
             (SessionState::Closing, SessionEvent::Close) => SessionState::Closed,
+
+            // ── Reconexión ────────────────────────────────────────────────
+            // Desde Error o Closed (si la capa superior decide reintentar).
+            (SessionState::Error, SessionEvent::Reconnect)
+            | (SessionState::Closed, SessionEvent::Reconnect) => SessionState::Reconnecting,
+
+            // Reconexión iniciada: vuelve al handshake.
+            (SessionState::Reconnecting, SessionEvent::StartConnect)
+            | (SessionState::Reconnecting, SessionEvent::StartAccept)
+            | (SessionState::Reconnecting, SessionEvent::ReconnectOk) => SessionState::Handshaking,
+
+            // Reconexión fallida: vuelve a Error.
+            (SessionState::Reconnecting, SessionEvent::HandshakeTimeout)
+            | (SessionState::Reconnecting, SessionEvent::FatalError) => SessionState::Error,
 
             (from, event) => return Err(StateTransitionError { from, event }),
         };
@@ -145,24 +193,14 @@ impl SessionStateMachine {
 /// impl Session<phantom::Idle>   { pub fn connect(...) -> Session<phantom::Handshaking> {...} }
 /// ```
 pub mod phantom {
-    /// Sesión en estado `Idle`.
-    #[derive(Debug)]
-    pub struct Idle;
-    /// Sesión en estado `Handshaking`.
-    #[derive(Debug)]
-    pub struct Handshaking;
-    /// Sesión en estado `Active`.
-    #[derive(Debug)]
-    pub struct Active;
-    /// Sesión en estado `Paused`.
-    #[derive(Debug)]
-    pub struct Paused;
-    /// Sesión en estado `Closing`.
-    #[derive(Debug)]
-    pub struct Closing;
-    /// Sesión en estado `Closed`.
-    #[derive(Debug)]
-    pub struct Closed;
+    #[derive(Debug)] pub struct Idle;
+    #[derive(Debug)] pub struct Handshaking;
+    #[derive(Debug)] pub struct Active;
+    #[derive(Debug)] pub struct Paused;
+    #[derive(Debug)] pub struct Closing;
+    #[derive(Debug)] pub struct Closed;
+    #[derive(Debug)] pub struct Error;
+    #[derive(Debug)] pub struct Reconnecting;
 }
 
 #[cfg(test)]
@@ -197,7 +235,6 @@ mod tests {
     #[test]
     fn invalid_transition_preserves_state() {
         let mut sm = SessionStateMachine::new();
-        // No se puede `Resume` desde Idle.
         let err = sm.transition(SessionEvent::Resume).unwrap_err();
         assert_eq!(err.from, SessionState::Idle);
         assert_eq!(err.event, SessionEvent::Resume);
@@ -222,6 +259,51 @@ mod tests {
     }
 
     #[test]
+    fn fatal_error_to_error_state() {
+        let mut sm = SessionStateMachine::new();
+        sm.transition(SessionEvent::StartConnect).unwrap();
+        sm.transition(SessionEvent::HandshakeOk).unwrap();
+        sm.transition(SessionEvent::FatalError).unwrap();
+        assert_eq!(sm.state(), SessionState::Error);
+    }
+
+    #[test]
+    fn reconnect_flow() {
+        let mut sm = SessionStateMachine::new();
+        sm.transition(SessionEvent::StartConnect).unwrap();
+        sm.transition(SessionEvent::HandshakeOk).unwrap();
+        sm.transition(SessionEvent::FatalError).unwrap();
+        assert_eq!(sm.state(), SessionState::Error);
+        sm.transition(SessionEvent::Reconnect).unwrap();
+        assert_eq!(sm.state(), SessionState::Reconnecting);
+        sm.transition(SessionEvent::StartConnect).unwrap();
+        assert_eq!(sm.state(), SessionState::Handshaking);
+        sm.transition(SessionEvent::HandshakeOk).unwrap();
+        assert_eq!(sm.state(), SessionState::Active);
+    }
+
+    #[test]
+    fn reconnect_from_closed() {
+        let mut sm = SessionStateMachine::new();
+        sm.transition(SessionEvent::StartConnect).unwrap();
+        sm.transition(SessionEvent::HandshakeTimeout).unwrap();
+        assert_eq!(sm.state(), SessionState::Closed);
+        sm.transition(SessionEvent::Reconnect).unwrap();
+        assert_eq!(sm.state(), SessionState::Reconnecting);
+    }
+
+    #[test]
+    fn reconnect_failure_goes_to_error() {
+        let mut sm = SessionStateMachine::new();
+        sm.transition(SessionEvent::StartConnect).unwrap();
+        sm.transition(SessionEvent::HandshakeOk).unwrap();
+        sm.transition(SessionEvent::FatalError).unwrap();
+        sm.transition(SessionEvent::Reconnect).unwrap();
+        sm.transition(SessionEvent::HandshakeTimeout).unwrap();
+        assert_eq!(sm.state(), SessionState::Error);
+    }
+
+    #[test]
     fn state_code_roundtrip() {
         for s in [
             SessionState::Idle,
@@ -230,8 +312,26 @@ mod tests {
             SessionState::Paused,
             SessionState::Closing,
             SessionState::Closed,
+            SessionState::Error,
+            SessionState::Reconnecting,
         ] {
             assert_eq!(SessionState::from_code(s.code()).unwrap(), s);
         }
+    }
+
+    #[test]
+    fn is_operational() {
+        assert!(SessionState::Active.is_operational());
+        assert!(SessionState::Paused.is_operational());
+        assert!(!SessionState::Idle.is_operational());
+        assert!(!SessionState::Error.is_operational());
+    }
+
+    #[test]
+    fn is_terminal() {
+        assert!(SessionState::Closed.is_terminal());
+        assert!(SessionState::Error.is_terminal());
+        assert!(!SessionState::Active.is_terminal());
+        assert!(!SessionState::Reconnecting.is_terminal());
     }
 }

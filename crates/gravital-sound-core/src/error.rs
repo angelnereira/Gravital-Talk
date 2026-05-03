@@ -34,6 +34,12 @@ pub enum Error {
     InvalidStateTransition,
     /// Payload malformado (estructura interna).
     MalformedPayload,
+    /// El tag AEAD no es válido: payload corrupto o clave errónea.
+    DecryptionFailed,
+    /// Los bytes reservados del header no son cero.
+    ReservedFieldNonZero,
+    /// La versión del protocolo no es negociable entre los extremos.
+    VersionNegotiationFailed,
 }
 
 impl Error {
@@ -55,6 +61,9 @@ impl Error {
             Self::IncompleteReassembly => 12,
             Self::InvalidStateTransition => 13,
             Self::MalformedPayload => 14,
+            Self::DecryptionFailed => 15,
+            Self::ReservedFieldNonZero => 16,
+            Self::VersionNegotiationFailed => 17,
         }
     }
 }
@@ -76,6 +85,11 @@ impl fmt::Display for Error {
             Self::IncompleteReassembly => f.write_str("cannot pop incomplete reassembly"),
             Self::InvalidStateTransition => f.write_str("invalid session state transition"),
             Self::MalformedPayload => f.write_str("malformed payload structure"),
+            Self::DecryptionFailed => f.write_str("AEAD decryption/authentication failed"),
+            Self::ReservedFieldNonZero => f.write_str("reserved header bytes must be zero"),
+            Self::VersionNegotiationFailed => {
+                f.write_str("protocol version negotiation failed")
+            }
         }
     }
 }
