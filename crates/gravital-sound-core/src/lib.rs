@@ -27,17 +27,18 @@ pub mod session;
 pub use checksum::crc16_ccitt_false;
 pub use constants::{
     DEFAULT_MTU, HEADER_SIZE, MAGIC_BYTES, MAX_FRAGMENTS, MAX_PAYLOAD_SIZE, PROTOCOL_VERSION,
+    PROTOCOL_VERSION_MAX, PROTOCOL_VERSION_MIN,
 };
 pub use crypto::{decrypt_in_place, encrypt_in_place, make_nonce, SessionKey, KEY_SIZE, TAG_SIZE};
 pub use error::Error;
 pub use fragment::{FragmentHeader, FragmentReassembler};
 pub use header::{Flags, PacketHeader};
 pub use message::{
-    ClientHello, ErrorCode, HandshakeAccept, HandshakeConfirm, HandshakeInit, KeyExchangeMsg,
-    MessageType, ServerHello, SessionConfirm,
+    ClientHello, ControlBitrateMsg, ErrorCode, FecHeader, HandshakeAccept, HandshakeConfirm,
+    HandshakeInit, KeyExchangeMsg, MessageType, ServerHello, SessionConfirm,
 };
 pub use packet::{Packet, PacketView};
-pub use session::{SessionId, SessionState, SessionStateMachine, StateTransitionError};
+pub use session::{SessionEvent, SessionId, SessionState, SessionStateMachine, StateTransitionError};
 
 /// Resultado estándar del crate.
 pub type Result<T> = core::result::Result<T, Error>;

@@ -27,11 +27,15 @@ pub enum MessageType {
     HandshakeKeyExchange,
     AudioFrame,
     AudioFragment,
+    /// Paquete de paridad FEC (XOR de un grupo de AudioFrames).
+    AudioFec,
     Heartbeat,
     HeartbeatAck,
     ControlPause,
     ControlResume,
     ControlMetrics,
+    /// Bitrate adjustment solicitado por el receptor (payload: ControlBitrate).
+    ControlBitrate,
     /// Rango `0x40..=0x7F` reservado para extensiones de aplicación.
     Extension(u8),
     Error,
@@ -49,11 +53,13 @@ impl MessageType {
             Self::HandshakeKeyExchange => 0x04,
             Self::AudioFrame => 0x10,
             Self::AudioFragment => 0x11,
+            Self::AudioFec => 0x12,
             Self::Heartbeat => 0x20,
             Self::HeartbeatAck => 0x21,
             Self::ControlPause => 0x30,
             Self::ControlResume => 0x31,
             Self::ControlMetrics => 0x32,
+            Self::ControlBitrate => 0x33,
             Self::Extension(b) => b,
             Self::Error => 0xFE,
             Self::Close => 0xFF,
@@ -69,11 +75,13 @@ impl MessageType {
             0x04 => Self::HandshakeKeyExchange,
             0x10 => Self::AudioFrame,
             0x11 => Self::AudioFragment,
+            0x12 => Self::AudioFec,
             0x20 => Self::Heartbeat,
             0x21 => Self::HeartbeatAck,
             0x30 => Self::ControlPause,
             0x31 => Self::ControlResume,
             0x32 => Self::ControlMetrics,
+            0x33 => Self::ControlBitrate,
             0x40..=0x7F => Self::Extension(code),
             0xFE => Self::Error,
             0xFF => Self::Close,
@@ -310,6 +318,83 @@ impl SessionConfirm {
     }
 }
 
+// ─── Payload: AudioFec (0x12) ────────────────────────────────────────────────
+//
+// 9 bytes fijos + N bytes de paridad:
+//   seq_base  [4]  BE — número de secuencia del primer frame del grupo
+//   window    [1]     — número de frames en el grupo (1..=FEC_WINDOW_MAX)
+//   data_len  [4]  BE — longitud del payload de paridad
+//   parity    [N]     — XOR de todos los frames del grupo (longitud data_len)
+
+/// Encabezado del paquete FEC (sin el payload de paridad).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FecHeader {
+    pub seq_base: u32,
+    pub window: u8,
+    pub data_len: u32,
+}
+
+impl FecHeader {
+    pub const SIZE: usize = 9;
+
+    pub fn encode(&self, buf: &mut [u8]) -> Result<(), Error> {
+        if buf.len() < Self::SIZE {
+            return Err(Error::BufferTooSmall);
+        }
+        buf[0..4].copy_from_slice(&self.seq_base.to_be_bytes());
+        buf[4] = self.window;
+        buf[5..9].copy_from_slice(&self.data_len.to_be_bytes());
+        Ok(())
+    }
+
+    pub fn decode(buf: &[u8]) -> Result<Self, Error> {
+        if buf.len() < Self::SIZE {
+            return Err(Error::MalformedPayload);
+        }
+        let window = buf[4];
+        if window == 0 {
+            return Err(Error::MalformedPayload);
+        }
+        Ok(Self {
+            seq_base: u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]),
+            window,
+            data_len: u32::from_be_bytes([buf[5], buf[6], buf[7], buf[8]]),
+        })
+    }
+}
+
+// ─── Payload: ControlBitrate (0x33) ──────────────────────────────────────────
+//
+// 4 bytes:
+//   requested_bitrate [4] BE — bitrate solicitado en bps
+
+/// Solicitud de ajuste de bitrate (receptor → emisor).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ControlBitrateMsg {
+    pub requested_bitrate: u32,
+}
+
+impl ControlBitrateMsg {
+    pub const SIZE: usize = 4;
+
+    pub fn encode(&self, buf: &mut [u8]) -> Result<(), Error> {
+        if buf.len() < Self::SIZE {
+            return Err(Error::BufferTooSmall);
+        }
+        buf[0..4].copy_from_slice(&self.requested_bitrate.to_be_bytes());
+        Ok(())
+    }
+
+    pub fn decode(buf: &[u8]) -> Result<Self, Error> {
+        if buf.len() < Self::SIZE {
+            return Err(Error::MalformedPayload);
+        }
+        Ok(Self {
+            requested_bitrate: u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]),
+        })
+    }
+}
+
 // ─── Aliases de compatibilidad (nombres anteriores) ──────────────────────────
 
 /// Alias de compatibilidad → [`ClientHello`].
@@ -375,7 +460,8 @@ mod tests {
     #[test]
     fn message_type_roundtrip_canonical() {
         for code in [
-            0x01u8, 0x02, 0x03, 0x04, 0x10, 0x11, 0x20, 0x21, 0x30, 0x31, 0x32, 0xFE, 0xFF,
+            0x01u8, 0x02, 0x03, 0x04, 0x10, 0x11, 0x12, 0x20, 0x21, 0x30, 0x31, 0x32, 0x33,
+            0xFE, 0xFF,
         ] {
             let m = MessageType::from_code(code).unwrap();
             assert_eq!(m.code(), code);
@@ -473,5 +559,30 @@ mod tests {
         assert!(MessageType::HandshakeSessionConfirm.is_handshake());
         assert!(MessageType::HandshakeKeyExchange.is_handshake());
         assert!(!MessageType::AudioFrame.is_handshake());
+        assert!(!MessageType::AudioFec.is_handshake());
+    }
+
+    #[test]
+    fn fec_header_roundtrip() {
+        let h = FecHeader { seq_base: 100, window: 4, data_len: 320 };
+        let mut buf = [0u8; FecHeader::SIZE];
+        h.encode(&mut buf).unwrap();
+        assert_eq!(FecHeader::decode(&buf).unwrap(), h);
+    }
+
+    #[test]
+    fn fec_header_rejects_zero_window() {
+        let mut buf = [0u8; FecHeader::SIZE];
+        FecHeader { seq_base: 0, window: 4, data_len: 0 }.encode(&mut buf).unwrap();
+        buf[4] = 0; // window = 0
+        assert!(FecHeader::decode(&buf).is_err());
+    }
+
+    #[test]
+    fn control_bitrate_roundtrip() {
+        let msg = ControlBitrateMsg { requested_bitrate: 32_000 };
+        let mut buf = [0u8; ControlBitrateMsg::SIZE];
+        msg.encode(&mut buf).unwrap();
+        assert_eq!(ControlBitrateMsg::decode(&buf).unwrap(), msg);
     }
 }

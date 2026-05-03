@@ -21,13 +21,16 @@ use std::time::Duration;
 
 use bytes::{Bytes, BytesMut};
 use gravital_sound_core::constants::{
-    DEFAULT_FRAME_DURATION_MS, DEFAULT_JITTER_BUFFER_MS, DEFAULT_MAX_BITRATE, DEFAULT_MTU,
-    DEFAULT_SAMPLE_RATE, HANDSHAKE_RETRY_BASE_MS, HANDSHAKE_TIMEOUT_MS, HEARTBEAT_INTERVAL_MS,
-    HEARTBEAT_TIMEOUT_MS, HEADER_SIZE,
+    CONGESTION_MIN_BITRATE, DEFAULT_FRAME_DURATION_MS, DEFAULT_JITTER_BUFFER_MS,
+    DEFAULT_MAX_BITRATE, DEFAULT_MTU, DEFAULT_SAMPLE_RATE, HANDSHAKE_RETRY_BASE_MS,
+    HANDSHAKE_TIMEOUT_MS, HEARTBEAT_INTERVAL_MS, HEARTBEAT_TIMEOUT_MS, HEADER_SIZE,
+    PROTOCOL_VERSION_MAX, PROTOCOL_VERSION_MIN,
 };
 use gravital_sound_core::crypto::{decrypt_in_place, encrypt_in_place, make_nonce, SessionKey, TAG_SIZE};
 use gravital_sound_core::header::{Flags, PacketHeader};
-use gravital_sound_core::message::{ClientHello, KeyExchangeMsg, MessageType, ServerHello, SessionConfirm};
+use gravital_sound_core::message::{
+    ClientHello, ControlBitrateMsg, KeyExchangeMsg, MessageType, ServerHello, SessionConfirm,
+};
 use gravital_sound_core::packet::{PacketBuilder, PacketView};
 use gravital_sound_core::session::{SessionEvent, SessionState, SessionStateMachine};
 use gravital_sound_metrics::Metrics;
@@ -37,7 +40,9 @@ use tokio::sync::Mutex;
 use tokio::time::{timeout, Instant};
 use x25519_dalek::{EphemeralSecret, PublicKey};
 
+use crate::congestion::CongestionController;
 use crate::error::TransportError;
+use crate::fec::{FecDecoder, FecEncoder, FecParity};
 use crate::jitter_buffer::{Frame, JitterBuffer};
 use crate::traits::Transport;
 
@@ -103,6 +108,12 @@ pub struct Session {
     encrypt_key: Mutex<Option<SessionKey>>,
     /// Clave AEAD para descifrar (dirección opuesta).
     decrypt_key: Mutex<Option<SessionKey>>,
+    /// Controlador de congestión AIMD.
+    congestion: CongestionController,
+    /// Encoder FEC (XOR parity por ventana de frames).
+    fec_enc: Mutex<FecEncoder>,
+    /// Decoder FEC (recupera un frame perdido por ventana).
+    fec_dec: Mutex<FecDecoder>,
 }
 
 impl core::fmt::Debug for Session {
@@ -118,6 +129,7 @@ impl Session {
     /// Construye una sesión con transporte ya conectado.
     pub fn new(transport: Arc<dyn Transport>, config: Config) -> Self {
         let jitter_depth = jitter_slots(config.jitter_buffer_ms, config.frame_duration_ms);
+        let max_br = config.max_bitrate;
         Self {
             transport,
             state: Mutex::new(SessionStateMachine::new()),
@@ -132,6 +144,9 @@ impl Session {
             epoch: Instant::now(),
             encrypt_key: Mutex::new(None),
             decrypt_key: Mutex::new(None),
+            congestion: CongestionController::new(max_br, CONGESTION_MIN_BITRATE, max_br),
+            fec_enc: Mutex::new(FecEncoder::with_default_window()),
+            fec_dec: Mutex::new(FecDecoder::with_default_window()),
         }
     }
 
@@ -139,6 +154,12 @@ impl Session {
     #[must_use]
     pub fn negotiated_codec(&self) -> u8 {
         self.negotiated_codec.load(Ordering::Acquire)
+    }
+
+    /// Bitrate estimado actual según el controlador de congestión (bps).
+    #[must_use]
+    pub fn current_bitrate(&self) -> u32 {
+        self.congestion.current_bitrate()
     }
 
     /// Configuración inmutable de esta sesión.
@@ -233,7 +254,9 @@ impl Session {
         let hello = ClientHello {
             ephemeral_public_key: *client_pubkey.as_bytes(),
             client_nonce,
-            protocol_version: 1,
+            // Proponemos la versión máxima que soportamos; el servidor puede
+            // hacer downgrade hasta PROTOCOL_VERSION_MIN.
+            protocol_version: PROTOCOL_VERSION_MAX,
             codec_preferred: self.config.codec_preferred,
             sample_rate: self.config.sample_rate,
             channels: self.config.channels,
@@ -276,8 +299,12 @@ impl Session {
                 let server_hello = ServerHello::decode(view.payload())
                     .map_err(TransportError::Protocol)?;
 
-                if server_hello.protocol_version != 1 {
-                    return Err(TransportError::Handshake("unsupported protocol version"));
+                // Validación de versión negociada: el servidor sólo puede
+                // hacer downgrade (nunca proponer una versión más alta que la
+                // que pedimos) y no puede proponer algo fuera del rango.
+                let neg_ver = server_hello.protocol_version;
+                if neg_ver < PROTOCOL_VERSION_MIN || neg_ver > PROTOCOL_VERSION_MAX {
+                    return Err(TransportError::Handshake("version negotiation failed: out of range"));
                 }
                 if !self.config.supported_codecs.contains(&server_hello.codec_accepted) {
                     return Err(TransportError::Handshake("server selected unsupported codec"));
@@ -386,9 +413,16 @@ impl Session {
             }
         };
 
-        if client_hello.protocol_version != 1 {
-            return Err(TransportError::Handshake("unsupported protocol version"));
+        // Negociación de versión: el cliente propone su máxima versión soportada.
+        // Hacemos downgrade si el cliente pide más de lo que tenemos, o
+        // rechazamos si no hay rango compatible.
+        let client_ver = client_hello.protocol_version;
+        if client_ver < PROTOCOL_VERSION_MIN {
+            return Err(TransportError::Handshake(
+                "version negotiation failed: client version too old",
+            ));
         }
+        let negotiated_version = client_ver.min(PROTOCOL_VERSION_MAX);
 
         // 2. Generar clave efímera, nonce y session_id del servidor.
         let server_secret = EphemeralSecret::random_from_rng(rand_core::OsRng);
@@ -414,7 +448,7 @@ impl Session {
             ephemeral_public_key: *server_pubkey.as_bytes(),
             server_nonce,
             session_id,
-            protocol_version: 1,
+            protocol_version: negotiated_version,
             codec_accepted: chosen_codec,
             sample_rate: client_hello.sample_rate,
             channels: client_hello.channels,
@@ -543,6 +577,56 @@ impl Session {
             .map_err(TransportError::Protocol)?;
         let sent = self.transport.send_to(&buf[..n], peer).await?;
         self.metrics.counters.record_sent(sent as u64);
+
+        // FEC: alimentar encoder con plaintext; enviar paridad si se completó la ventana.
+        if let Some(parity) = self.fec_enc.lock().await.push(seq, payload) {
+            let _ = self.send_fec_parity(parity, peer, sid).await;
+        }
+
+        Ok(())
+    }
+
+    async fn send_fec_parity(
+        &self,
+        parity: FecParity,
+        peer: SocketAddr,
+        sid: u32,
+    ) -> Result<(), TransportError> {
+        // Wire layout del payload FEC: seq_base(4BE) + window(1) + parity_data
+        let mut fec_payload = Vec::with_capacity(5 + parity.payload.len() + TAG_SIZE);
+        fec_payload.extend_from_slice(&parity.seq_base.to_be_bytes());
+        fec_payload.push(parity.window);
+        fec_payload.extend_from_slice(&parity.payload);
+
+        let seq = self.tx_sequence.fetch_add(1, Ordering::Relaxed);
+        let ts = self.micros_since_epoch();
+        let header = PacketHeader {
+            version: 1,
+            flags: Flags::ENCRYPTED,
+            msg_type: MessageType::AudioFec.code(),
+            session_id: sid,
+            sequence: seq,
+            timestamp: ts,
+        };
+
+        if let Some(key) = self.encrypt_key.lock().await.as_ref() {
+            let nonce = make_nonce(seq, sid);
+            let mut hdr_buf = [0u8; HEADER_SIZE];
+            header.encode(&mut hdr_buf).map_err(TransportError::Protocol)?;
+
+            let plain_len = fec_payload.len();
+            fec_payload.resize(plain_len + TAG_SIZE, 0);
+            let enc_len = encrypt_in_place(key, &nonce, &hdr_buf, &mut fec_payload, plain_len)
+                .map_err(TransportError::Protocol)?;
+
+            let mut buf = BytesMut::with_capacity(self.config.mtu);
+            buf.resize(self.config.mtu, 0);
+            let n = PacketBuilder::new(header, &fec_payload[..enc_len])
+                .encode(&mut buf)
+                .map_err(TransportError::Protocol)?;
+            let sent = self.transport.send_to(&buf[..n], peer).await?;
+            self.metrics.counters.record_sent(sent as u64);
+        }
         Ok(())
     }
 
@@ -620,9 +704,11 @@ impl Session {
                     Bytes::copy_from_slice(view.payload())
                 };
 
-                let frame = Frame { sequence: seq, timestamp: ts, payload: plaintext };
+                let frame = Frame { sequence: seq, timestamp: ts, payload: plaintext.clone() };
                 self.metrics.loss.record(frame.sequence);
                 self.metrics.jitter.record(frame.timestamp, self.micros_since_epoch());
+                // Registrar en el decoder FEC para posible recuperación del siguiente.
+                self.fec_dec.lock().await.push_data(seq, plaintext);
                 if !self.jitter.push(frame) {
                     tracing::trace!(seq, "jitter buffer rejected frame");
                 }
@@ -635,6 +721,57 @@ impl Session {
                 }
             }
             Ok(MessageType::HeartbeatAck) => {}
+            Ok(MessageType::AudioFec) => {
+                let sid = self.session_id.load(Ordering::Acquire);
+                let seq = view.header().sequence;
+                if view.header().flags.contains(Flags::ENCRYPTED) {
+                    if let Some(key) = self.decrypt_key.lock().await.as_ref() {
+                        let nonce = make_nonce(seq, sid);
+                        let aad = &buf[..HEADER_SIZE];
+                        let cipher_payload = view.payload();
+                        let mut tmp = cipher_payload.to_vec();
+                        match decrypt_in_place(key, &nonce, aad, &mut tmp, cipher_payload.len()) {
+                            Ok(plain_len) if plain_len >= 5 => {
+                                let fec_data = &tmp[..plain_len];
+                                let seq_base = u32::from_be_bytes([
+                                    fec_data[0], fec_data[1], fec_data[2], fec_data[3],
+                                ]);
+                                let window = fec_data[4];
+                                let fec_parity = FecParity {
+                                    seq_base,
+                                    window,
+                                    payload: Bytes::copy_from_slice(&fec_data[5..]),
+                                };
+                                if let Some((rec_seq, rec_payload)) =
+                                    self.fec_dec.lock().await.push_parity(fec_parity)
+                                {
+                                    let frame = Frame {
+                                        sequence: rec_seq,
+                                        timestamp: 0,
+                                        payload: rec_payload,
+                                    };
+                                    if !self.jitter.push(frame) {
+                                        tracing::trace!(rec_seq, "jitter buffer rejected FEC-recovered frame");
+                                    }
+                                }
+                            }
+                            Ok(_) => {
+                                tracing::debug!(seq, "AudioFec payload too short");
+                            }
+                            Err(e) => {
+                                self.metrics.counters.record_integrity_error();
+                                tracing::debug!(?e, seq, "AudioFec AEAD decryption failed");
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(MessageType::ControlBitrate) => {
+                if let Ok(msg) = ControlBitrateMsg::decode(view.payload()) {
+                    self.congestion.set_bitrate(msg.requested_bitrate);
+                    tracing::debug!(bitrate = msg.requested_bitrate, "ControlBitrate received");
+                }
+            }
             Ok(MessageType::Close) => {
                 self.state
                     .lock()
@@ -689,6 +826,13 @@ impl Session {
                 .ok();
             return Err(TransportError::PeerClosed("heartbeat timeout"));
         }
+
+        // Actualizar controlador de congestión con métricas actuales.
+        let loss_rate = self.metrics.loss.loss_percent() / 100.0;
+        let rtt_us = self.metrics.rtt.current_us().unwrap_or(0) as u64;
+        let jitter_us = (self.metrics.jitter.current_ms() * 1_000.0) as u64;
+        self.congestion.update(loss_rate, rtt_us, jitter_us);
+
         Ok(())
     }
 

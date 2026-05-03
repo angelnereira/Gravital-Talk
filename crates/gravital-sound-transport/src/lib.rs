@@ -8,13 +8,17 @@
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
+pub mod congestion;
 pub mod error;
+pub mod fec;
 pub mod jitter_buffer;
 pub mod session;
 pub mod traits;
 pub mod udp;
 
+pub use congestion::CongestionController;
 pub use error::TransportError;
+pub use fec::{FecDecoder, FecEncoder, FecParity};
 pub use jitter_buffer::JitterBuffer;
 pub use session::{Config, Session, SessionRole};
 pub use traits::{LatencyClass, Transport};
