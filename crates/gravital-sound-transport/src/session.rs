@@ -1,26 +1,41 @@
-//! Orquestación de sesión: handshake 3-way, heartbeat, envío/recepción.
+//! Orquestación de sesión: handshake criptográfico 4-way, heartbeat, envío/recepción AEAD.
 //!
-//! Una `Session` envuelve un `Transport` y el `SessionStateMachine` del
-//! core, llevando el ciclo de vida y las métricas.
+//! ## Flujo de handshake seguro
+//!
+//! ```text
+//! Cliente                                  Servidor
+//!   │── ClientHello (0x01) ───────────────►│  X25519 pubkey + nonce
+//!   │◄── ServerHello (0x02) ───────────────│  X25519 pubkey + nonce + session_id
+//!   │    [ECDH → shared_secret]
+//!   │    [HKDF → encrypt_key, decrypt_key]
+//!   │── KeyExchange  (0x04) ───────────────►│  auth_tag cliente
+//!   │◄── SessionConfirm (0x03) ────────────│  auth_tag servidor
+//! ```
+//!
+//! Tras el handshake, todo el audio se cifra con ChaCha20-Poly1305.
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use bytes::{Bytes, BytesMut};
 use gravital_sound_core::constants::{
     DEFAULT_FRAME_DURATION_MS, DEFAULT_JITTER_BUFFER_MS, DEFAULT_MAX_BITRATE, DEFAULT_MTU,
     DEFAULT_SAMPLE_RATE, HANDSHAKE_RETRY_BASE_MS, HANDSHAKE_TIMEOUT_MS, HEARTBEAT_INTERVAL_MS,
-    HEARTBEAT_TIMEOUT_MS,
+    HEARTBEAT_TIMEOUT_MS, HEADER_SIZE,
 };
+use gravital_sound_core::crypto::{decrypt_in_place, encrypt_in_place, make_nonce, SessionKey, TAG_SIZE};
 use gravital_sound_core::header::{Flags, PacketHeader};
-use gravital_sound_core::message::{HandshakeAccept, HandshakeConfirm, HandshakeInit, MessageType};
+use gravital_sound_core::message::{ClientHello, KeyExchangeMsg, MessageType, ServerHello, SessionConfirm};
 use gravital_sound_core::packet::{PacketBuilder, PacketView};
 use gravital_sound_core::session::{SessionEvent, SessionState, SessionStateMachine};
 use gravital_sound_metrics::Metrics;
+use hkdf::Hkdf;
+use sha2::Sha256;
 use tokio::sync::Mutex;
 use tokio::time::{timeout, Instant};
+use x25519_dalek::{EphemeralSecret, PublicKey};
 
 use crate::error::TransportError;
 use crate::jitter_buffer::{Frame, JitterBuffer};
@@ -29,9 +44,9 @@ use crate::traits::Transport;
 /// Rol de la sesión en el handshake.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionRole {
-    /// Inicia el handshake (manda `HANDSHAKE_INIT`).
+    /// Inicia el handshake (envía `ClientHello`).
     Client,
-    /// Acepta el handshake (manda `HANDSHAKE_ACCEPT`).
+    /// Acepta el handshake (responde con `ServerHello`).
     Server,
 }
 
@@ -42,12 +57,9 @@ pub struct Config {
     pub channels: u8,
     pub frame_duration_ms: u8,
     pub max_bitrate: u32,
-    /// Codec preferido (1 = PCM, 2 = Opus reservado).
+    /// Codec preferido (1 = PCM, 2 = Opus).
     pub codec_preferred: u8,
-    /// Codecs aceptables del lado server (en orden de preferencia local).
-    /// El server elige el `codec_preferred` del cliente si está en esta lista;
-    /// si no, hace fallback al primer codec local. El cliente valida que el
-    /// codec aceptado por el server esté en su propia lista soportada.
+    /// Codecs aceptables en orden de preferencia local.
     pub supported_codecs: Vec<u8>,
     /// Flags de capacidad (bitfield definido por la aplicación).
     pub capability_flags: u32,
@@ -73,7 +85,7 @@ impl Default for Config {
     }
 }
 
-/// Una sesión activa.
+/// Una sesión activa con cifrado AEAD.
 pub struct Session {
     transport: Arc<dyn Transport>,
     state: Mutex<SessionStateMachine>,
@@ -87,6 +99,10 @@ pub struct Session {
     /// Codec acordado tras el handshake (0 antes de negociar).
     negotiated_codec: AtomicU8,
     epoch: Instant,
+    /// Clave AEAD para cifrar (cliente→servidor o servidor→cliente según rol).
+    encrypt_key: Mutex<Option<SessionKey>>,
+    /// Clave AEAD para descifrar (dirección opuesta).
+    decrypt_key: Mutex<Option<SessionKey>>,
 }
 
 impl core::fmt::Debug for Session {
@@ -114,6 +130,8 @@ impl Session {
             last_rx: AtomicU64::new(0),
             negotiated_codec: AtomicU8::new(0),
             epoch: Instant::now(),
+            encrypt_key: Mutex::new(None),
+            decrypt_key: Mutex::new(None),
         }
     }
 
@@ -150,7 +168,7 @@ impl Session {
         self.session_id.load(Ordering::Acquire)
     }
 
-    /// Ejecuta el handshake 3-way como cliente o servidor.
+    /// Ejecuta el handshake criptográfico 4-way.
     pub async fn handshake(
         &self,
         role: SessionRole,
@@ -204,9 +222,17 @@ impl Session {
         }
     }
 
+    // ── Handshake cliente ───────────────────────────────────────────────────
+
     async fn handshake_client(&self, peer: SocketAddr) -> Result<(), TransportError> {
-        let nonce: u32 = rand_u32();
-        let init = HandshakeInit {
+        // 1. Generar clave efímera X25519 y nonce criptográfico.
+        let client_secret = EphemeralSecret::random_from_rng(rand_core::OsRng);
+        let client_pubkey = PublicKey::from(&client_secret);
+        let client_nonce = random_nonce_32();
+
+        let hello = ClientHello {
+            ephemeral_public_key: *client_pubkey.as_bytes(),
+            client_nonce,
             protocol_version: 1,
             codec_preferred: self.config.codec_preferred,
             sample_rate: self.config.sample_rate,
@@ -214,52 +240,87 @@ impl Session {
             frame_duration_ms: self.config.frame_duration_ms,
             max_bitrate: self.config.max_bitrate,
             capability_flags: self.config.capability_flags,
-            nonce,
         };
 
-        let mut payload = [0u8; HandshakeInit::SIZE];
-        init.encode(&mut payload)
-            .map_err(TransportError::Protocol)?;
+        let mut hello_payload = [0u8; ClientHello::SIZE];
+        hello.encode(&mut hello_payload).map_err(TransportError::Protocol)?;
 
-        // Reintento con backoff exponencial hasta el timeout del caller.
+        // Reintento con backoff hasta el timeout del caller.
         let mut attempt: u32 = 0;
+        let mut buf = vec![0u8; self.config.mtu];
         loop {
-            self.send_control(MessageType::HandshakeInit, 0, &payload, peer)
+            self.send_control(MessageType::HandshakeClientHello, 0, &hello_payload, peer)
                 .await?;
 
-            let mut buf = vec![0u8; self.config.mtu];
             let backoff = Duration::from_millis(HANDSHAKE_RETRY_BASE_MS << attempt.min(4));
             let res = timeout(backoff, self.transport.recv(&mut buf)).await;
-            if let Ok(Ok((n, _))) = res {
-                let view = PacketView::decode(&buf[..n]).map_err(TransportError::Protocol)?;
-                if view.header().msg_type == MessageType::HandshakeAccept.code() {
-                    let accept = HandshakeAccept::decode(view.payload())
-                        .map_err(TransportError::Protocol)?;
-                    if accept.nonce != nonce {
-                        return Err(TransportError::Handshake("nonce mismatch"));
-                    }
-                    if !self
-                        .config
-                        .supported_codecs
-                        .contains(&accept.codec_accepted)
-                    {
-                        return Err(TransportError::Handshake(
-                            "server selected unsupported codec",
-                        ));
-                    }
-                    self.negotiated_codec
-                        .store(accept.codec_accepted, Ordering::Release);
-                    self.session_id.store(accept.session_id, Ordering::Release);
-                    let confirm = HandshakeConfirm {
-                        session_id: accept.session_id,
-                    };
-                    let mut pc = [0u8; HandshakeConfirm::SIZE];
-                    confirm.encode(&mut pc).map_err(TransportError::Protocol)?;
-                    self.send_control(MessageType::HandshakeConfirm, accept.session_id, &pc, peer)
-                        .await?;
-                    return Ok(());
+
+            if let Ok(Ok((n, from))) = res {
+                if from != peer {
+                    attempt = attempt.saturating_add(1);
+                    continue;
                 }
+                let view = match PacketView::decode(&buf[..n]) {
+                    Ok(v) => v,
+                    Err(_) => {
+                        attempt = attempt.saturating_add(1);
+                        continue;
+                    }
+                };
+                if view.header().msg_type != MessageType::HandshakeServerHello.code() {
+                    attempt = attempt.saturating_add(1);
+                    continue;
+                }
+
+                // 2. Decodificar ServerHello.
+                let server_hello = ServerHello::decode(view.payload())
+                    .map_err(TransportError::Protocol)?;
+
+                if server_hello.protocol_version != 1 {
+                    return Err(TransportError::Handshake("unsupported protocol version"));
+                }
+                if !self.config.supported_codecs.contains(&server_hello.codec_accepted) {
+                    return Err(TransportError::Handshake("server selected unsupported codec"));
+                }
+
+                // 3. ECDH + HKDF → encrypt_key, decrypt_key.
+                let server_pubkey = PublicKey::from(server_hello.ephemeral_public_key);
+                let shared = client_secret.diffie_hellman(&server_pubkey);
+                let session_id = server_hello.session_id;
+
+                let transcript = build_transcript(&client_nonce, &server_hello.server_nonce, session_id);
+                let (enc_key, dec_key) = derive_session_keys(shared.as_bytes(), &transcript);
+
+                // 4. Calcular auth_tag del cliente y enviar KeyExchange.
+                let client_auth_tag = derive_auth_tag(&enc_key, b"GS-client-fin-v1", &transcript);
+                let ke_msg = KeyExchangeMsg {
+                    session_id,
+                    auth_tag: client_auth_tag,
+                };
+                let mut ke_payload = [0u8; KeyExchangeMsg::SIZE];
+                ke_msg.encode(&mut ke_payload).map_err(TransportError::Protocol)?;
+                self.send_control(MessageType::HandshakeKeyExchange, session_id, &ke_payload, peer)
+                    .await?;
+
+                // 5. Esperar SessionConfirm del servidor.
+                let confirm = self.recv_session_confirm(peer, &mut buf, session_id).await?;
+
+                // 6. Verificar auth_tag del servidor.
+                let expected_server_tag = derive_auth_tag(&dec_key, b"GS-server-fin-v1", &transcript);
+                if !constant_time_eq(&confirm.server_auth_tag, &expected_server_tag) {
+                    return Err(TransportError::AuthenticationFailed(
+                        "server auth tag mismatch",
+                    ));
+                }
+
+                // 7. Almacenar estado de sesión.
+                self.session_id.store(session_id, Ordering::Release);
+                self.negotiated_codec.store(server_hello.codec_accepted, Ordering::Release);
+                *self.encrypt_key.lock().await = Some(enc_key);
+                *self.decrypt_key.lock().await = Some(dec_key);
+                return Ok(());
             }
+
             attempt = attempt.saturating_add(1);
             if attempt > 6 {
                 return Err(TransportError::Handshake("client retries exhausted"));
@@ -267,12 +328,39 @@ impl Session {
         }
     }
 
+    async fn recv_session_confirm(
+        &self,
+        peer: SocketAddr,
+        buf: &mut Vec<u8>,
+        expected_sid: u32,
+    ) -> Result<SessionConfirm, TransportError> {
+        loop {
+            let (n, from) = self.transport.recv(buf).await?;
+            if from != peer {
+                continue;
+            }
+            let view = match PacketView::decode(&buf[..n]) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            if view.header().msg_type != MessageType::HandshakeSessionConfirm.code() {
+                continue;
+            }
+            let confirm = SessionConfirm::decode(view.payload()).map_err(TransportError::Protocol)?;
+            if confirm.session_id != expected_sid {
+                return Err(TransportError::Handshake("session_id mismatch in confirm"));
+            }
+            return Ok(confirm);
+        }
+    }
+
+    // ── Handshake servidor ──────────────────────────────────────────────────
+
     async fn handshake_server(&self, peer: SocketAddr) -> Result<(), TransportError> {
         let mut buf = vec![0u8; self.config.mtu];
-        // Descarta datagramas de otros peers (o malformados) hasta encontrar
-        // un HANDSHAKE_INIT válido del peer esperado. Evita que un tercer
-        // host interrumpa el handshake.
-        let init: HandshakeInit = loop {
+
+        // 1. Esperar ClientHello del peer esperado.
+        let client_hello: ClientHello = loop {
             let (n, from) = self.transport.recv(&mut buf).await?;
             if from != peer {
                 tracing::debug!(?from, expected = ?peer, "dropping datagram from wrong peer");
@@ -285,29 +373,33 @@ impl Session {
                     continue;
                 }
             };
-            if view.header().msg_type != MessageType::HandshakeInit.code() {
+            if view.header().msg_type != MessageType::HandshakeClientHello.code() {
                 tracing::debug!(
                     msg_type = view.header().msg_type,
-                    "dropping non-INIT packet during handshake"
+                    "dropping non-ClientHello packet"
                 );
                 continue;
             }
-            match HandshakeInit::decode(view.payload()) {
-                Ok(i) => break i,
+            match ClientHello::decode(view.payload()) {
+                Ok(h) => break h,
                 Err(e) => return Err(TransportError::Protocol(e)),
             }
         };
-        if init.protocol_version != 1 {
-            return Err(TransportError::Handshake("protocol version mismatch"));
+
+        if client_hello.protocol_version != 1 {
+            return Err(TransportError::Handshake("unsupported protocol version"));
         }
 
-        let session_id = rand_u32();
+        // 2. Generar clave efímera, nonce y session_id del servidor.
+        let server_secret = EphemeralSecret::random_from_rng(rand_core::OsRng);
+        let server_pubkey = PublicKey::from(&server_secret);
+        let server_nonce = random_nonce_32();
+        let session_id = rand_u32_secure();
         self.session_id.store(session_id, Ordering::Release);
 
-        // Codec negotiation: prefer client's choice if locally supported,
-        // else fall back to first locally-supported codec; reject if list empty.
-        let chosen_codec = if self.config.supported_codecs.contains(&init.codec_preferred) {
-            init.codec_preferred
+        // 3. Negociar codec.
+        let chosen_codec = if self.config.supported_codecs.contains(&client_hello.codec_preferred) {
+            client_hello.codec_preferred
         } else {
             *self
                 .config
@@ -317,57 +409,87 @@ impl Session {
         };
         self.negotiated_codec.store(chosen_codec, Ordering::Release);
 
-        let accept = HandshakeAccept {
+        // 4. Enviar ServerHello.
+        let server_hello = ServerHello {
+            ephemeral_public_key: *server_pubkey.as_bytes(),
+            server_nonce,
+            session_id,
             protocol_version: 1,
             codec_accepted: chosen_codec,
-            sample_rate: init.sample_rate,
-            channels: init.channels,
-            frame_duration_ms: init.frame_duration_ms,
-            max_bitrate: init.max_bitrate.min(self.config.max_bitrate),
-            capability_flags: init.capability_flags & self.config.capability_flags,
-            nonce: init.nonce,
-            session_id,
+            sample_rate: client_hello.sample_rate,
+            channels: client_hello.channels,
+            frame_duration_ms: client_hello.frame_duration_ms,
+            max_bitrate: client_hello.max_bitrate.min(self.config.max_bitrate),
+            capability_flags: client_hello.capability_flags & self.config.capability_flags,
         };
-
-        let mut payload = [0u8; HandshakeAccept::SIZE];
-        accept
-            .encode(&mut payload)
-            .map_err(TransportError::Protocol)?;
-        self.send_control(MessageType::HandshakeAccept, session_id, &payload, peer)
+        let mut sh_payload = [0u8; ServerHello::SIZE];
+        server_hello.encode(&mut sh_payload).map_err(TransportError::Protocol)?;
+        self.send_control(MessageType::HandshakeServerHello, session_id, &sh_payload, peer)
             .await?;
 
-        // Espera CONFIRM, ignorando tráfico de otros peers.
-        let confirm: HandshakeConfirm = loop {
+        // 5. ECDH + HKDF → encrypt_key, decrypt_key (perspectiva servidor).
+        let client_pubkey = PublicKey::from(client_hello.ephemeral_public_key);
+        let shared = server_secret.diffie_hellman(&client_pubkey);
+
+        let transcript = build_transcript(&client_hello.client_nonce, &server_nonce, session_id);
+        // Servidor: "encrypt" = clave para cifrar hacia el cliente (decrypt_key del cliente).
+        //           "decrypt" = clave para descifrar del cliente (encrypt_key del cliente).
+        // HKDF usa los mismos labels que el cliente pero los keys se intercambian de perspectiva:
+        //   enc_key (servidor) = dec_key (cliente)
+        //   dec_key (servidor) = enc_key (cliente)
+        let (client_enc, client_dec) = derive_session_keys(shared.as_bytes(), &transcript);
+        let (enc_key, dec_key) = (client_dec, client_enc);
+
+        // 6. Esperar KeyExchange del cliente.
+        let ke_msg: KeyExchangeMsg = loop {
             let (n, from) = self.transport.recv(&mut buf).await?;
             if from != peer {
-                tracing::debug!(
-                    ?from,
-                    "dropping datagram from wrong peer during CONFIRM wait"
-                );
                 continue;
             }
             let view = match PacketView::decode(&buf[..n]) {
                 Ok(v) => v,
-                Err(e) => {
-                    tracing::debug!(?e, "dropping malformed packet during CONFIRM wait");
-                    continue;
-                }
+                Err(_) => continue,
             };
-            if view.header().msg_type != MessageType::HandshakeConfirm.code() {
+            if view.header().msg_type != MessageType::HandshakeKeyExchange.code() {
                 continue;
             }
-            match HandshakeConfirm::decode(view.payload()) {
-                Ok(c) => break c,
+            match KeyExchangeMsg::decode(view.payload()) {
+                Ok(m) => break m,
                 Err(e) => return Err(TransportError::Protocol(e)),
             }
         };
-        if confirm.session_id != session_id {
-            return Err(TransportError::Handshake("session_id mismatch"));
+
+        if ke_msg.session_id != session_id {
+            return Err(TransportError::Handshake("session_id mismatch in KeyExchange"));
         }
+
+        // 7. Verificar auth_tag del cliente.
+        // El cliente usó su encrypt_key (= dec_key del servidor) para derivar el tag.
+        let expected_client_tag = derive_auth_tag(&dec_key, b"GS-client-fin-v1", &transcript);
+        if !constant_time_eq(&ke_msg.auth_tag, &expected_client_tag) {
+            return Err(TransportError::AuthenticationFailed("client auth tag mismatch"));
+        }
+
+        // 8. Enviar SessionConfirm con auth_tag del servidor.
+        let server_auth_tag = derive_auth_tag(&enc_key, b"GS-server-fin-v1", &transcript);
+        let confirm = SessionConfirm {
+            session_id,
+            server_auth_tag,
+        };
+        let mut sc_payload = [0u8; SessionConfirm::SIZE];
+        confirm.encode(&mut sc_payload).map_err(TransportError::Protocol)?;
+        self.send_control(MessageType::HandshakeSessionConfirm, session_id, &sc_payload, peer)
+            .await?;
+
+        // 9. Almacenar claves.
+        *self.encrypt_key.lock().await = Some(enc_key);
+        *self.decrypt_key.lock().await = Some(dec_key);
         Ok(())
     }
 
-    /// Envía un frame de audio. Requiere `Active`.
+    // ── Audio send/recv ─────────────────────────────────────────────────────
+
+    /// Envía un frame de audio cifrado con AEAD. Requiere estado `Active`.
     pub async fn send_audio(&self, payload: &[u8]) -> Result<(), TransportError> {
         {
             let st = self.state.lock().await.state();
@@ -380,19 +502,43 @@ impl Session {
             .lock()
             .await
             .ok_or(TransportError::InvalidState("no peer"))?;
+
         let seq = self.tx_sequence.fetch_add(1, Ordering::Relaxed);
         let ts = self.micros_since_epoch();
-        let header = PacketHeader {
+        let sid = self.session_id.load(Ordering::Acquire);
+
+        // Construir header con flag ENCRYPTED.
+        let mut header = PacketHeader {
             version: 1,
-            flags: Flags::empty(),
+            flags: Flags::ENCRYPTED,
             msg_type: MessageType::AudioFrame.code(),
-            session_id: self.session_id.load(Ordering::Acquire),
+            session_id: sid,
             sequence: seq,
             timestamp: ts,
         };
+
+        // Cifrar payload si hay clave disponible.
+        let (wire_payload, encrypt_flag_active) = if let Some(key) = self.encrypt_key.lock().await.as_ref() {
+            let nonce = make_nonce(seq, sid);
+            // Necesitamos AAD = header codificado.
+            let mut hdr_buf = [0u8; HEADER_SIZE];
+            header.encode(&mut hdr_buf).map_err(TransportError::Protocol)?;
+
+            let mut cipher_buf = vec![0u8; payload.len() + TAG_SIZE];
+            cipher_buf[..payload.len()].copy_from_slice(payload);
+            let enc_len = encrypt_in_place(key, &nonce, &hdr_buf, &mut cipher_buf, payload.len())
+                .map_err(TransportError::Protocol)?;
+            (Bytes::copy_from_slice(&cipher_buf[..enc_len]), true)
+        } else {
+            // Sin clave: fallback a texto claro (no debería ocurrir en sesión Active).
+            header.flags = Flags::empty();
+            (Bytes::copy_from_slice(payload), false)
+        };
+        let _ = encrypt_flag_active;
+
         let mut buf = BytesMut::with_capacity(self.config.mtu);
         buf.resize(self.config.mtu, 0);
-        let n = PacketBuilder::new(header, payload)
+        let n = PacketBuilder::new(header, &wire_payload)
             .encode(&mut buf)
             .map_err(TransportError::Protocol)?;
         let sent = self.transport.send_to(&buf[..n], peer).await?;
@@ -401,7 +547,6 @@ impl Session {
     }
 
     /// Recibe el próximo frame de audio ya desjitterizado.
-    /// Bloquea hasta que haya al menos un frame disponible.
     pub async fn recv_audio(&self) -> Result<Frame, TransportError> {
         loop {
             if let Some(frame) = self.jitter.pop() {
@@ -411,7 +556,7 @@ impl Session {
         }
     }
 
-    /// Procesa un único datagrama entrante (util para event loops custom).
+    /// Procesa un único datagrama entrante.
     pub async fn poll_once(&self) -> Result<(), TransportError> {
         let mut buf = vec![0u8; self.config.mtu];
         let recv_res = timeout(
@@ -423,7 +568,6 @@ impl Session {
         let (n, _from) = match recv_res {
             Ok(r) => r?,
             Err(_) => {
-                // Timeout: emite heartbeat si estamos activos.
                 let st = self.state.lock().await.state();
                 if matches!(st, SessionState::Active | SessionState::Paused) {
                     self.send_heartbeat().await?;
@@ -442,23 +586,45 @@ impl Session {
                 return Ok(());
             }
         };
-        self.last_rx
-            .store(self.micros_since_epoch(), Ordering::Release);
+        self.last_rx.store(self.micros_since_epoch(), Ordering::Release);
 
         let mt = view.header().msg_type;
         match MessageType::from_code(mt) {
             Ok(MessageType::AudioFrame) => {
-                let frame = Frame {
-                    sequence: view.header().sequence,
-                    timestamp: view.header().timestamp,
-                    payload: Bytes::copy_from_slice(view.payload()),
+                let sid = self.session_id.load(Ordering::Acquire);
+                let seq = view.header().sequence;
+                let ts = view.header().timestamp;
+
+                // Descifrar si el flag ENCRYPTED está activo.
+                let plaintext = if view.header().flags.contains(Flags::ENCRYPTED) {
+                    if let Some(key) = self.decrypt_key.lock().await.as_ref() {
+                        let nonce = make_nonce(seq, sid);
+                        // AAD = header original (primeros HEADER_SIZE bytes del buffer)
+                        let aad = &buf[..HEADER_SIZE];
+                        let cipher_payload = view.payload();
+                        let mut tmp = cipher_payload.to_vec();
+                        match decrypt_in_place(key, &nonce, aad, &mut tmp, cipher_payload.len()) {
+                            Ok(plain_len) => Bytes::copy_from_slice(&tmp[..plain_len]),
+                            Err(e) => {
+                                self.metrics.counters.record_integrity_error();
+                                tracing::debug!(?e, seq, "AEAD decryption failed, dropping frame");
+                                return Ok(());
+                            }
+                        }
+                    } else {
+                        // Sesión sin clave: rechazar frame cifrado.
+                        self.metrics.counters.record_integrity_error();
+                        return Ok(());
+                    }
+                } else {
+                    Bytes::copy_from_slice(view.payload())
                 };
+
+                let frame = Frame { sequence: seq, timestamp: ts, payload: plaintext };
                 self.metrics.loss.record(frame.sequence);
-                self.metrics
-                    .jitter
-                    .record(frame.timestamp, self.micros_since_epoch());
+                self.metrics.jitter.record(frame.timestamp, self.micros_since_epoch());
                 if !self.jitter.push(frame) {
-                    tracing::trace!(seq = view.header().sequence, "jitter buffer rejected frame");
+                    tracing::trace!(seq, "jitter buffer rejected frame");
                 }
             }
             Ok(MessageType::Heartbeat) => {
@@ -468,9 +634,7 @@ impl Session {
                         .await?;
                 }
             }
-            Ok(MessageType::HeartbeatAck) => {
-                // La RTT se calcula fuera de banda (ver bench). Aquí sólo marcamos liveness.
-            }
+            Ok(MessageType::HeartbeatAck) => {}
             Ok(MessageType::Close) => {
                 self.state
                     .lock()
@@ -489,6 +653,10 @@ impl Session {
 
     /// Envía CLOSE y transiciona a `Closing` → `Closed`.
     pub async fn close(&self) -> Result<(), TransportError> {
+        // Borrar claves de sesión al cerrar.
+        *self.encrypt_key.lock().await = None;
+        *self.decrypt_key.lock().await = None;
+
         let peer = *self.peer.lock().await;
         if let Some(p) = peer {
             let _ = self
@@ -546,34 +714,79 @@ impl Session {
 
     #[inline]
     fn micros_since_epoch(&self) -> u64 {
-        // Referencia monotónica desde el epoch de la sesión; el timestamp
-        // del protocolo es relativo, no wall-clock.
         self.epoch.elapsed().as_micros() as u64
     }
 }
 
-#[inline]
-fn jitter_slots(buffer_ms: u16, frame_ms: u8) -> u32 {
-    let frames = (buffer_ms / frame_ms.max(1) as u16).max(1) as u32;
-    // Redondea hacia la próxima potencia de 2 y asegura mínimo 16.
-    frames.next_power_of_two().max(16)
+// ── Helpers criptográficos ──────────────────────────────────────────────────
+
+/// transcript = client_nonce (32) || server_nonce (32) || session_id BE (4)
+fn build_transcript(client_nonce: &[u8; 32], server_nonce: &[u8; 32], session_id: u32) -> [u8; 68] {
+    let mut t = [0u8; 68];
+    t[..32].copy_from_slice(client_nonce);
+    t[32..64].copy_from_slice(server_nonce);
+    t[64..68].copy_from_slice(&session_id.to_be_bytes());
+    t
 }
 
-/// Fuente rápida de aleatoriedad para nonces y session_id.
-/// No es criptográficamente segura — no la usamos para claves.
-fn rand_u32() -> u32 {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or(0);
-    let pid = std::process::id();
-    let mixed = nanos ^ pid.rotate_left(13);
-    // Mezcla xorshift para decorrelacionar.
-    let mut x = mixed;
-    x ^= x << 13;
-    x ^= x >> 17;
-    x ^= x << 5;
-    x
+/// Deriva encrypt_key y decrypt_key desde el shared_secret (X25519) y el transcript.
+///
+/// HKDF-SHA256:
+///   salt = transcript
+///   IKM  = shared_secret
+///   info para encrypt_key = b"GS-encrypt-v1"
+///   info para decrypt_key = b"GS-decrypt-v1"
+fn derive_session_keys(shared_secret: &[u8; 32], transcript: &[u8; 68]) -> (SessionKey, SessionKey) {
+    let hkdf = Hkdf::<Sha256>::new(Some(transcript.as_ref()), shared_secret);
+    let mut encrypt_key = [0u8; 32];
+    let mut decrypt_key = [0u8; 32];
+    hkdf.expand(b"GS-encrypt-v1", &mut encrypt_key)
+        .expect("HKDF expand encrypt_key");
+    hkdf.expand(b"GS-decrypt-v1", &mut decrypt_key)
+        .expect("HKDF expand decrypt_key");
+    (encrypt_key, decrypt_key)
+}
+
+/// Deriva un auth_tag de 16 bytes: HKDF-Expand(key, label || transcript)[..16].
+fn derive_auth_tag(key: &SessionKey, label: &[u8], transcript: &[u8; 68]) -> [u8; 16] {
+    // Construir info = label || transcript
+    let mut info = Vec::with_capacity(label.len() + 68);
+    info.extend_from_slice(label);
+    info.extend_from_slice(transcript);
+
+    let hkdf = Hkdf::<Sha256>::new(None, key);
+    let mut tag = [0u8; 16];
+    hkdf.expand(&info, &mut tag).expect("HKDF expand auth_tag");
+    tag
+}
+
+/// Genera un nonce criptográfico de 32 bytes usando OsRng.
+fn random_nonce_32() -> [u8; 32] {
+    use rand_core::RngCore;
+    let mut nonce = [0u8; 32];
+    rand_core::OsRng.fill_bytes(&mut nonce);
+    nonce
+}
+
+/// Genera un session_id criptográficamente aleatorio.
+fn rand_u32_secure() -> u32 {
+    use rand_core::RngCore;
+    rand_core::OsRng.next_u32()
+}
+
+/// Comparación en tiempo constante de dos slices de igual longitud.
+#[inline]
+fn constant_time_eq(a: &[u8; 16], b: &[u8; 16]) -> bool {
+    let mut diff: u8 = 0;
+    for i in 0..16 {
+        diff |= a[i] ^ b[i];
+    }
+    diff == 0
+}
+
+fn jitter_slots(buffer_ms: u16, frame_ms: u8) -> u32 {
+    let frames = (buffer_ms / frame_ms.max(1) as u16).max(1) as u32;
+    frames.next_power_of_two().max(16)
 }
 
 #[cfg(test)]
@@ -588,10 +801,40 @@ mod tests {
     }
 
     #[test]
-    fn rand_u32_varies() {
-        let a = rand_u32();
-        std::thread::sleep(Duration::from_millis(1));
-        let b = rand_u32();
+    fn constant_time_eq_works() {
+        assert!(constant_time_eq(&[0u8; 16], &[0u8; 16]));
+        let mut a = [0u8; 16];
+        a[0] = 1;
+        assert!(!constant_time_eq(&a, &[0u8; 16]));
+    }
+
+    #[test]
+    fn key_derivation_deterministic() {
+        let secret = [0x42u8; 32];
+        let transcript = build_transcript(&[0xAA; 32], &[0xBB; 32], 0x1234_5678);
+        let (enc1, dec1) = derive_session_keys(&secret, &transcript);
+        let (enc2, dec2) = derive_session_keys(&secret, &transcript);
+        assert_eq!(enc1, enc2);
+        assert_eq!(dec1, dec2);
+        assert_ne!(enc1, dec1, "encrypt and decrypt keys must differ");
+    }
+
+    #[test]
+    fn auth_tag_deterministic() {
+        let key = [0x11u8; 32];
+        let transcript = build_transcript(&[1u8; 32], &[2u8; 32], 42);
+        let tag1 = derive_auth_tag(&key, b"GS-client-fin-v1", &transcript);
+        let tag2 = derive_auth_tag(&key, b"GS-client-fin-v1", &transcript);
+        assert_eq!(tag1, tag2);
+        let tag3 = derive_auth_tag(&key, b"GS-server-fin-v1", &transcript);
+        assert_ne!(tag1, tag3, "client and server tags must differ");
+    }
+
+    #[test]
+    fn rand_u32_secure_varies() {
+        let a = rand_u32_secure();
+        let b = rand_u32_secure();
+        // Con probabilidad 1 - 1/2^32 ≈ 1, serán distintos.
         assert_ne!(a, b);
     }
 }

@@ -16,6 +16,7 @@ extern crate alloc;
 
 pub mod checksum;
 pub mod constants;
+pub mod crypto;
 pub mod error;
 pub mod fragment;
 pub mod header;
@@ -27,10 +28,14 @@ pub use checksum::crc16_ccitt_false;
 pub use constants::{
     DEFAULT_MTU, HEADER_SIZE, MAGIC_BYTES, MAX_FRAGMENTS, MAX_PAYLOAD_SIZE, PROTOCOL_VERSION,
 };
+pub use crypto::{decrypt_in_place, encrypt_in_place, make_nonce, SessionKey, KEY_SIZE, TAG_SIZE};
 pub use error::Error;
 pub use fragment::{FragmentHeader, FragmentReassembler};
 pub use header::{Flags, PacketHeader};
-pub use message::{ErrorCode, HandshakeAccept, HandshakeConfirm, HandshakeInit, MessageType};
+pub use message::{
+    ClientHello, ErrorCode, HandshakeAccept, HandshakeConfirm, HandshakeInit, KeyExchangeMsg,
+    MessageType, ServerHello, SessionConfirm,
+};
 pub use packet::{Packet, PacketView};
 pub use session::{SessionId, SessionState, SessionStateMachine, StateTransitionError};
 

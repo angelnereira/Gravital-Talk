@@ -37,6 +37,10 @@ pub enum TransportError {
     /// El peer envió un `Error` o cerró la sesión.
     #[error("peer closed session: {0}")]
     PeerClosed(&'static str),
+
+    /// El auth_tag del handshake no coincide: posible MITM o replay.
+    #[error("handshake authentication failed: {0}")]
+    AuthenticationFailed(&'static str),
 }
 
 impl TransportError {
@@ -52,6 +56,7 @@ impl TransportError {
             Self::Handshake(_) => -6,
             Self::InvalidState(_) => -7,
             Self::PeerClosed(_) => -8,
+            Self::AuthenticationFailed(_) => -9,
         }
     }
 }
