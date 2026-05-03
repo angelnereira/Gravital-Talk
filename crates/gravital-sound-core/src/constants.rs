@@ -6,6 +6,12 @@ pub const MAGIC_BYTES: [u8; 2] = [b'G', b'S'];
 /// Versión del protocolo implementada.
 pub const PROTOCOL_VERSION: u8 = 0x01;
 
+/// Versión mínima soportada para negociación (downgrade hasta aquí).
+pub const PROTOCOL_VERSION_MIN: u8 = 0x01;
+
+/// Versión máxima soportada para negociación.
+pub const PROTOCOL_VERSION_MAX: u8 = 0x01;
+
 /// Tamaño del header en bytes.
 pub const HEADER_SIZE: usize = 24;
 
@@ -50,6 +56,15 @@ pub const CLOSE_GRACE_MS: u64 = 500;
 
 /// Tamaño de la ventana de bitmap de pérdida.
 pub const LOSS_WINDOW_SIZE: u32 = 64;
+
+/// Tamaño de la ventana FEC (frames por grupo XOR).
+pub const FEC_WINDOW: u8 = 4;
+
+/// Bitrate mínimo permitido por el controlador de congestión (bps).
+pub const CONGESTION_MIN_BITRATE: u32 = 8_000;
+
+/// Incremento additive del controlador de congestión por ciclo (bps).
+pub const CONGESTION_AIMD_INCREMENT: u32 = 2_000;
 
 /// Offsets de campos del header (útil para bindings externos).
 pub mod offsets {

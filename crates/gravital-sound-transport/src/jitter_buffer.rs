@@ -155,6 +155,20 @@ impl JitterBuffer {
         frame
     }
 
+    /// Como `pop`, pero si el slot de `next_sequence` está vacío y
+    /// `now_us >= deadline_us`, descarta el hueco (skip 1) y devuelve `None`.
+    /// El caller debe generar audio de ocultamiento cuando se devuelve `None`
+    /// con `now_us >= deadline_us`.
+    pub fn pop_with_deadline(&self, now_us: u64, deadline_us: u64) -> Option<Frame> {
+        if let Some(frame) = self.pop() {
+            return Some(frame);
+        }
+        if now_us >= deadline_us {
+            self.skip(1);
+        }
+        None
+    }
+
     /// Fuerza avanzar el cursor `count` posiciones, descartando frames
     /// intermedios (utilizado cuando el deadline del jitter buffer expira).
     pub fn skip(&self, count: u32) {

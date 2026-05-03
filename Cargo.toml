@@ -89,6 +89,14 @@ proptest      = "1.5"
 # Allocator
 mimalloc = { version = "0.1", default-features = false }
 
+# Crypto
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
+x25519-dalek     = { version = "2", features = ["static_secrets"] }
+hkdf             = "0.12"
+sha2             = "0.10"
+hmac             = "0.12"
+rand_core        = { version = "0.6", features = ["getrandom"] }
+
 # Python SDK
 pyo3    = { version = "0.22", features = ["extension-module", "abi3-py39"] }
 

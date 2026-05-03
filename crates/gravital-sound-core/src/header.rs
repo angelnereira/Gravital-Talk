@@ -101,6 +101,15 @@ impl PacketHeader {
             return Err(Error::ProtocolMismatch);
         }
 
+        // Los bytes reservados deben ser cero; un valor distinto indica
+        // un parser desincronizado o un paquete malicioso.
+        if buf[offsets::RESERVED] != 0
+            || buf[offsets::RESERVED + 1] != 0
+            || buf[offsets::RESERVED + 2] != 0
+        {
+            return Err(Error::ReservedFieldNonZero);
+        }
+
         // Lecturas alineadas (las offsets fueron elegidas para esto).
         let flags = Flags(buf[offsets::FLAGS]);
         let msg_type = buf[offsets::MSG_TYPE];
@@ -226,5 +235,22 @@ mod tests {
         assert!(f.contains(Flags::FRAGMENTED));
         assert!(f.contains(Flags::LAST_FRAGMENT));
         assert!(!f.contains(Flags::ENCRYPTED));
+    }
+
+    #[test]
+    fn reserved_nonzero_rejected() {
+        let h = PacketHeader {
+            version: PROTOCOL_VERSION,
+            flags: Flags::empty(),
+            msg_type: 0x10,
+            session_id: 1,
+            sequence: 0,
+            timestamp: 0,
+        };
+        let mut buf = [0u8; HEADER_SIZE];
+        h.encode(&mut buf).unwrap();
+        // Corrompemos el primer byte reservado.
+        buf[offsets::RESERVED] = 0xFF;
+        assert_eq!(PacketHeader::decode(&buf), Err(Error::ReservedFieldNonZero));
     }
 }
