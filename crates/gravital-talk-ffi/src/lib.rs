@@ -77,6 +77,8 @@ pub enum GsSessionState {
     GS_STATE_PAUSED = 3,
     GS_STATE_CLOSING = 4,
     GS_STATE_CLOSED = 5,
+    GS_STATE_ERROR = 6,
+    GS_STATE_RECONNECTING = 7,
 }
 
 impl From<SessionState> for GsSessionState {
@@ -88,6 +90,8 @@ impl From<SessionState> for GsSessionState {
             SessionState::Paused => Self::GS_STATE_PAUSED,
             SessionState::Closing => Self::GS_STATE_CLOSING,
             SessionState::Closed => Self::GS_STATE_CLOSED,
+            SessionState::Error => Self::GS_STATE_ERROR,
+            SessionState::Reconnecting => Self::GS_STATE_RECONNECTING,
         }
     }
 }
