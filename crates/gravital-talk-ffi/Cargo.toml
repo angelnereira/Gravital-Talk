@@ -1,0 +1,25 @@
+[package]
+name         = "gravital-talk-ffi"
+version.workspace    = true
+edition.workspace    = true
+rust-version.workspace = true
+authors.workspace    = true
+license.workspace    = true
+repository.workspace = true
+description = "Gravital Talk — FFI C estable (cbindgen, cdylib, staticlib)."
+readme       = "../../README.md"
+
+[lib]
+name = "gravital_talk_ffi"
+path = "src/lib.rs"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+gravital-talk          = { workspace = true }
+tokio                   = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync", "macros"] }
+
+[build-dependencies]
+cbindgen = { workspace = true }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"

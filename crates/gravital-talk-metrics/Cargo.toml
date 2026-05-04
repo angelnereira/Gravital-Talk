@@ -1,0 +1,20 @@
+[package]
+name         = "gravital-talk-metrics"
+version.workspace    = true
+edition.workspace    = true
+rust-version.workspace = true
+authors.workspace    = true
+license.workspace    = true
+repository.workspace = true
+description = "Gravital Talk — RTT, jitter, loss, MOS metrics (lock-free atomic counters)."
+readme       = "../../README.md"
+
+[lib]
+name = "gravital_talk_metrics"
+path = "src/lib.rs"
+
+[dependencies]
+gravital-talk-core = { workspace = true, default-features = false, features = ["alloc"] }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"

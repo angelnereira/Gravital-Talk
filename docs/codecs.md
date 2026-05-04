@@ -1,11 +1,11 @@
 # Audio Codecs
 
-Gravital Sound implementa codecs de audio a través del crate `gravital-sound-codec`.
+Gravital Talk implementa codecs de audio a través del crate `gravital-talk-codec`.
 
 ## Arquitectura
 
 ```
-gravital-sound-codec
+gravital-talk-codec
 ├── Encoder trait  (encode &[i16] → &[u8])
 ├── Decoder trait  (decode &[u8] → &[i16])
 ├── CodecId enum   (Pcm = 0x01, Opus = 0x02)
@@ -54,7 +54,7 @@ Opus introduce ~26.5 ms de latencia algorítmica a 48 kHz (1272 muestras de look
 
 ## Negociación de codec
 
-`gravital_sound_codec::negotiation::negotiate(preferred)` valida que el codec pedido esté en el conjunto soportado. En la v0.1 no hay negociación wire — ambos peers deben configurar el mismo codec manualmente. La negociación automática en el handshake está planificada para Track B.
+`gravital_talk_codec::negotiation::negotiate(preferred)` valida que el codec pedido esté en el conjunto soportado. En la v0.1 no hay negociación wire — ambos peers deben configurar el mismo codec manualmente. La negociación automática en el handshake está planificada para Track B.
 
 ## Añadir un codec personalizado
 

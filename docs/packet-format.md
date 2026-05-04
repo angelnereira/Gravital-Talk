@@ -141,7 +141,7 @@ pub fn crc16_ccitt_false(data: &[u8]) -> u16 {
 }
 ```
 
-En producción se usa una lookup table de 256 entradas + versión SIMD opcional (SSE4.2 `_mm_crc32_u8` con post-procesamiento, o NEON). Ver `crates/gravital-sound-core/src/checksum.rs`.
+En producción se usa una lookup table de 256 entradas + versión SIMD opcional (SSE4.2 `_mm_crc32_u8` con post-procesamiento, o NEON). Ver `crates/gravital-talk-core/src/checksum.rs`.
 
 ## 6. Consideraciones de MTU
 

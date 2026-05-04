@@ -1,6 +1,6 @@
 # @gravital/sound-web
 
-SDK de Gravital Sound para navegadores. Combina un módulo WASM (encode/decode
+SDK de Gravital Talk para navegadores. Combina un módulo WASM (encode/decode
 del protocolo) con un transport WebSocket en JavaScript.
 
 > **Requiere un relay WebSocket externo.** El MVP sólo entrega relay UDP. El
@@ -19,9 +19,9 @@ npm run build   # wasm-pack build --target web --out-dir pkg --release
 ## Uso
 
 ```ts
-import { GravitalSoundSession } from "@gravital/sound-web";
+import { GravitalTalkSession } from "@gravital/sound-web";
 
-const session = await GravitalSoundSession.connect({
+const session = await GravitalTalkSession.connect({
   url: "wss://relay.example.com/ws",
   sampleRate: 48000,
   channels: 1,

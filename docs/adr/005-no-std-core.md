@@ -8,7 +8,7 @@ El protocolo debe correr en entornos heterogéneos: servidores (std completo), m
 
 ## Decisión
 
-`gravital-sound-core` es **`#![no_std]`** por default, con feature `alloc` activada por default y feature `std` opt-in:
+`gravital-talk-core` es **`#![no_std]`** por default, con feature `alloc` activada por default y feature `std` opt-in:
 
 - **Sin `std`:** el crate sólo usa `core`. Error types implementan `core::fmt::Display`, no `std::error::Error`.
 - **Con `alloc`** (default): permite `Box`, `Vec`, `BTreeMap` internamente.
@@ -40,7 +40,7 @@ Los crates dependientes (`transport`, `metrics`, `ffi`, `cli`) sí usan `std` li
 
 ## Consecuencias
 
-- `cargo check --target wasm32-unknown-unknown -p gravital-sound-core --no-default-features` debe pasar siempre. Es parte del CI.
+- `cargo check --target wasm32-unknown-unknown -p gravital-talk-core --no-default-features` debe pasar siempre. Es parte del CI.
 - Contribuciones que introduzcan dependencias de `std` en el core se bloquean en el review.
 - Los tests del core que necesitan `std` (por ejemplo, para medir tiempo) se gated con `#[cfg(feature = "std")]`.
 

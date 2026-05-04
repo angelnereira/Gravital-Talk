@@ -40,9 +40,9 @@ jobs:
           cat > target/doc/index.html <<'HTML'
           <!DOCTYPE html>
           <meta charset="utf-8">
-          <title>Gravital Sound</title>
-          <meta http-equiv="refresh" content="0; url=gravital_sound/index.html">
-          <link rel="canonical" href="gravital_sound/index.html">
+          <title>Gravital Talk</title>
+          <meta http-equiv="refresh" content="0; url=gravital_talk/index.html">
+          <link rel="canonical" href="gravital_talk/index.html">
           HTML
 
       - uses: actions/configure-pages@v5

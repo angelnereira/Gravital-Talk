@@ -12,7 +12,7 @@ import time
 
 import pytest
 
-gs = pytest.importorskip("gravital_sound")
+gs = pytest.importorskip("gravital_talk")
 
 
 def test_version_exposed():

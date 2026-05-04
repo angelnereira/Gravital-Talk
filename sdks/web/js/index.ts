@@ -1,14 +1,14 @@
 /**
- * Gravital Sound — SDK Web.
+ * Gravital Talk — SDK Web.
  *
  * API de alto nivel basada en Promises y EventTarget. Combina el WASM para
  * framing del protocolo con un transporte WebSocket administrado en JS.
  *
  * Ejemplo:
  *
- *   import { GravitalSoundSession } from "@gravital/sound-web";
+ *   import { GravitalTalkSession } from "@gravital/sound-web";
  *
- *   const session = await GravitalSoundSession.connect({
+ *   const session = await GravitalTalkSession.connect({
  *     url: "wss://relay.example.com/ws",
  *     sampleRate: 48000,
  *     channels: 1,
@@ -25,7 +25,7 @@ import init, {
   MsgType,
   protocolVersion,
   version,
-} from "../pkg/gravital_sound_web";
+} from "../pkg/gravital_talk_web";
 import { WebSocketTransport } from "./websocket-transport";
 
 export interface SessionOptions {
@@ -45,7 +45,7 @@ export interface AudioFrame {
 
 type AudioListener = (frame: AudioFrame) => void;
 
-export class GravitalSoundSession {
+export class GravitalTalkSession {
   private readonly transport: WebSocketTransport;
   private sessionId: number = 0;
   private sequence: number = 0;
@@ -57,10 +57,10 @@ export class GravitalSoundSession {
     this.transport = transport;
   }
 
-  static async connect(opts: SessionOptions): Promise<GravitalSoundSession> {
+  static async connect(opts: SessionOptions): Promise<GravitalTalkSession> {
     await init();
     const transport = new WebSocketTransport(opts.url);
-    const session = new GravitalSoundSession(transport);
+    const session = new GravitalTalkSession(transport);
     transport.addEventListener((ev) => session.onTransportEvent(ev));
     await transport.connect();
     await session.performHandshake(opts);

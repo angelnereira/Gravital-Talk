@@ -1,5 +1,5 @@
 /**
- * Transport WebSocket para Gravital Sound en el browser.
+ * Transport WebSocket para Gravital Talk en el browser.
  * El envío y recepción de bytes crudos se delega a una instancia de
  * WebSocket; el WASM hace el encode/decode del protocolo.
  */

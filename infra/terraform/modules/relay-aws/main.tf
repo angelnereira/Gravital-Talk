@@ -1,4 +1,4 @@
-# Gravital Sound — relay en AWS EC2
+# Gravital Talk — relay en AWS EC2
 #
 # Despliega una instancia EC2 (ARM64 por defecto) con `gs-relay` corriendo
 # como systemd unit, security group con UDP/WS abiertos a internet, y
@@ -52,8 +52,8 @@ data "aws_ami" "debian_arm64" {
 
 locals {
   ami           = var.ami_id != "" ? var.ami_id : data.aws_ami.debian_arm64[0].id
-  base_tags     = merge({ Project = "gravital-sound", Component = "relay" }, var.tags)
-  binary_url    = "https://github.com/angelnereira/gravital-sound/releases/download/${var.release_tag}/gs-${var.release_tag}-linux-aarch64.tar.gz"
+  base_tags     = merge({ Project = "gravital-talk", Component = "relay" }, var.tags)
+  binary_url    = "https://github.com/angelnereira/gravital-talk/releases/download/${var.release_tag}/gs-${var.release_tag}-linux-aarch64.tar.gz"
   has_dns       = var.domain != "" && var.route53_zone_id != ""
   ssh_enabled   = length(var.allowed_ssh_cidrs) > 0 && var.key_name != ""
 }
@@ -62,7 +62,7 @@ locals {
 
 resource "aws_security_group" "relay" {
   name_prefix = "${var.name}-"
-  description = "Gravital Sound relay: UDP audio + WS + (opt) metrics"
+  description = "Gravital Talk relay: UDP audio + WS + (opt) metrics"
   vpc_id      = data.aws_vpc.default.id
   tags        = merge(local.base_tags, { Name = var.name })
 
@@ -75,7 +75,7 @@ resource "aws_security_group" "relay" {
   }
 
   ingress {
-    description = "Gravital Sound audio (UDP)"
+    description = "Gravital Talk audio (UDP)"
     from_port   = var.udp_port
     to_port     = var.udp_port
     protocol    = "udp"
@@ -83,7 +83,7 @@ resource "aws_security_group" "relay" {
   }
 
   ingress {
-    description = "Gravital Sound WebSocket bridge"
+    description = "Gravital Talk WebSocket bridge"
     from_port   = var.ws_port
     to_port     = var.ws_port
     protocol    = "tcp"
@@ -93,7 +93,7 @@ resource "aws_security_group" "relay" {
   dynamic "ingress" {
     for_each = var.expose_metrics_externally ? [1] : []
     content {
-      description = "Gravital Sound metrics (Prometheus)"
+      description = "Gravital Talk metrics (Prometheus)"
       from_port   = var.metrics_port
       to_port     = var.metrics_port
       protocol    = "tcp"

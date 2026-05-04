@@ -30,7 +30,7 @@ El protocolo es codec-agnóstico: transporta frames opacos. Sin embargo, necesit
 ## Consecuencias
 
 - En 0.1, los ejemplos usan PCM — los tamaños de paquete son grandes (~2 KB por frame de 20 ms stereo 48 kHz), aceptable en LAN pero ineficiente en WAN. Esto está documentado en el README.
-- En 0.2, el crate `gravital-sound-codec` añade libopus vendored.
+- En 0.2, el crate `gravital-talk-codec` añade libopus vendored.
 - La API FFI ya incluye el campo `codec` en `GsConfig` con los valores reservados.
 
 ## Referencias

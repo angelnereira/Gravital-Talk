@@ -11,7 +11,7 @@ El protocolo debe correr en servidores Linux, escritorio (macOS/Windows), móvil
 
 El protocolo se implementa **una sola vez en Rust**. La portabilidad se logra mediante dos mecanismos:
 
-1. **Capa FFI C estable** (`gravital-sound-ffi`). Expone el núcleo como funciones `extern "C"`. El header `gravital_sound.h` se genera con `cbindgen`. Cualquier lenguaje que soporte FFI C (prácticamente todos) consume este header.
+1. **Capa FFI C estable** (`gravital-talk-ffi`). Expone el núcleo como funciones `extern "C"`. El header `gravital_talk.h` se genera con `cbindgen`. Cualquier lenguaje que soporte FFI C (prácticamente todos) consume este header.
 2. **SDKs idiomáticos** por lenguaje. Wrappers delgados que traducen la API C a tipos y convenciones nativas. Los SDKs no reimplementan lógica del protocolo.
 
 ## Alternativas consideradas

@@ -1,15 +1,15 @@
-//! PyO3 bindings para Gravital Sound.
+//! PyO3 bindings para Gravital Talk.
 //!
-//! Exporta el módulo `_gravital_sound` con clases `Session`, `Config`,
+//! Exporta el módulo `_gravital_talk` con clases `Session`, `Config`,
 //! `Metrics` envueltas sobre la facade Rust. La API de alto nivel Pythonic
-//! vive en `gravital_sound/*.py`.
+//! vive en `gravital_talk/*.py`.
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use gravital_sound::{
+use gravital_talk::{
     Config as RustConfig, MetricsSnapshot, Session as RustSession, SessionRole, UdpConfig,
     UdpTransport,
 };
@@ -123,7 +123,7 @@ impl PySession {
     #[new]
     #[pyo3(signature = (config=None, bind_addr="0.0.0.0", bind_port=0))]
     fn new(config: Option<PyConfig>, bind_addr: &str, bind_port: u16) -> PyResult<Self> {
-        use gravital_sound::Transport;
+        use gravital_talk::Transport;
         let cfg = config.map(|c| c.inner).unwrap_or_default();
         let ip: std::net::IpAddr = bind_addr
             .parse()
@@ -221,9 +221,9 @@ impl PySession {
 
 /// Inicialización del módulo nativo.
 #[pymodule]
-fn _gravital_sound(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _gravital_talk(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
-    m.add("PROTOCOL_VERSION", u32::from(gravital_sound::PROTOCOL_VERSION))?;
+    m.add("PROTOCOL_VERSION", u32::from(gravital_talk::PROTOCOL_VERSION))?;
     m.add_class::<PyConfig>()?;
     m.add_class::<PyMetrics>()?;
     m.add_class::<PySession>()?;

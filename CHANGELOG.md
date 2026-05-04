@@ -1,6 +1,6 @@
 # Changelog
 
-Todos los cambios notables de Gravital Sound se documentan aquí. El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y el proyecto usa [SemVer](https://semver.org/lang/es/).
+Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y el proyecto usa [SemVer](https://semver.org/lang/es/).
 
 ## [0.2.0-alpha.2] — 2026-04-25
 
@@ -17,13 +17,13 @@ Track A.1 (follow-ups Fase 5) + Track C (relay productivo) + Track D parcial (re
 - `CodecSession::new()` ahora sincroniza automáticamente `config.codec_preferred` con el codec elegido.
 - 3 tests integración: fallback ok, rechazo cliente, mismatch CodecSession.
 
-**Track A.1 — Resampler (`gravital-sound-io`)**
+**Track A.1 — Resampler (`gravital-talk-io`)**
 - `Resampler::new(in_rate, out_rate, channels, out_frames_per_channel)` basado en `rubato::FftFixedOut`.
 - Conversión `i16 → f32 → resample → i16` con buffers reutilizables (zero-alloc en hot path).
 - Soporta channels arbitrarios (deinterleave/interleave automático).
 - 3 tests: 44.1→48 kHz preserva energía, 48→48 kHz produce salida, rechaza 0 channels.
 
-**Track C — Crate `gravital-sound-relay`** (relay productivo stand-alone)
+**Track C — Crate `gravital-talk-relay`** (relay productivo stand-alone)
 - Servidor que acepta tráfico UDP **y** WebSocket en el mismo proceso.
 - `Router` con `DashMap<u32, RouteEntry>` y políticas: 2 peers/sesión, drop de tercer peer interviniendo, GC de sesiones idle por TTL.
 - Loop UDP usando `PacketView` para extraer `session_id` sin parsear más.
@@ -43,7 +43,7 @@ Track A.1 (follow-ups Fase 5) + Track C (relay productivo) + Track D parcial (re
 
 **Track D — Workflows CI/CD**
 - `.github/workflows/release.yml`: disparado por tags `v*`, construye binarios `gs` para `linux-x86_64`, `linux-aarch64`, `macos-x86_64`, `macos-aarch64`, `windows-x86_64`. Empaqueta tar.gz/zip con README+LICENSE+CHANGELOG. Construye wheels Python (manylinux + macOS + Windows) vía maturin. Construye bundle WASM vía wasm-pack. Crea draft release y lo publica solo si todos los jobs pasan.
-- `.github/workflows/docs.yml`: en cada push a main y tag `v*`, publica `cargo doc --workspace --all-features` a GitHub Pages con redirect de raíz a `gravital_sound/`. Usa `RUSTDOCFLAGS=-D warnings` para garantizar que docs no se rompan en silencio.
+- `.github/workflows/docs.yml`: en cada push a main y tag `v*`, publica `cargo doc --workspace --all-features` a GitHub Pages con redirect de raíz a `gravital_talk/`. Usa `RUSTDOCFLAGS=-D warnings` para garantizar que docs no se rompan en silencio.
 - `.github/workflows/terraform.yml`: en cambios bajo `infra/terraform/**`, ejecuta `terraform fmt -check -recursive`, `terraform validate` por cada módulo (matrix), `tflint --recursive` y `checkov` security scan (soft fail).
 - `.github/workflows/ci.yml`: triggers extendidos a `feat/**` y `verify/**` + `workflow_dispatch` para relanzar desde la UI.
 
@@ -54,10 +54,10 @@ Track A.1 (follow-ups Fase 5) + Track C (relay productivo) + Track D parcial (re
 
 **Track E.3 — Edge nodes**
 - `infra/terraform/modules/edge-node`: produce `user_data` cloud-init agnóstico que cualquier provider de compute puede consumir. Configura systemd unit con el daemon `gs send` capturando del mic local, `Nice=-5` para latencia.
-- `infra/cloud-init/raspberry-pi.yml`: cloud-config descargable directo a SD card (`/boot/firmware/user-data`) para Raspberry Pi 4/5 con Pi OS Lite ARM64. Instala libopus, libasound, configura UFW y systemd unit que arranca tras editar `/etc/default/gravital-sound`.
+- `infra/cloud-init/raspberry-pi.yml`: cloud-config descargable directo a SD card (`/boot/firmware/user-data`) para Raspberry Pi 4/5 con Pi OS Lite ARM64. Instala libopus, libasound, configura UFW y systemd unit que arranca tras editar `/etc/default/gravital-talk`.
 - `infra/terraform/examples/single-region-aws` y `self-hosted-hetzner` con `terraform apply` listo.
 
-**Track E.2 — Helm chart `gravital-sound-relay`**
+**Track E.2 — Helm chart `gravital-talk-relay`**
 - Chart.yaml v0.1.0 con appVersion = 0.2.0-alpha.1.
 - `Deployment` con `securityContext` estricto (`runAsNonRoot`, `readOnlyRootFilesystem`, drop ALL capabilities), liveness/readiness en `/healthz`.
 - `Service` `LoadBalancer` con `externalTrafficPolicy: Local` (preserva IP del cliente para rate limiting).
@@ -73,7 +73,7 @@ Track A.1 (follow-ups Fase 5) + Track C (relay productivo) + Track D parcial (re
 **Documentación**
 - `infra/README.md` con tabla comparativa de proveedores, runbook de operaciones (health, métricas, update, troubleshooting).
 - `infra/terraform/modules/relay-aws/README.md` con todas las variables y outputs.
-- `infra/helm/gravital-sound-relay/README.md` con 3 modos de instalación.
+- `infra/helm/gravital-talk-relay/README.md` con 3 modos de instalación.
 - `infra/grafana/README.md` con guía de import.
 - README principal completamente reescrito reflejando el alcance actual.
 
@@ -92,24 +92,24 @@ Fase 5 completa — Track A: codec Opus + audio hardware + CLI de producción.
 
 ### Added
 
-**Crate `gravital-sound-codec`**
+**Crate `gravital-talk-codec`**
 - Traits `Encoder` / `Decoder` (`Send`, frame-granular) con `CodecId` negociable.
 - `PcmCodec` — passthrough i16-LE, zero-copy.
 - `OpusCodec` — wrapper sobre libopus vía `audiopus`; `Application::Voip`, 64 kbps, FEC, PLC.
 - `build_pair(id, sample_rate, channels, frame_ms)` — factory ergonómica.
 - 9 tests unitarios: roundtrip PCM, roundtrip Opus, frame-size validation, rate/channel rejection.
 
-**Crate `gravital-sound-io`**
+**Crate `gravital-talk-io`**
 - `AudioCapture::start(config, device_hint)` — captura desde micrófono vía cpal (ALSA/CoreAudio/WASAPI). Entrega `mpsc::Receiver<Vec<i16>>` con frames de tamaño fijo.
 - `AudioPlayback::start(config, device_hint)` — playback a altavoz con pump thread desacoplado del callback de tiempo real.
 - `list_input_devices()` / `list_output_devices()` — enumeración de devices con flag `is_default`.
 
-**Crate `gravital-sound` (facade)**
+**Crate `gravital-talk` (facade)**
 - `CodecSession` — wrapper de alto nivel sobre `Session` + `Encoder`/`Decoder`:
   - `send_samples(&[i16])` — codifica y envía.
   - `recv_samples() -> Vec<i16>` — recibe y decodifica.
 - Re-exports de `CodecId`, `CodecError`, `Encoder`, `Decoder`, `PcmCodec` (+ `OpusCodec` con feature `opus`).
-- Feature `opus` (por defecto activada) propaga a `gravital-sound-codec/opus`.
+- Feature `opus` (por defecto activada) propaga a `gravital-talk-codec/opus`.
 - Ejemplos `mic_to_speaker` (latencia e2e con hdrhistogram) y `voip_peer` (full-duplex bidireccional).
 - Integration test `opus_roundtrip`: PCM SNR > 60 dB, Opus energía > 10 % original.
 - Benchmark `opus_encode`: PCM y Opus encode/decode criterion.
@@ -132,8 +132,8 @@ Fase 5 completa — Track A: codec Opus + audio hardware + CLI de producción.
 - `docs/adr/007-cpal-audio-io.md` — decisión de usar cpal + diseño del adaptador RT.
 
 ### Changed
-- `gravital-sound-transport::session::handshake_server` rechaza paquetes de peers no esperados (hardening).
-- `Cargo.toml` del workspace: `gravital-sound-codec` y `gravital-sound-io` añadidos como members y deps.
+- `gravital-talk-transport::session::handshake_server` rechaza paquetes de peers no esperados (hardening).
+- `Cargo.toml` del workspace: `gravital-talk-codec` y `gravital-talk-io` añadidos como members y deps.
 
 ### Notes
 - La negociación automática de codec en el handshake wire llega en Track B.
@@ -145,7 +145,7 @@ Fase 5 completa — Track A: codec Opus + audio hardware + CLI de producción.
 ### Roadmap
 Trabajo planificado para próximas versiones (referencia cruzada con `seed.md`):
 
-- **Fase 5 completa.** Integración del codec Opus (`gravital-sound-codec`) y audio I/O real vía `cpal` (`gravital-sound-io`) con backends ALSA, CoreAudio, WASAPI, AAudio.
+- **Fase 5 completa.** Integración del codec Opus (`gravital-talk-codec`) y audio I/O real vía `cpal` (`gravital-talk-io`) con backends ALSA, CoreAudio, WASAPI, AAudio.
 - **Fase 6 ampliada.** SDKs adicionales: Swift (XCFramework + SPM), Kotlin (AAR + JNI), Node.js (napi-rs).
 - **Fase 7.** Relay server productivo con Docker, NAT traversal, balanceo por `session_id`.
 - **Fase 8.** Publicación a crates.io, PyPI, npm, Maven Central, SPM; landing page en `gravitalsound.dev`.
@@ -171,16 +171,16 @@ Release inicial alpha. Establece la base arquitectónica del protocolo y una imp
 - ADRs 001-005 con las decisiones arquitectónicas fundacionales.
 
 **Crates Rust**
-- `gravital-sound-core` (`no_std` compatible): `PacketHeader` de 24 bytes, `MessageType`, `Packet<'a>` zero-copy, `SessionState` type-safe, CRC-16/CCITT-FALSE con aceleración SIMD opcional, fragmentación/reensamblado.
-- `gravital-sound-metrics`: RTT con EWMA, jitter (RFC 3550), pérdida con bitmap window de 64 paquetes, estimador MOS-LQ, contadores atómicos lock-free.
-- `gravital-sound-transport`: trait `Transport` async, `UdpTransport` con tuning de socket (`SO_REUSEADDR`, `SO_REUSEPORT`, buffers 4 MB, DSCP EF), `WebSocketTransport`, jitter buffer lock-free SPSC, orquestador de handshake 3-way.
-- `gravital-sound-ffi`: exports `extern "C"` con prefijo `gs_`, generación automática del header C con `cbindgen`, handles opacos.
-- `gravital-sound-cli`: binario `gs` con subcomandos `send`, `receive`, `bench`, `info`, `doctor`, `relay`.
-- `gravital-sound` (facade): re-exporta la API ergonómica.
+- `gravital-talk-core` (`no_std` compatible): `PacketHeader` de 24 bytes, `MessageType`, `Packet<'a>` zero-copy, `SessionState` type-safe, CRC-16/CCITT-FALSE con aceleración SIMD opcional, fragmentación/reensamblado.
+- `gravital-talk-metrics`: RTT con EWMA, jitter (RFC 3550), pérdida con bitmap window de 64 paquetes, estimador MOS-LQ, contadores atómicos lock-free.
+- `gravital-talk-transport`: trait `Transport` async, `UdpTransport` con tuning de socket (`SO_REUSEADDR`, `SO_REUSEPORT`, buffers 4 MB, DSCP EF), `WebSocketTransport`, jitter buffer lock-free SPSC, orquestador de handshake 3-way.
+- `gravital-talk-ffi`: exports `extern "C"` con prefijo `gs_`, generación automática del header C con `cbindgen`, handles opacos.
+- `gravital-talk-cli`: binario `gs` con subcomandos `send`, `receive`, `bench`, `info`, `doctor`, `relay`.
+- `gravital-talk` (facade): re-exporta la API ergonómica.
 
 **SDKs**
 - **Python** vía PyO3 + `maturin`: clases `Session`, `Config`, `Metrics`. Test de loopback con `pytest`.
-- **Web/WASM** vía `wasm-bindgen`: `GravitalSoundSession` con transport WebSocket (delegado a JS). Demo de navegador en `sdks/web/examples/browser-demo`.
+- **Web/WASM** vía `wasm-bindgen`: `GravitalTalkSession` con transport WebSocket (delegado a JS). Demo de navegador en `sdks/web/examples/browser-demo`.
 
 **Tooling**
 - Workspace Cargo con `resolver = "2"` y perfil release agresivo (`lto = "fat"`, `codegen-units = 1`, `panic = "abort"`, `mimalloc`).
@@ -200,5 +200,5 @@ Release inicial alpha. Establece la base arquitectónica del protocolo y una imp
 - El audio I/O de hardware (mic/speaker) no se incluye; se suministran señales de prueba (seno) y lectura/escritura de WAV con `hound`.
 - El protocolo es `draft` — pueden introducirse cambios incompatibles hasta `0.1.0` final.
 
-[Unreleased]: https://github.com/angelnereira/gravital-sound/compare/v0.1.0-alpha.1...HEAD
-[0.1.0-alpha.1]: https://github.com/angelnereira/gravital-sound/releases/tag/v0.1.0-alpha.1
+[Unreleased]: https://github.com/angelnereira/gravital-talk/compare/v0.1.0-alpha.1...HEAD
+[0.1.0-alpha.1]: https://github.com/angelnereira/gravital-talk/releases/tag/v0.1.0-alpha.1

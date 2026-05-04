@@ -1,4 +1,4 @@
-# Gravital Sound Protocol — Especificación v0.1 (draft)
+# Gravital Talk Protocol — Especificación v0.1 (draft)
 
 **Estado:** draft. Esta especificación puede cambiar de forma incompatible hasta la versión 0.1.0 final.
 
@@ -14,10 +14,10 @@
 | Capa | Responsabilidad | Crate |
 |------|-----------------|-------|
 | Aplicación | Captura/playback de audio, UI. | fuera del protocolo |
-| Codec | PCM, Opus (futuro). | `gravital-sound-codec` |
-| **Sesión** | Handshake, estados, heartbeat, métricas. | `gravital-sound-core` + `transport` |
-| **Paquete** | Framing, header, checksum, fragmentación. | `gravital-sound-core` |
-| Transporte | UDP, WebSocket, WebTransport. | `gravital-sound-transport` |
+| Codec | PCM, Opus (futuro). | `gravital-talk-codec` |
+| **Sesión** | Handshake, estados, heartbeat, métricas. | `gravital-talk-core` + `transport` |
+| **Paquete** | Framing, header, checksum, fragmentación. | `gravital-talk-core` |
+| Transporte | UDP, WebSocket, WebTransport. | `gravital-talk-transport` |
 
 ## 3. Paquete base
 

@@ -6,7 +6,7 @@
 
 ## Contexto
 
-El MVP de Gravital Sound usaba PCM i16 raw como único formato de audio. Esto es adecuado para redes de alta capacidad pero inviable para Internet pública: a 48 kHz mono 20 ms, un frame PCM ocupa 1920 bytes (768 kbps) frente al típico budget de VoIP de 64–128 kbps.
+El MVP de Gravital Talk usaba PCM i16 raw como único formato de audio. Esto es adecuado para redes de alta capacidad pero inviable para Internet pública: a 48 kHz mono 20 ms, un frame PCM ocupa 1920 bytes (768 kbps) frente al típico budget de VoIP de 64–128 kbps.
 
 Se necesita un codec de voz que:
 - Funcione a 8–48 kHz.
@@ -43,4 +43,4 @@ Se adopta **Opus** (RFC 6716, libopus 1.x) como codec primario de voz. Implement
 - La compilación del workspace en Linux requiere `libopus-dev` y `pkg-config`.
 - En macOS `opus` está disponible via `brew install opus`.
 - Los targets `wasm32` y targets sin pkg-config deben compilar con `--no-default-features` (excluye feature `opus`).
-- El codec se expone como feature gate: `gravital-sound/opus` (activado por defecto).
+- El codec se expone como feature gate: `gravital-talk/opus` (activado por defecto).

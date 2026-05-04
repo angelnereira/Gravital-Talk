@@ -3,9 +3,9 @@ requires = ["maturin>=1.5,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "gravital-sound"
+name = "gravital-talk"
 version = "0.1.0a1"
-description = "Gravital Sound — Python bindings para el protocolo de audio en tiempo real."
+description = "Gravital Talk — Python bindings para el protocolo de audio en tiempo real."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT OR Apache-2.0" }
@@ -27,9 +27,9 @@ classifiers = [
 
 [project.urls]
 Homepage = "https://gravitalsound.dev"
-Repository = "https://github.com/angelnereira/gravital-sound"
+Repository = "https://github.com/angelnereira/gravital-talk"
 
 [tool.maturin]
-module-name = "gravital_sound._gravital_sound"
+module-name = "gravital_talk._gravital_talk"
 python-source = "."
 features = ["pyo3/extension-module"]

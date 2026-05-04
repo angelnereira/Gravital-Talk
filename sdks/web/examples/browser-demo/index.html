@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>Gravital Sound — Browser demo</title>
+<title>Gravital Talk — Browser demo</title>
 <style>
   body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
   h1 { margin-bottom: 0.2rem; }
@@ -12,7 +12,7 @@
 </style>
 </head>
 <body>
-  <h1>Gravital Sound</h1>
+  <h1>Gravital Talk</h1>
   <p class="status">WebSocket relay demo (requiere un relay WS corriendo)</p>
   <p>
     Relay URL:
@@ -26,7 +26,7 @@
   <pre id="log"></pre>
 
   <script type="module">
-    import { GravitalSoundSession, version, protocolVersion } from "../../js/index.ts";
+    import { GravitalTalkSession, version, protocolVersion } from "../../js/index.ts";
 
     const $log = document.getElementById("log");
     const $connect = document.getElementById("connect");
@@ -44,7 +44,7 @@
 
     $connect.addEventListener("click", async () => {
       try {
-        session = await GravitalSoundSession.connect({ url: $url.value });
+        session = await GravitalTalkSession.connect({ url: $url.value });
         log(`connected, session_id=0x${session.id.toString(16)}`);
         session.onAudio((f) => log(`rx seq=${f.sequence} bytes=${f.payload.length}`));
         $connect.disabled = true;

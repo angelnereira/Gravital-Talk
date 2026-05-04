@@ -1,20 +1,20 @@
 [package]
-name         = "gravital-sound-python"
+name         = "gravital-talk-python"
 version      = "0.1.0-alpha.1"
 edition      = "2021"
 rust-version = "1.78"
 authors      = ["Angel Nereira <angelnereira15@gmail.com>"]
 license      = "MIT OR Apache-2.0"
-repository   = "https://github.com/angelnereira/gravital-sound"
-description  = "Gravital Sound — PyO3 bindings."
+repository   = "https://github.com/angelnereira/gravital-talk"
+description  = "Gravital Talk — PyO3 bindings."
 
 [lib]
-name = "_gravital_sound"
+name = "_gravital_talk"
 crate-type = ["cdylib"]
 path = "src/lib.rs"
 
 [dependencies]
-gravital-sound = { path = "../../crates/gravital-sound" }
+gravital-talk = { path = "../../crates/gravital-talk" }
 pyo3           = { version = "0.23", features = ["extension-module", "abi3-py39"] }
 tokio          = { version = "1.40", features = ["rt-multi-thread", "net", "time", "sync", "macros"] }
 once_cell      = "1.19"

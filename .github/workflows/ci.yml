@@ -64,9 +64,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: >
           cargo test
-          -p gravital-sound-core
-          -p gravital-sound-metrics
-          -p gravital-sound-transport
+          -p gravital-talk-core
+          -p gravital-talk-metrics
+          -p gravital-talk-transport
           --no-default-features
 
   ffi-header:
@@ -78,8 +78,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install native audio deps
         run: sudo apt-get update && sudo apt-get install -y libopus-dev libasound2-dev pkg-config
-      - run: cargo build -p gravital-sound-ffi --release
-      - run: cc -I crates/gravital-sound-ffi/include -c crates/gravital-sound-ffi/tests/c_smoke.c -o /tmp/c_smoke.o
+      - run: cargo build -p gravital-talk-ffi --release
+      - run: cc -I crates/gravital-talk-ffi/include -c crates/gravital-talk-ffi/tests/c_smoke.c -o /tmp/c_smoke.o
 
   cross-wasm:
     name: check wasm32 core
@@ -90,7 +90,7 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --target wasm32-unknown-unknown -p gravital-sound-core
+      - run: cargo check --target wasm32-unknown-unknown -p gravital-talk-core
 
   cross-aarch64:
     name: check aarch64-linux
@@ -108,8 +108,8 @@ jobs:
           cargo check
           --target aarch64-unknown-linux-gnu
           --no-default-features
-          -p gravital-sound-core
-          -p gravital-sound-transport
+          -p gravital-talk-core
+          -p gravital-talk-transport
 
   python-sdk:
     name: python sdk

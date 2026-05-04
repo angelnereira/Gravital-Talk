@@ -1,4 +1,4 @@
-# Gravital Sound — edge-node generic module
+# Gravital Talk — edge-node generic module
 #
 # Module-agnostic: produce un user_data válido para CUALQUIER VPS o
 # bare-metal con cloud-init y systemd. El consumidor lo pasa al
@@ -66,7 +66,7 @@ variable "architecture" {
 }
 
 locals {
-  binary_url = "https://github.com/angelnereira/gravital-sound/releases/download/${var.release_tag}/gs-${var.release_tag}-linux-${var.architecture}.tar.gz"
+  binary_url = "https://github.com/angelnereira/gravital-talk/releases/download/${var.release_tag}/gs-${var.release_tag}-linux-${var.architecture}.tar.gz"
 }
 
 # Outputs cloud-init listo para pegar en cualquier provider.

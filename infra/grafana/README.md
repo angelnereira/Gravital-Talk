@@ -1,4 +1,4 @@
-# Grafana dashboards para Gravital Sound
+# Grafana dashboards para Gravital Talk
 
 Dashboards prediseñados que consumen métricas Prometheus expuestas por `gs-relay` en `/metrics`.
 

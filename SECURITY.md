@@ -28,7 +28,7 @@ El modelo de amenazas formal está documentado en [`docs/security.md`](docs/secu
 ## Alcance del reporte
 
 **Dentro de alcance**:
-- Crates `gravital-sound-*` y SDKs oficiales en este repositorio.
+- Crates `gravital-talk-*` y SDKs oficiales en este repositorio.
 - El binario `gs` y los ejemplos empaquetados.
 - El header FFI y los bindings autogenerados.
 

@@ -1,12 +1,12 @@
-# Gravital Sound
+# Gravital Talk
 
-[![CI](https://github.com/angelnereira/gravital-sound/actions/workflows/ci.yml/badge.svg)](https://github.com/angelnereira/gravital-sound/actions/workflows/ci.yml)
-[![Docs](https://github.com/angelnereira/gravital-sound/actions/workflows/docs.yml/badge.svg)](https://github.com/angelnereira/gravital-sound/actions/workflows/docs.yml)
+[![CI](https://github.com/angelnereira/gravital-talk/actions/workflows/ci.yml/badge.svg)](https://github.com/angelnereira/gravital-talk/actions/workflows/ci.yml)
+[![Docs](https://github.com/angelnereira/gravital-talk/actions/workflows/docs.yml/badge.svg)](https://github.com/angelnereira/gravital-talk/actions/workflows/docs.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#licencia)
 
 **Protocolo de comunicación de audio en tiempo real, de grado militar, escrito en Rust.**
 
-Gravital Sound es una biblioteca de infraestructura diseñada para transportar audio de baja latencia por internet con integridad criptográfica, control de jitter y observabilidad completa. El núcleo del protocolo está implementado en Rust puro (`no_std` compatible) y se expone a cualquier lenguaje a través de una capa FFI estable en C.
+Gravital Talk es una biblioteca de infraestructura diseñada para transportar audio de baja latencia por internet con integridad criptográfica, control de jitter y observabilidad completa. El núcleo del protocolo está implementado en Rust puro (`no_std` compatible) y se expone a cualquier lenguaje a través de una capa FFI estable en C.
 
 Este repositorio es la implementación de referencia. Contiene el protocolo, el transporte UDP/WebSocket, codec Opus + audio I/O hardware, métricas Prometheus, CLI productivo, relay server stand-alone, módulos Terraform multi-cloud, Helm chart para Kubernetes, y SDKs de Python y Web/WASM.
 
@@ -26,17 +26,17 @@ Este repositorio es la implementación de referencia. Contiene el protocolo, el 
 | Componente                                | Estado          |
 |-------------------------------------------|-----------------|
 | Especificación del protocolo              | `0.1-draft`     |
-| Core (`gravital-sound-core`)              | `alpha`         |
+| Core (`gravital-talk-core`)              | `alpha`         |
 | Transporte UDP                            | `alpha`         |
 | Transporte WebSocket                      | `alpha`         |
 | Métricas (RTT, jitter, loss, MOS)         | `alpha`         |
 | Capa FFI (C ABI)                          | `alpha`         |
 | CLI (`gs`)                                | `alpha`         |
-| Codec Opus + PCM (`gravital-sound-codec`) | `alpha`         |
-| Audio I/O hardware (`gravital-sound-io`)  | `alpha`         |
+| Codec Opus + PCM (`gravital-talk-codec`) | `alpha`         |
+| Audio I/O hardware (`gravital-talk-io`)  | `alpha`         |
 | Negociación de codec en handshake         | `alpha`         |
 | Resampler (`rubato`)                      | `alpha`         |
-| Relay productivo (`gravital-sound-relay`) | `alpha`         |
+| Relay productivo (`gravital-talk-relay`) | `alpha`         |
 | Dockerfile + docker-compose               | `alpha`         |
 | Terraform: AWS / Hetzner / DigitalOcean   | `alpha`         |
 | Cloud-init Raspberry Pi                   | `alpha`         |
@@ -56,7 +56,7 @@ La versión actual es `0.2.0-alpha.1`. El protocolo aún no es estable; pueden i
 
 ```rust
 use std::sync::Arc;
-use gravital_sound::{CodecId, CodecSession, Config, SessionRole, UdpConfig, UdpTransport};
+use gravital_talk::{CodecId, CodecSession, Config, SessionRole, UdpConfig, UdpTransport};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -79,7 +79,7 @@ async fn main() -> anyhow::Result<()> {
 ## Quickstart — Python
 
 ```python
-import gravital_sound as gs
+import gravital_talk as gs
 
 session = gs.Session(sample_rate=48_000, channels=1)
 session.connect("127.0.0.1", 9000)
@@ -92,9 +92,9 @@ while True:
 ## Quickstart — Browser (WASM)
 
 ```typescript
-import { GravitalSound } from "@gravital/sound-web";
+import { GravitalTalk } from "@gravital/sound-web";
 
-const session = await GravitalSound.connect({
+const session = await GravitalTalk.connect({
   url: "wss://relay.gravitalsound.dev/session/abc",
   sampleRate: 48_000,
   channels: 1,
@@ -130,7 +130,7 @@ gs bench --mode loopback --duration 30
 
 ```bash
 # Local con Docker Compose (relay + Prometheus).
-cd crates/gravital-sound-relay
+cd crates/gravital-talk-relay
 docker compose up --build
 
 # Endpoints expuestos:
@@ -184,26 +184,26 @@ sudo cp infra/cloud-init/raspberry-pi.yml /boot/firmware/user-data
 └───────────────────────────┬──────────────────────────────┘
                             │
 ┌───────────────────────────┴──────────────────────────────┐
-│  gravital-sound-ffi  (C ABI estable, generado cbindgen)  │
+│  gravital-talk-ffi  (C ABI estable, generado cbindgen)  │
 └───────────────────────────┬──────────────────────────────┘
                             │
 ┌───────────────────────────┴──────────────────────────────┐
-│  gravital-sound (facade)  ·  CodecSession                │
-│  gravital-sound-codec  ·  gravital-sound-io  ·  cli      │
+│  gravital-talk (facade)  ·  CodecSession                │
+│  gravital-talk-codec  ·  gravital-talk-io  ·  cli      │
 └───────────────────────────┬──────────────────────────────┘
                             │
 ┌───────────────────────────┴──────────────────────────────┐
-│  gravital-sound-transport  ·  gravital-sound-metrics     │
+│  gravital-talk-transport  ·  gravital-talk-metrics     │
 │  Session · UdpTransport · WebSocketTransport · jitter    │
 └───────────────────────────┬──────────────────────────────┘
                             │
 ┌───────────────────────────┴──────────────────────────────┐
-│  gravital-sound-core  —  no_std · zero-copy · type-safe  │
+│  gravital-talk-core  —  no_std · zero-copy · type-safe  │
 └──────────────────────────────────────────────────────────┘
 
 Servicios y deploy:
 ┌──────────────────────────────────────────────────────────┐
-│  gravital-sound-relay  (UDP+WS routing, Prometheus)      │
+│  gravital-talk-relay  (UDP+WS routing, Prometheus)      │
 │        ↓                                                 │
 │  Docker · Helm chart · Terraform (AWS/Hetzner/DO)        │
 │  Cloud-init (Pi · VPS) · Grafana dashboards              │
@@ -219,7 +219,7 @@ La especificación formal vive en [`docs/protocol-spec.md`](docs/protocol-spec.m
 Requisitos:
 - Rust estable 1.78 o superior (instalable vía [rustup](https://rustup.rs/)).
 - `make`, `gcc` (para el smoke test de FFI).
-- Sistema: `libopus-dev` y `libasound2-dev` (Linux) o `brew install opus` (macOS) — necesarios para los crates `gravital-sound-codec` (feature `opus`) y `gravital-sound-io`.
+- Sistema: `libopus-dev` y `libasound2-dev` (Linux) o `brew install opus` (macOS) — necesarios para los crates `gravital-talk-codec` (feature `opus`) y `gravital-talk-io`.
 - Para cross-compilation: [`cross-rs`](https://github.com/cross-rs/cross).
 - Para el SDK Python: [`maturin`](https://www.maturin.rs/) y Python ≥ 3.9.
 - Para el SDK Web: [`wasm-pack`](https://rustwasm.github.io/wasm-pack/).
@@ -248,15 +248,15 @@ cargo build --workspace --no-default-features
 
 ```
 crates/
-├── gravital-sound-core         # no_std: header, packet, fragment, sesión, CRC
-├── gravital-sound-metrics      # RTT/jitter/loss/MOS, contadores lock-free
-├── gravital-sound-transport    # UDP + WebSocket + jitter buffer + Session
-├── gravital-sound-codec        # Encoder/Decoder, PCM, Opus (libopus)
-├── gravital-sound-io           # AudioCapture/Playback (cpal), Resampler (rubato)
-├── gravital-sound              # Facade + CodecSession + ejemplos + benches
-├── gravital-sound-ffi          # C ABI estable, header generado por cbindgen
-├── gravital-sound-cli          # Binario `gs` (send/receive/devices/bench/relay)
-└── gravital-sound-relay        # Binario `gs-relay` productivo
+├── gravital-talk-core         # no_std: header, packet, fragment, sesión, CRC
+├── gravital-talk-metrics      # RTT/jitter/loss/MOS, contadores lock-free
+├── gravital-talk-transport    # UDP + WebSocket + jitter buffer + Session
+├── gravital-talk-codec        # Encoder/Decoder, PCM, Opus (libopus)
+├── gravital-talk-io           # AudioCapture/Playback (cpal), Resampler (rubato)
+├── gravital-talk              # Facade + CodecSession + ejemplos + benches
+├── gravital-talk-ffi          # C ABI estable, header generado por cbindgen
+├── gravital-talk-cli          # Binario `gs` (send/receive/devices/bench/relay)
+└── gravital-talk-relay        # Binario `gs-relay` productivo
 
 sdks/
 ├── python                      # PyO3 + maturin
@@ -268,7 +268,7 @@ infra/
 │   ├── modules/relay-hetzner   # CX22, ~€4/mes (opción barata)
 │   ├── modules/relay-digitalocean
 │   └── modules/edge-node       # user_data agnóstico para edge clients
-├── helm/gravital-sound-relay   # Chart Helm v3 con HPA, ServiceMonitor
+├── helm/gravital-talk-relay   # Chart Helm v3 con HPA, ServiceMonitor
 ├── grafana/dashboards          # Fleet overview JSON
 └── cloud-init/raspberry-pi.yml # Bootstrap directo de SD card
 
@@ -313,9 +313,9 @@ docs/
 - [`docs/adr/`](docs/adr) — decisiones arquitectónicas (001-007).
 - [`infra/README.md`](infra/README.md) — runbook de Terraform/Helm/cloud-init.
 - [`infra/terraform/modules/relay-aws/README.md`](infra/terraform/modules/relay-aws/README.md) — guía del módulo AWS.
-- [`infra/helm/gravital-sound-relay/README.md`](infra/helm/gravital-sound-relay/README.md) — guía del chart Helm.
+- [`infra/helm/gravital-talk-relay/README.md`](infra/helm/gravital-talk-relay/README.md) — guía del chart Helm.
 - [`infra/grafana/README.md`](infra/grafana/README.md) — dashboards.
-- [`crates/gravital-sound-relay/`](crates/gravital-sound-relay/) — código del relay y Dockerfile.
+- [`crates/gravital-talk-relay/`](crates/gravital-talk-relay/) — código del relay y Dockerfile.
 
 ---
 
@@ -331,6 +331,6 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 
 ## Organización
 
-Gravital Sound es una división de **Nereira Technology and Business Solutions**, bajo el paraguas de la marca **Gravital** (junto a Gravital Cloud, Gravital Security/Quimera, Gravital ID). Opera como biblioteca standalone para cualquier desarrollador; la integración con el resto del ecosistema Gravital es opcional.
+Gravital Talk es una división de **Nereira Technology and Business Solutions**, bajo el paraguas de la marca **Gravital** (junto a Gravital Cloud, Gravital Security/Quimera, Gravital ID). Opera como biblioteca standalone para cualquier desarrollador; la integración con el resto del ecosistema Gravital es opcional.
 
 — Angel Nereira
