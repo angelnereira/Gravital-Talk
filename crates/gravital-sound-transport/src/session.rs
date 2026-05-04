@@ -100,6 +100,10 @@ pub struct Session {
     peer: Mutex<Option<SocketAddr>>,
     session_id: AtomicU32,
     tx_sequence: AtomicU32,
+    /// Contador exclusivo para frames de audio (no se comparte con FEC ni control).
+    /// Se embebe en los primeros 4 bytes del payload cifrado para que el jitter
+    /// buffer del receptor use una secuencia sin huecos.
+    audio_tx_seq: AtomicU32,
     last_rx: AtomicU64,
     /// Codec acordado tras el handshake (0 antes de negociar).
     negotiated_codec: AtomicU8,
@@ -139,6 +143,7 @@ impl Session {
             peer: Mutex::new(None),
             session_id: AtomicU32::new(0),
             tx_sequence: AtomicU32::new(0),
+            audio_tx_seq: AtomicU32::new(0),
             last_rx: AtomicU64::new(0),
             negotiated_codec: AtomicU8::new(0),
             epoch: Instant::now(),
@@ -475,6 +480,8 @@ impl Session {
         let (enc_key, dec_key) = (client_dec, client_enc);
 
         // 6. Esperar KeyExchange del cliente.
+        // Si llega un ClientHello repetido (nuestro ServerHello se perdió),
+        // reenviar ServerHello para que el cliente pueda avanzar.
         let ke_msg: KeyExchangeMsg = loop {
             let (n, from) = self.transport.recv(&mut buf).await?;
             if from != peer {
@@ -484,6 +491,16 @@ impl Session {
                 Ok(v) => v,
                 Err(_) => continue,
             };
+            if view.header().msg_type == MessageType::HandshakeClientHello.code() {
+                self.send_control(
+                    MessageType::HandshakeServerHello,
+                    session_id,
+                    &sh_payload,
+                    peer,
+                )
+                .await?;
+                continue;
+            }
             if view.header().msg_type != MessageType::HandshakeKeyExchange.code() {
                 continue;
             }
@@ -537,9 +554,19 @@ impl Session {
             .await
             .ok_or(TransportError::InvalidState("no peer"))?;
 
+        // audio_tx_seq es el contador exclusivo de frames de audio.  Se embebe
+        // en los 4 primeros bytes del plaintext cifrado para que el jitter buffer
+        // del receptor use una secuencia continua sin huecos (los paquetes FEC y
+        // de control también consumen tx_sequence, pero nunca audio_tx_seq).
+        let audio_seq = self.audio_tx_seq.fetch_add(1, Ordering::Relaxed);
         let seq = self.tx_sequence.fetch_add(1, Ordering::Relaxed);
         let ts = self.micros_since_epoch();
         let sid = self.session_id.load(Ordering::Acquire);
+
+        // Plaintext = [audio_seq: 4 BE] || payload
+        let mut prefixed = Vec::with_capacity(4 + payload.len());
+        prefixed.extend_from_slice(&audio_seq.to_be_bytes());
+        prefixed.extend_from_slice(payload);
 
         // Construir header con flag ENCRYPTED.
         let mut header = PacketHeader {
@@ -551,22 +578,21 @@ impl Session {
             timestamp: ts,
         };
 
-        // Cifrar payload si hay clave disponible.
+        // Cifrar prefixed si hay clave disponible.
         let (wire_payload, encrypt_flag_active) = if let Some(key) = self.encrypt_key.lock().await.as_ref() {
             let nonce = make_nonce(seq, sid);
-            // Necesitamos AAD = header codificado.
             let mut hdr_buf = [0u8; HEADER_SIZE];
             header.encode(&mut hdr_buf).map_err(TransportError::Protocol)?;
 
-            let mut cipher_buf = vec![0u8; payload.len() + TAG_SIZE];
-            cipher_buf[..payload.len()].copy_from_slice(payload);
-            let enc_len = encrypt_in_place(key, &nonce, &hdr_buf, &mut cipher_buf, payload.len())
+            let plain_len = prefixed.len();
+            prefixed.resize(plain_len + TAG_SIZE, 0);
+            let enc_len = encrypt_in_place(key, &nonce, &hdr_buf, &mut prefixed, plain_len)
                 .map_err(TransportError::Protocol)?;
-            (Bytes::copy_from_slice(&cipher_buf[..enc_len]), true)
+            (Bytes::copy_from_slice(&prefixed[..enc_len]), true)
         } else {
             // Sin clave: fallback a texto claro (no debería ocurrir en sesión Active).
             header.flags = Flags::empty();
-            (Bytes::copy_from_slice(payload), false)
+            (Bytes::copy_from_slice(&prefixed), false)
         };
         let _ = encrypt_flag_active;
 
@@ -578,8 +604,9 @@ impl Session {
         let sent = self.transport.send_to(&buf[..n], peer).await?;
         self.metrics.counters.record_sent(sent as u64);
 
-        // FEC: alimentar encoder con plaintext; enviar paridad si se completó la ventana.
-        if let Some(parity) = self.fec_enc.lock().await.push(seq, payload) {
+        // FEC: alimentar con el payload original (sin prefijo) usando audio_seq
+        // para que el seq_base del grupo sea contiguo con el jitter buffer.
+        if let Some(parity) = self.fec_enc.lock().await.push(audio_seq, payload) {
             let _ = self.send_fec_parity(parity, peer, sid).await;
         }
 
@@ -631,16 +658,54 @@ impl Session {
     }
 
     /// Recibe el próximo frame de audio ya desjitterizado.
+    ///
+    /// Implementa gap-skipping: si el jitter buffer lleva más de
+    /// `jitter_buffer_ms × 3` esperando por una secuencia concreta (pérdida
+    /// irrecuperable), avanza el cursor y continúa con el siguiente frame.
     pub async fn recv_audio(&self) -> Result<Frame, TransportError> {
+        let skip_us = u64::from(self.config.jitter_buffer_ms) * 3 * 1_000;
+        let frame_ms = u64::from(self.config.frame_duration_ms).max(5);
+        let mut deadline_us = self.micros_since_epoch() + skip_us;
+
         loop {
-            if let Some(frame) = self.jitter.pop() {
+            let now_us = self.micros_since_epoch();
+
+            if let Some(frame) = self.jitter.pop_with_deadline(now_us, deadline_us) {
+                deadline_us = now_us + skip_us;
                 return Ok(frame);
             }
-            self.poll_once().await?;
+            // A skip just happened (deadline fired): reset timer and retry pop
+            // immediately without blocking on the transport.
+            if now_us >= deadline_us {
+                deadline_us = now_us + skip_us;
+                continue;
+            }
+
+            // Short receive window so the gap deadline is checked frequently.
+            let mut buf = vec![0u8; self.config.mtu];
+            let recv_res = timeout(
+                Duration::from_millis(frame_ms),
+                self.transport.recv(&mut buf),
+            )
+            .await;
+
+            match recv_res {
+                Ok(Ok((n, _))) => {
+                    self.metrics.counters.record_received(n as u64);
+                    if let Ok(view) = PacketView::decode(&buf[..n]) {
+                        self.last_rx.store(self.micros_since_epoch(), Ordering::Release);
+                        self.dispatch_packet(view, &buf[..n]).await?;
+                    } else {
+                        self.metrics.counters.record_integrity_error();
+                    }
+                }
+                Ok(Err(e)) => return Err(e),
+                Err(_) => { /* short timeout; loop to re-check deadline */ }
+            }
         }
     }
 
-    /// Procesa un único datagrama entrante.
+    /// Procesa un único datagrama entrante (heartbeat + mantenimiento de sesión).
     pub async fn poll_once(&self) -> Result<(), TransportError> {
         let mut buf = vec![0u8; self.config.mtu];
         let recv_res = timeout(
@@ -671,7 +736,15 @@ impl Session {
             }
         };
         self.last_rx.store(self.micros_since_epoch(), Ordering::Release);
+        self.dispatch_packet(view, &buf[..n]).await
+    }
 
+    /// Despacha un paquete ya decodificado a su manejador correspondiente.
+    async fn dispatch_packet(
+        &self,
+        view: PacketView<'_>,
+        raw_buf: &[u8],
+    ) -> Result<(), TransportError> {
         let mt = view.header().msg_type;
         match MessageType::from_code(mt) {
             Ok(MessageType::AudioFrame) => {
@@ -679,12 +752,10 @@ impl Session {
                 let seq = view.header().sequence;
                 let ts = view.header().timestamp;
 
-                // Descifrar si el flag ENCRYPTED está activo.
                 let plaintext = if view.header().flags.contains(Flags::ENCRYPTED) {
                     if let Some(key) = self.decrypt_key.lock().await.as_ref() {
                         let nonce = make_nonce(seq, sid);
-                        // AAD = header original (primeros HEADER_SIZE bytes del buffer)
-                        let aad = &buf[..HEADER_SIZE];
+                        let aad = &raw_buf[..HEADER_SIZE];
                         let cipher_payload = view.payload();
                         let mut tmp = cipher_payload.to_vec();
                         match decrypt_in_place(key, &nonce, aad, &mut tmp, cipher_payload.len()) {
@@ -696,7 +767,6 @@ impl Session {
                             }
                         }
                     } else {
-                        // Sesión sin clave: rechazar frame cifrado.
                         self.metrics.counters.record_integrity_error();
                         return Ok(());
                     }
@@ -704,13 +774,22 @@ impl Session {
                     Bytes::copy_from_slice(view.payload())
                 };
 
-                let frame = Frame { sequence: seq, timestamp: ts, payload: plaintext.clone() };
-                self.metrics.loss.record(frame.sequence);
+                if plaintext.len() < 4 {
+                    self.metrics.counters.record_integrity_error();
+                    tracing::debug!(seq, "AudioFrame plaintext too short for audio_seq prefix");
+                    return Ok(());
+                }
+                let audio_seq = u32::from_be_bytes([
+                    plaintext[0], plaintext[1], plaintext[2], plaintext[3],
+                ]);
+                let audio_payload = plaintext.slice(4..);
+
+                let frame = Frame { sequence: audio_seq, timestamp: ts, payload: audio_payload.clone() };
+                self.metrics.loss.record(audio_seq);
                 self.metrics.jitter.record(frame.timestamp, self.micros_since_epoch());
-                // Registrar en el decoder FEC para posible recuperación del siguiente.
-                self.fec_dec.lock().await.push_data(seq, plaintext);
+                self.fec_dec.lock().await.push_data(audio_seq, audio_payload);
                 if !self.jitter.push(frame) {
-                    tracing::trace!(seq, "jitter buffer rejected frame");
+                    tracing::trace!(seq, audio_seq, "jitter buffer rejected frame");
                 }
             }
             Ok(MessageType::Heartbeat) => {
@@ -727,7 +806,7 @@ impl Session {
                 if view.header().flags.contains(Flags::ENCRYPTED) {
                     if let Some(key) = self.decrypt_key.lock().await.as_ref() {
                         let nonce = make_nonce(seq, sid);
-                        let aad = &buf[..HEADER_SIZE];
+                        let aad = &raw_buf[..HEADER_SIZE];
                         let cipher_payload = view.payload();
                         let mut tmp = cipher_payload.to_vec();
                         match decrypt_in_place(key, &nonce, aad, &mut tmp, cipher_payload.len()) {
@@ -755,9 +834,7 @@ impl Session {
                                     }
                                 }
                             }
-                            Ok(_) => {
-                                tracing::debug!(seq, "AudioFec payload too short");
-                            }
+                            Ok(_) => tracing::debug!(seq, "AudioFec payload too short"),
                             Err(e) => {
                                 self.metrics.counters.record_integrity_error();
                                 tracing::debug!(?e, seq, "AudioFec AEAD decryption failed");
