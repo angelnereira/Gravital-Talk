@@ -160,6 +160,11 @@ async fn stress_concurrent_senders() {
                 cli.send_audio(&payload)
                     .await
                     .unwrap_or_else(|e| panic!("sender {sender_id} failed at frame {i}: {e}"));
+                // Yield after each send so the receiver task gets scheduled and
+                // can drain the jitter buffer before the next frame arrives.
+                // Without this, all senders blast frames faster than the 16-slot
+                // jitter buffer can accommodate, causing frame drops.
+                tokio::task::yield_now().await;
             }
         }));
     }

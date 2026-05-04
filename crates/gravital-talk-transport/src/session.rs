@@ -671,7 +671,6 @@ impl Session {
             let now_us = self.micros_since_epoch();
 
             if let Some(frame) = self.jitter.pop_with_deadline(now_us, deadline_us) {
-                deadline_us = now_us + skip_us;
                 return Ok(frame);
             }
             // A skip just happened (deadline fired): reset timer and retry pop
