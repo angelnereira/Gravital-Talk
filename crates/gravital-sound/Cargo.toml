@@ -32,10 +32,11 @@ tokio             = { workspace = true, features = ["rt-multi-thread", "net", "t
 hound             = { workspace = true }
 hdrhistogram      = { workspace = true }
 tracing-subscriber = { workspace = true }
-criterion         = { workspace = true }
-anyhow            = { workspace = true }
-gravital-sound-io = { workspace = true }
-tracing           = { workspace = true }
+criterion          = { workspace = true }
+anyhow             = { workspace = true }
+tracing            = { workspace = true }
+async-trait        = { workspace = true }
+proptest           = { workspace = true }
 
 [[bench]]
 name = "encode_decode"

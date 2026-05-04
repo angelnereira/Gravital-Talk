@@ -73,8 +73,9 @@ clap  = { version = "4.5", features = ["derive", "env"] }
 hound = "3.5"
 
 # Error / utils
-thiserror = "1.0"
-anyhow    = "1.0"
+thiserror   = "1.0"
+anyhow      = "1.0"
+async-trait = "0.1"
 
 # FFI
 cbindgen = "0.27"
