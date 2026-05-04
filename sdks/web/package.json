@@ -1,5 +1,5 @@
 {
-  "name": "@gravital/sound-web",
+  "name": "@gravital/talk-web",
   "version": "0.1.0-alpha.1",
   "description": "Gravital Talk — SDK para navegadores (WebSocket transport + WASM).",
   "main": "js/index.ts",

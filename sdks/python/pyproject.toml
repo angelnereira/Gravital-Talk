@@ -26,7 +26,7 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://gravitalsound.dev"
+Homepage = "https://gravitaltalk.dev"
 Repository = "https://github.com/angelnereira/gravital-talk"
 
 [tool.maturin]

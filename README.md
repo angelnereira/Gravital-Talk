@@ -92,10 +92,10 @@ while True:
 ## Quickstart — Browser (WASM)
 
 ```typescript
-import { GravitalTalk } from "@gravital/sound-web";
+import { GravitalTalk } from "@gravital/talk-web";
 
 const session = await GravitalTalk.connect({
-  url: "wss://relay.gravitalsound.dev/session/abc",
+  url: "wss://relay.gravitaltalk.dev/session/abc",
   sampleRate: 48_000,
   channels: 1,
 });

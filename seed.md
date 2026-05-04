@@ -12,7 +12,7 @@
 **Nombre:** Gravital Talk  
 **Organización GitHub:** `gravital` (o `nereira`)  
 **Repositorio:** `gravital-talk`  
-**Dominio:** `gravitalsound.dev` (documentación y landing)  
+**Dominio:** `gravitaltalk.dev` (documentación y landing)  
 **Licencia:** Dual MIT / Apache-2.0 (estándar del ecosistema Rust, compatible con uso comercial y embebido)
 
 Gravital Talk es una división técnica bajo el paraguas de Gravital, la marca comercial de Nereira Technology and Business Solutions. Se posiciona junto a Gravital Cloud, Gravital Security (Quimera), Gravital ID y las demás divisiones como un componente de infraestructura que puede operar de forma independiente o integrarse con el ecosistema Gravital.
@@ -87,11 +87,11 @@ La portabilidad se logra mediante una arquitectura de tres niveles:
 | C/C++ (cualquier plataforma) | Descargar release binario (`.so`/`.dylib`/`.dll` + header `gravital_talk.h`) o compilar desde source |
 | Python | `pip install gravital-talk` — wheel con binario precompilado (via `maturin` / PyO3) |
 | Swift (iOS/macOS) | Swift Package Manager apuntando al repo, o CocoaPods con XCFramework precompilado |
-| Kotlin/Java (Android) | Dependencia Gradle: `implementation("dev.gravital:sound:0.1.0")` — AAR desde Maven Central o GitHub Packages |
-| TypeScript/JS (Node.js) | `npm install @gravital/sound` — binding nativo via `napi-rs` |
-| TypeScript/JS (Browser) | `npm install @gravital/sound-web` — módulo WASM + WebSocket transport |
+| Kotlin/Java (Android) | Dependencia Gradle: `implementation("dev.gravital:talk:0.1.0")` — AAR desde Maven Central o GitHub Packages |
+| TypeScript/JS (Node.js) | `npm install @gravital/talk` — binding nativo via `napi-rs` |
+| TypeScript/JS (Browser) | `npm install @gravital/talk-web` — módulo WASM + WebSocket transport |
 | Go | `cgo` linking contra la biblioteca C, o wrapper Go puro si se justifica |
-| Docker (servidor) | `docker pull gravital/sound-relay` — imagen mínima con el daemon de relay |
+| Docker (servidor) | `docker pull gravital/talk-relay` — imagen mínima con el daemon de relay |
 | Linux packages | `.deb` y `.rpm` para el CLI y el daemon (via `cargo-deb`, `cargo-generate-rpm`) |
 
 ---
@@ -228,7 +228,7 @@ gravital-talk/
 │   ├── kotlin/                             # SDK para Android
 │   │   ├── build.gradle.kts
 │   │   ├── src/main/
-│   │   │   ├── kotlin/dev/gravital/sound/
+│   │   │   ├── kotlin/dev/gravital/talk/
 │   │   │   │   ├── GravitalTalk.kt       # API pública de Kotlin
 │   │   │   │   ├── Session.kt             # Session con coroutines
 │   │   │   │   ├── Transport.kt
@@ -263,7 +263,7 @@ gravital-talk/
 │   │   └── __tests__/
 │   │
 │   └── web/                                # SDK para navegadores (WASM)
-│       ├── package.json                    # @gravital/sound-web
+│       ├── package.json                    # @gravital/talk-web
 │       ├── Cargo.toml                      # wasm-bindgen crate
 │       ├── src/
 │       │   └── lib.rs                      # wasm-bindgen exports
@@ -335,7 +335,7 @@ gravital-talk/
         ├── bench.yml                       # Benchmarks de regresión (semanal)
         ├── fuzz.yml                        # Fuzzing continuo (semanal)
         ├── release.yml                     # Publicación de crates, SDKs, binarios
-        └── docs.yml                        # Deploy de documentación a gravitalsound.dev
+        └── docs.yml                        # Deploy de documentación a gravitaltalk.dev
 ```
 
 ---
@@ -400,8 +400,8 @@ La capa FFI es el componente más crítico para la portabilidad. Define la inter
 ```c
 /* gravital_talk.h — generado por cbindgen, no editar manualmente */
 
-#ifndef GRAVITAL_SOUND_H
-#define GRAVITAL_SOUND_H
+#ifndef GRAVITAL_TALK_H
+#define GRAVITAL_TALK_H
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -486,7 +486,7 @@ GsResult   gs_session_metrics(const GsSession* session, GsMetrics* out);
 const char* gs_version(void);
 uint8_t     gs_protocol_version(void);
 
-#endif /* GRAVITAL_SOUND_H */
+#endif /* GRAVITAL_TALK_H */
 ```
 
 ### 5.3 Ejemplo de uso desde cada lenguaje
@@ -543,14 +543,14 @@ while True:
 
 **TypeScript/Browser (WASM):**
 ```typescript
-import { GravitalTalk } from '@gravital/sound-web';
+import { GravitalTalk } from '@gravital/talk-web';
 
 const session = await GravitalTalk.create({
   sampleRate: 48000,
   channels: 2,
   transport: 'websocket'
 });
-await session.connect('wss://relay.gravitalsound.dev/session/abc123');
+await session.connect('wss://relay.gravitaltalk.dev/session/abc123');
 
 session.onAudio((samples) => {
   audioContext.playBuffer(samples);
@@ -669,7 +669,7 @@ La prioridad "Alta" de los 4 primeros SDKs refleja la necesidad de cubrir servid
 | Transport negotiation en handshake | Dos peers pueden usar transportes diferentes (uno UDP, otro WebSocket) |
 | `examples/relay_server.rs` | Relay funcional que conecta un browser con un nativo |
 | Browser demo | Página web que se conecta al relay y reproduce audio de un sender nativo |
-| Docker image del relay | `docker pull gravital/sound-relay` funcional |
+| Docker image del relay | `docker pull gravital/talk-relay` funcional |
 
 ### Fase 8 — Estabilización y release (Semana 24-26)
 
@@ -685,7 +685,7 @@ La prioridad "Alta" de los 4 primeros SDKs refleja la necesidad de cubrir servid
 | Release binaries | Binarios precompilados para Linux/macOS/Windows en GitHub Releases |
 | Crate en crates.io | `gravital-talk-core`, `gravital-talk-transport`, etc. publicados |
 | SDK packages | PyPI, npm, Maven Central / GitHub Packages, SPM |
-| Landing page | `gravitalsound.dev` con docs, quickstart, benchmarks |
+| Landing page | `gravitaltalk.dev` con docs, quickstart, benchmarks |
 
 ---
 
@@ -717,7 +717,7 @@ La prioridad "Alta" de los 4 primeros SDKs refleja la necesidad de cubrir servid
 
 ### 7.3 Pipeline de benchmarks (semanal)
 
-Ejecuta benchmarks de `criterion` y compara contra la baseline almacenada. Si algún benchmark regresa más de 10%, el resultado se marca como warning. Si regresa más de 25%, se bloquea el merge. Los resultados se publican como artefacto del workflow y se pueden visualizar en `gravitalsound.dev/benchmarks`.
+Ejecuta benchmarks de `criterion` y compara contra la baseline almacenada. Si algún benchmark regresa más de 10%, el resultado se marca como warning. Si regresa más de 25%, se bloquea el merge. Los resultados se publican como artefacto del workflow y se pueden visualizar en `gravitaltalk.dev/benchmarks`.
 
 ---
 
@@ -759,11 +759,11 @@ Todas las funciones: `gs_*`. Todos los tipos: `Gs*`. Todas las constantes: `GS_*
 |------------|-------------------|
 | crates.io | `gravital-talk` |
 | PyPI | `gravital-talk` |
-| npm (Node.js nativo) | `@gravital/sound` |
-| npm (WASM/browser) | `@gravital/sound-web` |
-| Maven / Gradle | `dev.gravital:sound` |
+| npm (Node.js nativo) | `@gravital/talk` |
+| npm (WASM/browser) | `@gravital/talk-web` |
+| Maven / Gradle | `dev.gravital:talk` |
 | Swift Package Manager | `https://github.com/gravital/gravital-talk-swift` |
-| Docker Hub | `gravital/sound-relay` |
+| Docker Hub | `gravital/talk-relay` |
 
 ---
 

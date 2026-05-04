@@ -104,7 +104,7 @@ Apple rechaza dynamic linking de bibliotecas de terceros. Solución:
 - Compilado a **`.wasm`** con `wasm-bindgen`.
 - Transporte limitado a WebSocket (UDP no disponible).
 - Captura/reproducción de audio vía `AudioWorklet` (JS-side, no WASM).
-- Distribuido como paquete npm `@gravital/sound-web`.
+- Distribuido como paquete npm `@gravital/talk-web`.
 
 ### 6.4 Servidores sin audio I/O
 

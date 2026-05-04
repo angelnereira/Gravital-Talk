@@ -148,7 +148,7 @@ Trabajo planificado para próximas versiones (referencia cruzada con `seed.md`):
 - **Fase 5 completa.** Integración del codec Opus (`gravital-talk-codec`) y audio I/O real vía `cpal` (`gravital-talk-io`) con backends ALSA, CoreAudio, WASAPI, AAudio.
 - **Fase 6 ampliada.** SDKs adicionales: Swift (XCFramework + SPM), Kotlin (AAR + JNI), Node.js (napi-rs).
 - **Fase 7.** Relay server productivo con Docker, NAT traversal, balanceo por `session_id`.
-- **Fase 8.** Publicación a crates.io, PyPI, npm, Maven Central, SPM; landing page en `gravitalsound.dev`.
+- **Fase 8.** Publicación a crates.io, PyPI, npm, Maven Central, SPM; landing page en `gravitaltalk.dev`.
 - Fuzz targets con `cargo-fuzz` y fuzzing continuo.
 - Transport WebTransport sobre QUIC cuando los navegadores lo estabilicen.
 - Paquetes `.deb` / `.rpm` para CLI y daemon.

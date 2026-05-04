@@ -6,7 +6,7 @@ Durante el periodo `alpha` y `beta` (`0.1.x`), sólo se parcha la rama `main`. A
 
 ## Cómo reportar una vulnerabilidad
 
-Envía un correo a **security@gravitalsound.dev** con asunto `[SECURITY] <resumen corto>`. Incluye:
+Envía un correo a **security@gravitaltalk.dev** con asunto `[SECURITY] <resumen corto>`. Incluye:
 
 1. Descripción clara del problema y el vector de ataque.
 2. Versiones afectadas (`gs --version` o hash del commit).

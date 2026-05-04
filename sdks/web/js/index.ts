@@ -6,7 +6,7 @@
  *
  * Ejemplo:
  *
- *   import { GravitalTalkSession } from "@gravital/sound-web";
+ *   import { GravitalTalkSession } from "@gravital/talk-web";
  *
  *   const session = await GravitalTalkSession.connect({
  *     url: "wss://relay.example.com/ws",
