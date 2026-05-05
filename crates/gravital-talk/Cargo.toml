@@ -1,0 +1,75 @@
+[package]
+name         = "gravital-talk"
+version.workspace    = true
+edition.workspace    = true
+rust-version.workspace = true
+authors.workspace    = true
+license.workspace    = true
+repository.workspace = true
+description = "Gravital Talk — facade crate re-exporting core, metrics y transport para uso ergonómico."
+readme       = "../../README.md"
+
+[lib]
+name = "gravital_talk"
+path = "src/lib.rs"
+
+[features]
+default = ["std", "opus"]
+std = ["gravital-talk-core/std"]
+alloc = ["gravital-talk-core/alloc"]
+opus = ["gravital-talk-codec/opus"]
+
+[dependencies]
+gravital-talk-core      = { workspace = true, default-features = false }
+gravital-talk-metrics   = { workspace = true }
+gravital-talk-transport = { workspace = true }
+gravital-talk-codec     = { workspace = true }
+tokio                    = { workspace = true, features = ["rt-multi-thread", "sync", "macros"] }
+thiserror                = { workspace = true }
+
+[dev-dependencies]
+tokio             = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync", "macros"] }
+hound             = { workspace = true }
+hdrhistogram      = { workspace = true }
+tracing-subscriber = { workspace = true }
+criterion          = { workspace = true }
+anyhow             = { workspace = true }
+tracing            = { workspace = true }
+async-trait        = { workspace = true }
+proptest           = { workspace = true }
+
+[[bench]]
+name = "encode_decode"
+harness = false
+
+[[bench]]
+name = "checksum"
+harness = false
+
+[[bench]]
+name = "opus_encode"
+harness = false
+
+[[example]]
+name = "sender"
+path = "examples/sender.rs"
+
+[[example]]
+name = "receiver"
+path = "examples/receiver.rs"
+
+[[example]]
+name = "loopback"
+path = "examples/loopback.rs"
+
+[[example]]
+name = "relay_server"
+path = "examples/relay_server.rs"
+
+[[example]]
+name = "mic_to_speaker"
+path = "examples/mic_to_speaker.rs"
+
+[[example]]
+name = "voip_peer"
+path = "examples/voip_peer.rs"

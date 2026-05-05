@@ -39,14 +39,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "gravital-sound-core"
+name = "gravital-talk-core"
 version = "0.1.0-alpha.1"
 
 [[package]]
-name = "gravital-sound-web"
+name = "gravital-talk-web"
 version = "0.1.0-alpha.1"
 dependencies = [
- "gravital-sound-core",
+ "gravital-talk-core",
  "js-sys",
  "serde",
  "serde-wasm-bindgen",

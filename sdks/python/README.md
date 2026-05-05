@@ -1,6 +1,6 @@
-# gravital-sound — Python SDK
+# gravital-talk — Python SDK
 
-Bindings Python del protocolo Gravital Sound, compilados con `maturin` sobre
+Bindings Python del protocolo Gravital Talk, compilados con `maturin` sobre
 `PyO3`. Requiere Python ≥ 3.9.
 
 ## Instalación (desarrollo)
@@ -17,7 +17,7 @@ pytest
 ## Uso
 
 ```python
-import gravital_sound as gs
+import gravital_talk as gs
 
 cfg = gs.Config(sample_rate=48000, channels=1, frame_duration_ms=20)
 session = gs.Session(config=cfg, bind_addr="0.0.0.0", bind_port=0)

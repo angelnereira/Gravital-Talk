@@ -5,8 +5,8 @@
 *.pdb
 Cargo.lock.bak
 
-# Generated FFI header (tracked in crates/gravital-sound-ffi/include instead)
-/gravital_sound.h
+# Generated FFI header (tracked in crates/gravital-talk-ffi/include instead)
+/gravital_talk.h
 
 # Python SDK
 sdks/python/target
@@ -42,5 +42,5 @@ dhat-heap.json
 
 # Criterion baseline
 criterion/
-sdks/python/gravital_sound/*.so
+sdks/python/gravital_talk/*.so
 sdks/python/.venv

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Cloud-init para el nodo relay de Gravital Sound (Debian/Ubuntu).
+# Cloud-init para el nodo relay de Gravital Talk (Debian/Ubuntu).
 # Descarga el binario gs-relay desde GitHub Releases, lo instala como
 # systemd unit, y abre el firewall UFW.
 set -euo pipefail
@@ -32,9 +32,9 @@ cd /
 rm -rf "$TMPDIR"
 
 # systemd unit.
-cat > /etc/systemd/system/gravital-sound-relay.service <<'UNIT'
+cat > /etc/systemd/system/gravital-talk-relay.service <<'UNIT'
 [Unit]
-Description=Gravital Sound relay
+Description=Gravital Talk relay
 After=network-online.target
 Wants=network-online.target
 
@@ -57,4 +57,4 @@ WantedBy=multi-user.target
 UNIT
 
 systemctl daemon-reload
-systemctl enable --now gravital-sound-relay.service
+systemctl enable --now gravital-talk-relay.service

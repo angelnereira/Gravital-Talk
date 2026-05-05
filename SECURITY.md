@@ -6,7 +6,7 @@ Durante el periodo `alpha` y `beta` (`0.1.x`), sólo se parcha la rama `main`. A
 
 ## Cómo reportar una vulnerabilidad
 
-Envía un correo a **security@gravitalsound.dev** con asunto `[SECURITY] <resumen corto>`. Incluye:
+Envía un correo a **security@gravitaltalk.dev** con asunto `[SECURITY] <resumen corto>`. Incluye:
 
 1. Descripción clara del problema y el vector de ataque.
 2. Versiones afectadas (`gs --version` o hash del commit).
@@ -28,7 +28,7 @@ El modelo de amenazas formal está documentado en [`docs/security.md`](docs/secu
 ## Alcance del reporte
 
 **Dentro de alcance**:
-- Crates `gravital-sound-*` y SDKs oficiales en este repositorio.
+- Crates `gravital-talk-*` y SDKs oficiales en este repositorio.
 - El binario `gs` y los ejemplos empaquetados.
 - El header FFI y los bindings autogenerados.
 

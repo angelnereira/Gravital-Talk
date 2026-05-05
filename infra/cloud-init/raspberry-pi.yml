@@ -1,5 +1,5 @@
 #cloud-config
-# Gravital Sound — cloud-init para Raspberry Pi (Pi 4/5 con Raspberry Pi OS Lite ARM64).
+# Gravital Talk — cloud-init para Raspberry Pi (Pi 4/5 con Raspberry Pi OS Lite ARM64).
 #
 # Aprovisiona el binario `gs` como daemon edge: capturando del micrófono local
 # y enviándolo a un relay público vía UDP o WebSocket.
@@ -8,7 +8,7 @@
 #   sudo cp raspberry-pi.yml /boot/firmware/user-data
 #   # editar /boot/firmware/user-data y poner el relay_endpoint y session_id
 #
-# Variables de entorno se leen en /etc/default/gravital-sound
+# Variables de entorno se leen en /etc/default/gravital-talk
 
 package_update: true
 package_upgrade: false
@@ -30,9 +30,9 @@ users:
     no-create-home: true
 
 write_files:
-  - path: /etc/default/gravital-sound
+  - path: /etc/default/gravital-talk
     content: |
-      # Gravital Sound — config del daemon edge.
+      # Gravital Talk — config del daemon edge.
       # Editar después del primer boot con los datos reales del relay.
       GS_RELAY_HOST=relay.example.com
       GS_RELAY_PORT=9000
@@ -42,16 +42,16 @@ write_files:
     owner: root:root
     permissions: '0640'
 
-  - path: /etc/systemd/system/gravital-sound.service
+  - path: /etc/systemd/system/gravital-talk.service
     content: |
       [Unit]
-      Description=Gravital Sound edge daemon (mic → relay)
+      Description=Gravital Talk edge daemon (mic → relay)
       After=sound.target network-online.target
       Wants=network-online.target
 
       [Service]
       Type=simple
-      EnvironmentFile=/etc/default/gravital-sound
+      EnvironmentFile=/etc/default/gravital-talk
       User=gravital
       Group=audio
       ExecStart=/usr/local/bin/gs send \
@@ -79,7 +79,7 @@ runcmd:
   - |
     set -eux
     TAG="${GS_RELEASE_TAG:-v0.2.0-alpha.1}"
-    URL="https://github.com/angelnereira/gravital-sound/releases/download/${TAG}/gs-${TAG}-linux-aarch64.tar.gz"
+    URL="https://github.com/angelnereira/gravital-talk/releases/download/${TAG}/gs-${TAG}-linux-aarch64.tar.gz"
     TMP=$(mktemp -d)
     cd "$TMP"
     curl -fsSL -o gs.tar.gz "$URL"
@@ -88,14 +88,14 @@ runcmd:
     install -m 0755 -o root -g root "$DIR/gs" /usr/local/bin/gs
 
   # Habilita el servicio. Por defecto lo deja stopped: el operador debe
-  # editar /etc/default/gravital-sound antes de arrancarlo.
+  # editar /etc/default/gravital-talk antes de arrancarlo.
   - systemctl daemon-reload
-  - systemctl enable gravital-sound.service
-  - 'echo "Edit /etc/default/gravital-sound y luego: systemctl start gravital-sound" | tee /etc/motd'
+  - systemctl enable gravital-talk.service
+  - 'echo "Edit /etc/default/gravital-talk y luego: systemctl start gravital-talk" | tee /etc/motd'
 
 final_message: |
-  Gravital Sound edge node aprovisionado.
+  Gravital Talk edge node aprovisionado.
   - Binario: /usr/local/bin/gs
-  - Config:  /etc/default/gravital-sound
-  - Servicio: gravital-sound.service (no iniciado por defecto)
+  - Config:  /etc/default/gravital-talk
+  - Servicio: gravital-talk.service (no iniciado por defecto)
   - Devices:  gs devices

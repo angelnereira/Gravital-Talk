@@ -42,7 +42,7 @@ WebTransport sobre QUIC ofrece semántica datagram-like en el navegador (`sendDa
 2. Exista un servidor QUIC maduro en Rust (`quinn` es el candidato obvio).
 3. Los tests de latencia muestren mejora > 20% sobre WebSocket.
 
-Mientras tanto, `gravital-sound-transport` define un trait `Transport` que abstrae el medio, de modo que añadir WebTransport sea un crate nuevo, no un cambio en el core.
+Mientras tanto, `gravital-talk-transport` define un trait `Transport` que abstrae el medio, de modo que añadir WebTransport sea un crate nuevo, no un cambio en el core.
 
 ## 5. Trait `Transport`
 
@@ -89,7 +89,7 @@ Tabla de parámetros por plataforma aplicados por default:
 
 Para servidores que manejan > 10k sesiones concurrentes, el overhead de syscalls es prohibitivo. El trait `Transport` está diseñado para permitir backends sin cambiar el core:
 
-- **`AF_XDP`** (Linux): mapeos de memoria compartida kernel ↔ user-space. Planificado como crate separado `gravital-sound-transport-afxdp`.
+- **`AF_XDP`** (Linux): mapeos de memoria compartida kernel ↔ user-space. Planificado como crate separado `gravital-talk-transport-afxdp`.
 - **DPDK**: bypass total. Requiere bind de NIC. Planificado para despliegues de alto volumen.
 - **eBPF XDP** para filtros de ingress (antes de llegar al user-space). Usado para dropear rápido paquetes malformados.
 

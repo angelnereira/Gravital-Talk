@@ -1,6 +1,6 @@
-# Contribuir a Gravital Sound
+# Contribuir a Gravital Talk
 
-Gracias por tu interés. Gravital Sound es un protocolo de infraestructura. Todo cambio debe preservar tres propiedades no negociables: **correctitud**, **rendimiento**, **portabilidad**. Antes de abrir un PR, verifica que tu cambio cumple los tres.
+Gracias por tu interés. Gravital Talk es un protocolo de infraestructura. Todo cambio debe preservar tres propiedades no negociables: **correctitud**, **rendimiento**, **portabilidad**. Antes de abrir un PR, verifica que tu cambio cumple los tres.
 
 ## Antes de enviar un PR
 
@@ -28,7 +28,7 @@ Gracias por tu interés. Gravital Sound es un protocolo de infraestructura. Todo
 
 ## Diseño
 
-- **`gravital-sound-core` es `no_std`.** Cualquier dependencia de `std` debe vivir en otro crate. El core sólo puede usar `core` y `alloc` (bajo feature `alloc`).
+- **`gravital-talk-core` es `no_std`.** Cualquier dependencia de `std` debe vivir en otro crate. El core sólo puede usar `core` y `alloc` (bajo feature `alloc`).
 - **Cero allocs en el hot path.** Si tu cambio añade un `Box::new`, `Vec::push`, `String::from`, etc. dentro de un ciclo de encode/decode o send/recv, justifícalo o búscale un workaround con `bytes`/`smallvec`/pool pre-alocado.
 - **Transiciones de estado explícitas.** La máquina de estados de sesión usa tipos marcador. Añadir un estado implica añadir una transición type-safe, no un `if` en runtime.
 - **La FFI es API pública estable.** Un cambio en la firma de una función `gs_*` es un *breaking change* y requiere versión mayor.
@@ -37,7 +37,7 @@ Gracias por tu interés. Gravital Sound es un protocolo de infraestructura. Todo
 
 - Los cambios en el core deben venir con property tests (`proptest`) que verifiquen roundtrip serialize/deserialize.
 - Los cambios en el transporte deben venir con tests de integración que corran dos sockets en localhost.
-- Los cambios en la FFI deben venir con una extensión del smoke test C (`crates/gravital-sound-ffi/tests/c_smoke.c`).
+- Los cambios en la FFI deben venir con una extensión del smoke test C (`crates/gravital-talk-ffi/tests/c_smoke.c`).
 
 ## Seguridad
 

@@ -1,4 +1,4 @@
-//! Gravital Sound — SDK WASM.
+//! Gravital Talk — SDK WASM.
 //!
 //! Dentro del browser no tenemos UDP directo, así que el transport
 //! WebSocket lo maneja JavaScript (ver `js/websocket-transport.ts`); el
@@ -8,7 +8,7 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![allow(clippy::new_without_default)]
 
-use gravital_sound_core::{
+use gravital_talk_core::{
     header::{Flags, PacketHeader},
     message::{HandshakeConfirm, HandshakeInit, MessageType},
     packet::{PacketBuilder, PacketView},

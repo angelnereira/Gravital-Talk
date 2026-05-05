@@ -1,6 +1,6 @@
 # Audio I/O
 
-El crate `gravital-sound-io` proporciona captura y playback de audio usando `cpal 0.15` (ALSA en Linux, CoreAudio en macOS, WASAPI en Windows).
+El crate `gravital-talk-io` proporciona captura y playback de audio usando `cpal 0.15` (ALSA en Linux, CoreAudio en macOS, WASAPI en Windows).
 
 ## Arquitectura
 
@@ -60,7 +60,7 @@ Un "pump thread" interno drena el `Receiver<Vec<i16>>` y acumula en un `VecDeque
 Pasar `None` como `device_hint` selecciona el device por defecto del sistema. Pasar `"default"` equivale a `None`. Pasar el nombre exacto de un device (obtenido con `list_input_devices()`) selecciona ese device.
 
 ```rust
-for d in gravital_sound_io::list_input_devices()? {
+for d in gravital_talk_io::list_input_devices()? {
     println!("{}{}", d.name, if d.is_default { " [default]" } else { "" });
 }
 ```

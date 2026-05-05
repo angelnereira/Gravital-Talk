@@ -47,44 +47,44 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
 
 [[package]]
-name = "gravital-sound"
+name = "gravital-talk"
 version = "0.1.0-alpha.1"
 dependencies = [
- "gravital-sound-core",
- "gravital-sound-metrics",
- "gravital-sound-transport",
+ "gravital-talk-core",
+ "gravital-talk-metrics",
+ "gravital-talk-transport",
 ]
 
 [[package]]
-name = "gravital-sound-core"
+name = "gravital-talk-core"
 version = "0.1.0-alpha.1"
 
 [[package]]
-name = "gravital-sound-metrics"
+name = "gravital-talk-metrics"
 version = "0.1.0-alpha.1"
 dependencies = [
- "gravital-sound-core",
+ "gravital-talk-core",
 ]
 
 [[package]]
-name = "gravital-sound-python"
+name = "gravital-talk-python"
 version = "0.1.0-alpha.1"
 dependencies = [
- "gravital-sound",
+ "gravital-talk",
  "once_cell",
  "pyo3",
  "tokio",
 ]
 
 [[package]]
-name = "gravital-sound-transport"
+name = "gravital-talk-transport"
 version = "0.1.0-alpha.1"
 dependencies = [
  "async-trait",
  "bytes",
  "crossbeam-queue",
- "gravital-sound-core",
- "gravital-sound-metrics",
+ "gravital-talk-core",
+ "gravital-talk-metrics",
  "smallvec",
  "socket2 0.5.10",
  "thiserror",

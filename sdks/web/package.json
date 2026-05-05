@@ -1,7 +1,7 @@
 {
-  "name": "@gravital/sound-web",
+  "name": "@gravital/talk-web",
   "version": "0.1.0-alpha.1",
-  "description": "Gravital Sound — SDK para navegadores (WebSocket transport + WASM).",
+  "description": "Gravital Talk — SDK para navegadores (WebSocket transport + WASM).",
   "main": "js/index.ts",
   "types": "js/index.ts",
   "files": [
@@ -20,7 +20,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/angelnereira/gravital-sound.git",
+    "url": "https://github.com/angelnereira/gravital-talk.git",
     "directory": "sdks/web"
   }
 }

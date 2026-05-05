@@ -810,18 +810,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 
 [[package]]
-name = "gravital-sound"
+name = "gravital-talk"
 version = "0.1.0-alpha.1"
 dependencies = [
  "anyhow",
+ "async-trait",
  "criterion",
- "gravital-sound-codec",
- "gravital-sound-core",
- "gravital-sound-io",
- "gravital-sound-metrics",
- "gravital-sound-transport",
+ "gravital-talk-codec",
+ "gravital-talk-core",
+ "gravital-talk-metrics",
+ "gravital-talk-transport",
  "hdrhistogram",
  "hound",
+ "proptest",
  "thiserror",
  "tokio",
  "tracing",
@@ -829,14 +830,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "gravital-sound-cli"
+name = "gravital-talk-cli"
 version = "0.1.0-alpha.1"
 dependencies = [
  "anyhow",
  "bytes",
  "clap",
- "gravital-sound",
- "gravital-sound-io",
+ "gravital-talk",
+ "gravital-talk-io",
  "hound",
  "tokio",
  "tracing",
@@ -844,18 +845,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "gravital-sound-codec"
+name = "gravital-talk-codec"
 version = "0.1.0-alpha.1"
 dependencies = [
  "audiopus",
- "gravital-sound-core",
+ "gravital-talk-core",
  "hound",
  "proptest",
  "thiserror",
 ]
 
 [[package]]
-name = "gravital-sound-core"
+name = "gravital-talk-core"
 version = "0.1.0-alpha.1"
 dependencies = [
  "chacha20poly1305",
@@ -863,16 +864,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "gravital-sound-ffi"
+name = "gravital-talk-ffi"
 version = "0.1.0-alpha.1"
 dependencies = [
  "cbindgen",
- "gravital-sound",
+ "gravital-talk",
  "tokio",
 ]
 
 [[package]]
-name = "gravital-sound-io"
+name = "gravital-talk-io"
 version = "0.1.0-alpha.1"
 dependencies = [
  "cpal",
@@ -883,14 +884,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "gravital-sound-metrics"
+name = "gravital-talk-metrics"
 version = "0.1.0-alpha.1"
 dependencies = [
- "gravital-sound-core",
+ "gravital-talk-core",
 ]
 
 [[package]]
-name = "gravital-sound-relay"
+name = "gravital-talk-relay"
 version = "0.1.0-alpha.1"
 dependencies = [
  "anyhow",
@@ -898,8 +899,8 @@ dependencies = [
  "clap",
  "dashmap",
  "futures-util",
- "gravital-sound-core",
- "gravital-sound-transport",
+ "gravital-talk-core",
+ "gravital-talk-transport",
  "http-body-util",
  "hyper",
  "hyper-util",
@@ -913,16 +914,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "gravital-sound-transport"
+name = "gravital-talk-transport"
 version = "0.1.0-alpha.1"
 dependencies = [
  "async-trait",
  "bytes",
  "crossbeam-queue",
- "gravital-sound-core",
- "gravital-sound-metrics",
+ "gravital-talk-core",
+ "gravital-talk-metrics",
  "hkdf",
  "hmac",
+ "proptest",
  "rand_core 0.6.4",
  "sha2",
  "smallvec",

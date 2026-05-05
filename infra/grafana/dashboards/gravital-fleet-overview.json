@@ -1,9 +1,9 @@
 {
-  "title": "Gravital Sound — Fleet Overview",
+  "title": "Gravital Talk — Fleet Overview",
   "uid": "gs-fleet-overview",
   "schemaVersion": 38,
   "editable": true,
-  "tags": ["gravital-sound", "audio", "voip"],
+  "tags": ["gravital-talk", "audio", "voip"],
   "timezone": "browser",
   "time": { "from": "now-1h", "to": "now" },
   "refresh": "10s",

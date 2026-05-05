@@ -1,4 +1,4 @@
-# Gravital Sound — relay en DigitalOcean
+# Gravital Talk — relay en DigitalOcean
 #
 # Droplet con firewall DO. Buen balance entre simplicidad y precio
 # (~$6/mes el más chico). Más caro que Hetzner pero con mejor presencia
@@ -59,11 +59,11 @@ variable "release_tag" {
 
 variable "tags" {
   type    = list(string)
-  default = ["gravital-sound", "relay"]
+  default = ["gravital-talk", "relay"]
 }
 
 locals {
-  binary_url = "https://github.com/angelnereira/gravital-sound/releases/download/${var.release_tag}/gs-${var.release_tag}-linux-x86_64.tar.gz"
+  binary_url = "https://github.com/angelnereira/gravital-talk/releases/download/${var.release_tag}/gs-${var.release_tag}-linux-x86_64.tar.gz"
 }
 
 resource "digitalocean_droplet" "relay" {

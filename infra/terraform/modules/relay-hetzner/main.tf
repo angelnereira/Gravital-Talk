@@ -1,4 +1,4 @@
-# Gravital Sound — relay en Hetzner Cloud
+# Gravital Talk — relay en Hetzner Cloud
 #
 # Hetzner es la opción más barata para self-hosting:
 # - CX22 (formerly CX11): ~€4-5/mes con 2 vCPU + 4 GB RAM
@@ -61,11 +61,11 @@ variable "release_tag" {
 
 variable "labels" {
   type    = map(string)
-  default = { project = "gravital-sound", component = "relay" }
+  default = { project = "gravital-talk", component = "relay" }
 }
 
 locals {
-  binary_url = "https://github.com/angelnereira/gravital-sound/releases/download/${var.release_tag}/gs-${var.release_tag}-linux-x86_64.tar.gz"
+  binary_url = "https://github.com/angelnereira/gravital-talk/releases/download/${var.release_tag}/gs-${var.release_tag}-linux-x86_64.tar.gz"
 }
 
 resource "hcloud_firewall" "relay" {

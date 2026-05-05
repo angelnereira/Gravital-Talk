@@ -2,7 +2,7 @@
 
 ## 1. Alcance
 
-Este documento cubre el modelo de amenazas del **protocolo** Gravital Sound y su implementación de referencia. No cubre despliegues productivos concretos (eso es responsabilidad del operador del relay).
+Este documento cubre el modelo de amenazas del **protocolo** Gravital Talk y su implementación de referencia. No cubre despliegues productivos concretos (eso es responsabilidad del operador del relay).
 
 ## 2. Activos
 

@@ -1,12 +1,12 @@
 # Módulo Terraform — `relay-aws`
 
-Despliega un **Gravital Sound relay** en una instancia EC2 (ARM64 por defecto, ~$12/mes en `t4g.small`), con security group y opcionalmente un record A en Route53.
+Despliega un **Gravital Talk relay** en una instancia EC2 (ARM64 por defecto, ~$12/mes en `t4g.small`), con security group y opcionalmente un record A en Route53.
 
 ## Uso mínimo
 
 ```hcl
 module "relay" {
-  source = "github.com/angelnereira/gravital-sound//infra/terraform/modules/relay-aws"
+  source = "github.com/angelnereira/gravital-talk//infra/terraform/modules/relay-aws"
 
   region = "us-east-1"
   name   = "my-relay"
@@ -21,7 +21,7 @@ output "relay_ip" {
 
 ```hcl
 module "relay" {
-  source = "github.com/angelnereira/gravital-sound//infra/terraform/modules/relay-aws"
+  source = "github.com/angelnereira/gravital-talk//infra/terraform/modules/relay-aws"
 
   region          = "us-east-1"
   name            = "prod-relay"

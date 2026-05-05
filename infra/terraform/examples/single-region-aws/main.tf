@@ -1,4 +1,4 @@
-# Ejemplo: relay Gravital Sound en AWS us-east-1 con DNS opcional.
+# Ejemplo: relay Gravital Talk en AWS us-east-1 con DNS opcional.
 
 terraform {
   required_version = ">= 1.5"

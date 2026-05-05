@@ -14,11 +14,11 @@ Track A añade soporte de audio real (micrófono → red → altavoz). Se necesi
 
 ## Decisión
 
-Se adopta **`cpal 0.15`** como capa de abstracción de audio. Implementado en el crate `gravital-sound-io`.
+Se adopta **`cpal 0.15`** como capa de abstracción de audio. Implementado en el crate `gravital-talk-io`.
 
 ## Diseño del adaptador
 
-El callback de cpal corre en un thread de tiempo real. Para desacoplarlo del pipeline Gravital Sound (que vive en el runtime Tokio):
+El callback de cpal corre en un thread de tiempo real. Para desacoplarlo del pipeline Gravital Talk (que vive en el runtime Tokio):
 
 - **Captura**: callback → conversión de formato → `mpsc::Sender<Vec<i16>>` sin bloqueo.
 - **Playback**: `mpsc::Receiver<Vec<i16>>` en pump thread → `VecDeque<i16>` → callback de cpal.

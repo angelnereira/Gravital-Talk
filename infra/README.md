@@ -1,6 +1,6 @@
-# Gravital Sound — Infraestructura as Code
+# Gravital Talk — Infraestructura as Code
 
-Módulos Terraform y scripts cloud-init para desplegar Gravital Sound en cualquier server o dispositivo en pocos minutos.
+Módulos Terraform y scripts cloud-init para desplegar Gravital Talk en cualquier server o dispositivo en pocos minutos.
 
 ## Estructura
 
@@ -94,24 +94,24 @@ O añadir un job de Prometheus que use `node_exporter` con TLS para exponerlo.
 # en la VM:
 TAG=v0.2.0-alpha.2
 curl -fsSL -o /tmp/gs.tar.gz \
-  "https://github.com/angelnereira/gravital-sound/releases/download/$TAG/gs-$TAG-linux-x86_64.tar.gz"
-sudo systemctl stop gravital-sound-relay
+  "https://github.com/angelnereira/gravital-talk/releases/download/$TAG/gs-$TAG-linux-x86_64.tar.gz"
+sudo systemctl stop gravital-talk-relay
 sudo tar -xzf /tmp/gs.tar.gz -C /tmp
 sudo install -m 0755 /tmp/gs-$TAG-linux-x86_64/gs /usr/local/bin/gs-relay
-sudo systemctl start gravital-sound-relay
+sudo systemctl start gravital-talk-relay
 ```
 
 ## Troubleshooting
 
 | Síntoma | Causa probable | Fix |
 |---------|----------------|-----|
-| `gs-relay` no arranca | Falta el binario en `/usr/local/bin` | Ver `journalctl -u gravital-sound-relay -e` |
+| `gs-relay` no arranca | Falta el binario en `/usr/local/bin` | Ver `journalctl -u gravital-talk-relay -e` |
 | Cliente no puede conectar UDP | Firewall del proveedor | Ver SG / Cloud Firewall del módulo |
 | Latencia > 100 ms LAN | Resampler activo (sample rate mismatch) | Configurar device a 48 kHz nativo |
 | OOM tras horas | TTL muy alto, demasiadas sesiones idle | Bajar `session_ttl_secs` en config |
 
 ## Pendiente (Track E.2 + E.4)
 
-- Helm chart `gravital-sound-relay` para Kubernetes.
+- Helm chart `gravital-talk-relay` para Kubernetes.
 - Stack observability completo (Prometheus + Grafana + Loki) con dashboards prediseñados.
 - CLI `gs deploy` que envuelve Terraform para devs sin experiencia.

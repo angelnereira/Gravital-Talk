@@ -1,20 +1,20 @@
 [package]
-name         = "gravital-sound-web"
+name         = "gravital-talk-web"
 version      = "0.1.0-alpha.1"
 edition      = "2021"
 rust-version = "1.78"
 authors      = ["Angel Nereira <angelnereira15@gmail.com>"]
 license      = "MIT OR Apache-2.0"
-repository   = "https://github.com/angelnereira/gravital-sound"
-description  = "Gravital Sound — wasm-bindgen bindings para navegadores."
+repository   = "https://github.com/angelnereira/gravital-talk"
+description  = "Gravital Talk — wasm-bindgen bindings para navegadores."
 
 [lib]
-name       = "gravital_sound_web"
+name       = "gravital_talk_web"
 crate-type = ["cdylib", "rlib"]
 path       = "src/lib.rs"
 
 [dependencies]
-gravital-sound-core = { path = "../../crates/gravital-sound-core", default-features = false, features = ["alloc"] }
+gravital-talk-core = { path = "../../crates/gravital-talk-core", default-features = false, features = ["alloc"] }
 wasm-bindgen        = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys              = "0.3"

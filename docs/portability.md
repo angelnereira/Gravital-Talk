@@ -11,12 +11,12 @@
                          │ llaman funciones C via FFI
                          │ (o PyO3/wasm-bindgen directo)
 ┌────────────────────────┴────────────────────────────────┐
-│              gravital-sound-ffi (C ABI)                  │
+│              gravital-talk-ffi (C ABI)                  │
 │  Interfaz C estable, header generado con cbindgen        │
 └────────────────────────┬────────────────────────────────┘
                          │ Rust internals
 ┌────────────────────────┴────────────────────────────────┐
-│     Rust Core (gravital-sound-core · transport · …)      │
+│     Rust Core (gravital-talk-core · transport · …)      │
 │  no_std compatible en el core.                           │
 └─────────────────────────────────────────────────────────┘
 ```
@@ -38,7 +38,7 @@
 
 ## 3. Núcleo `no_std`
 
-`gravital-sound-core` es `#![no_std]` por default. Esto implica:
+`gravital-talk-core` es `#![no_std]` por default. Esto implica:
 
 - Sin `std::error::Error` → usamos `core::fmt::Display` + feature `std` opcional.
 - Sin `std::net` → tipos `SocketAddr` pertenecen al crate `transport`.
@@ -55,18 +55,18 @@ Features:
 
 ### Linux → Linux aarch64
 ```bash
-cross build --target aarch64-unknown-linux-gnu --release -p gravital-sound-ffi
+cross build --target aarch64-unknown-linux-gnu --release -p gravital-talk-ffi
 ```
 
 ### Linux → WASM (validación no_std)
 ```bash
-cargo check --target wasm32-unknown-unknown -p gravital-sound-core --no-default-features
+cargo check --target wasm32-unknown-unknown -p gravital-talk-core --no-default-features
 ```
 
 ### Linux → Android (roadmap)
 ```bash
 cargo ndk --target aarch64-linux-android --target armv7-linux-androideabi \
-  build --release -p gravital-sound-ffi
+  build --release -p gravital-talk-ffi
 ```
 
 ### macOS → iOS (roadmap)
@@ -79,7 +79,7 @@ cargo ndk --target aarch64-linux-android --target armv7-linux-androideabi \
 | Dependencia | Solución |
 |-------------|----------|
 | `libopus` (roadmap) | Feature `vendored` del crate `opus` compila desde source. |
-| ALSA/PulseAudio (roadmap) | Sólo en `gravital-sound-io`, crate opt-in. El core no depende. |
+| ALSA/PulseAudio (roadmap) | Sólo en `gravital-talk-io`, crate opt-in. El core no depende. |
 | OpenSSL (WebSocket TLS) | Usamos `rustls` para evitar dependencia de OpenSSL del sistema. |
 | `libc` | Directamente vía crate `libc`; WASM no necesita. |
 
@@ -104,11 +104,11 @@ Apple rechaza dynamic linking de bibliotecas de terceros. Solución:
 - Compilado a **`.wasm`** con `wasm-bindgen`.
 - Transporte limitado a WebSocket (UDP no disponible).
 - Captura/reproducción de audio vía `AudioWorklet` (JS-side, no WASM).
-- Distribuido como paquete npm `@gravital/sound-web`.
+- Distribuido como paquete npm `@gravital/talk-web`.
 
 ### 6.4 Servidores sin audio I/O
 
-En un relay o mezclador, no hay mic/speaker. El core nunca toca hardware de audio — `gravital-sound-io` es opt-in. Los binarios de servidor no incluyen la dependencia, reduciendo tamaño y superficie.
+En un relay o mezclador, no hay mic/speaker. El core nunca toca hardware de audio — `gravital-talk-io` es opt-in. Los binarios de servidor no incluyen la dependencia, reduciendo tamaño y superficie.
 
 ## 7. Tamaño de binario
 
@@ -116,9 +116,9 @@ Targets 0.1:
 
 | Artefacto | Target | Tamaño objetivo |
 |-----------|--------|-----------------|
-| `libgravital_sound.so` (FFI dyn) | Linux x86_64 | < 2 MB |
-| `libgravital_sound.a` (FFI static) | Linux aarch64 musl | < 5 MB |
-| `gravital_sound.wasm` (core + ffi, stripped) | wasm32 | < 1.5 MB |
+| `libgravital_talk.so` (FFI dyn) | Linux x86_64 | < 2 MB |
+| `libgravital_talk.a` (FFI static) | Linux aarch64 musl | < 5 MB |
+| `gravital_talk.wasm` (core + ffi, stripped) | wasm32 | < 1.5 MB |
 | `gs` (CLI release) | Linux x86_64 | < 4 MB |
 
 Técnicas aplicadas: `lto = "fat"`, `codegen-units = 1`, `strip = "symbols"`, `panic = "abort"`, `-Z build-std` opcional.

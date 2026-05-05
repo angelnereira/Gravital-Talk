@@ -2,7 +2,7 @@
 
 ## 1. Estados
 
-Una sesión Gravital Sound atraviesa los siguientes estados. La máquina es implementada como un tipo con parámetros marcadores (phantom types), de modo que transiciones inválidas son error de compilación.
+Una sesión Gravital Talk atraviesa los siguientes estados. La máquina es implementada como un tipo con parámetros marcadores (phantom types), de modo que transiciones inválidas son error de compilación.
 
 ```
           ┌──────────┐

@@ -1,4 +1,4 @@
-# Gravital Sound — targets de build reproducibles.
+# Gravital Talk — targets de build reproducibles.
 # Uso: make <target>. Ejecuta `make help` para ver la lista.
 
 CARGO        ?= cargo
@@ -7,7 +7,7 @@ WORKSPACE_FLAGS := --workspace --all-targets
 
 .PHONY: help
 help:
-	@awk 'BEGIN{FS=":.*##"; printf "Gravital Sound — targets disponibles:\n\n"} \
+	@awk 'BEGIN{FS=":.*##"; printf "Gravital Talk — targets disponibles:\n\n"} \
 		/^[a-zA-Z0-9_.-]+:.*?##/ {printf "  \033[36m%-24s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 .PHONY: build
@@ -44,23 +44,23 @@ check-all: fmt-check clippy test ## Gate completo (fmt + clippy + test)
 .PHONY: cross-linux-arm64
 cross-linux-arm64: ## Cross-compile a aarch64-unknown-linux-gnu
 	cross build --release --target aarch64-unknown-linux-gnu \
-		-p gravital-sound-core -p gravital-sound-transport -p gravital-sound-ffi
+		-p gravital-talk-core -p gravital-talk-transport -p gravital-talk-ffi
 
 .PHONY: cross-wasm
 cross-wasm: ## Verifica que el core compila a wasm32 (no_std check)
-	$(CARGO) check --target wasm32-unknown-unknown -p gravital-sound-core --no-default-features
+	$(CARGO) check --target wasm32-unknown-unknown -p gravital-talk-core --no-default-features
 
 .PHONY: ffi-header
-ffi-header: ## Regenera gravital_sound.h con cbindgen
-	$(CARGO) build -p gravital-sound-ffi --release
-	@echo "Header generado en crates/gravital-sound-ffi/include/gravital_sound.h"
+ffi-header: ## Regenera gravital_talk.h con cbindgen
+	$(CARGO) build -p gravital-talk-ffi --release
+	@echo "Header generado en crates/gravital-talk-ffi/include/gravital_talk.h"
 
 .PHONY: ffi-smoke
 ffi-smoke: ffi-header ## Compila y ejecuta el smoke test en C
-	gcc -fsyntax-only crates/gravital-sound-ffi/include/gravital_sound.h
-	gcc -O2 -I crates/gravital-sound-ffi/include \
-		-o $(TARGET_DIR)/c_smoke crates/gravital-sound-ffi/tests/c_smoke.c \
-		-L $(TARGET_DIR)/release -lgravital_sound_ffi -lpthread -ldl -lm
+	gcc -fsyntax-only crates/gravital-talk-ffi/include/gravital_talk.h
+	gcc -O2 -I crates/gravital-talk-ffi/include \
+		-o $(TARGET_DIR)/c_smoke crates/gravital-talk-ffi/tests/c_smoke.c \
+		-L $(TARGET_DIR)/release -lgravital_talk_ffi -lpthread -ldl -lm
 	LD_LIBRARY_PATH=$(TARGET_DIR)/release $(TARGET_DIR)/c_smoke
 
 .PHONY: python-sdk

@@ -1,4 +1,4 @@
-# Gravital Sound — Plan de Proyecto y Arquitectura de Repositorio
+# Gravital Talk — Plan de Proyecto y Arquitectura de Repositorio
 
 **Versión:** 1.0  
 **Autor:** Angel — Nereira Technology and Business Solutions  
@@ -9,21 +9,21 @@
 
 ## 1. Identidad del proyecto
 
-**Nombre:** Gravital Sound  
+**Nombre:** Gravital Talk  
 **Organización GitHub:** `gravital` (o `nereira`)  
-**Repositorio:** `gravital-sound`  
-**Dominio:** `gravitalsound.dev` (documentación y landing)  
+**Repositorio:** `gravital-talk`  
+**Dominio:** `gravitaltalk.dev` (documentación y landing)  
 **Licencia:** Dual MIT / Apache-2.0 (estándar del ecosistema Rust, compatible con uso comercial y embebido)
 
-Gravital Sound es una división técnica bajo el paraguas de Gravital, la marca comercial de Nereira Technology and Business Solutions. Se posiciona junto a Gravital Cloud, Gravital Security (Quimera), Gravital ID y las demás divisiones como un componente de infraestructura que puede operar de forma independiente o integrarse con el ecosistema Gravital.
+Gravital Talk es una división técnica bajo el paraguas de Gravital, la marca comercial de Nereira Technology and Business Solutions. Se posiciona junto a Gravital Cloud, Gravital Security (Quimera), Gravital ID y las demás divisiones como un componente de infraestructura que puede operar de forma independiente o integrarse con el ecosistema Gravital.
 
-La relación con el ecosistema Gravital es clara pero no obligatoria: Gravital Sound funciona como biblioteca standalone para cualquier desarrollador, pero ofrece integración nativa con Gravital ID para autenticación de sesión y con Gravital Cloud para persistencia de métricas y gestión de sesiones cuando el contexto lo requiere.
+La relación con el ecosistema Gravital es clara pero no obligatoria: Gravital Talk funciona como biblioteca standalone para cualquier desarrollador, pero ofrece integración nativa con Gravital ID para autenticación de sesión y con Gravital Cloud para persistencia de métricas y gestión de sesiones cuando el contexto lo requiere.
 
 ---
 
 ## 2. Principio arquitectónico: portabilidad universal
 
-El requisito de que Gravital Sound se instale y ejecute en cualquier servidor, computadora, teléfono y navegador no es un feature posterior — es la restricción de diseño más importante del proyecto. Toda decisión arquitectónica se evalúa contra esta restricción.
+El requisito de que Gravital Talk se instale y ejecute en cualquier servidor, computadora, teléfono y navegador no es un feature posterior — es la restricción de diseño más importante del proyecto. Toda decisión arquitectónica se evalúa contra esta restricción.
 
 ### 2.1 Estrategia de portabilidad
 
@@ -37,7 +37,7 @@ La portabilidad se logra mediante una arquitectura de tres niveles:
 └────────────────────────┬────────────────────────────────┘
                          │ llaman funciones C via FFI
 ┌────────────────────────┴────────────────────────────────┐
-│              gravital-sound-ffi (C ABI)                  │
+│              gravital-talk-ffi (C ABI)                  │
 │  Interfaz C estable, header generado con cbindgen        │
 │  Compila a: .so (Linux), .dylib (macOS), .dll (Windows)  │
 │             .a (static), .wasm (browser)                 │
@@ -45,15 +45,15 @@ La portabilidad se logra mediante una arquitectura de tres niveles:
                          │ Rust internals
 ┌────────────────────────┴────────────────────────────────┐
 │              Rust Core (100% del protocolo)               │
-│  gravital-sound-core · transport · codec · metrics        │
+│  gravital-talk-core · transport · codec · metrics        │
 │  Sin dependencias de plataforma (no_std compatible        │
 │  en el core, std en transport/codec)                      │
 └─────────────────────────────────────────────────────────┘
 ```
 
-**Nivel 1 — Rust Core.** Todo el protocolo vive en Rust. Los tipos, la serialización, la máquina de estados, el jitter buffer, el manejo de codec, las métricas. Este código se compila una vez para cada target architecture y produce una biblioteca nativa. El crate `gravital-sound-core` es `no_std` compatible (puede compilar sin la librería estándar de Rust) para soportar entornos embebidos y WASM. Los crates de transporte y codec requieren `std` pero no asumen un sistema operativo específico.
+**Nivel 1 — Rust Core.** Todo el protocolo vive en Rust. Los tipos, la serialización, la máquina de estados, el jitter buffer, el manejo de codec, las métricas. Este código se compila una vez para cada target architecture y produce una biblioteca nativa. El crate `gravital-talk-core` es `no_std` compatible (puede compilar sin la librería estándar de Rust) para soportar entornos embebidos y WASM. Los crates de transporte y codec requieren `std` pero no asumen un sistema operativo específico.
 
-**Nivel 2 — FFI (Foreign Function Interface).** Un crate dedicado (`gravital-sound-ffi`) expone las funciones del core como funciones C con convención de llamada `extern "C"`. El header C se genera automáticamente con `cbindgen` en cada build. Esta es la interfaz estable que consume cualquier lenguaje que pueda llamar funciones C, que es prácticamente todos: Swift, Kotlin/JNI, Python/ctypes, Node.js/ffi-napi, C++, Go, C#, Ruby, Dart.
+**Nivel 2 — FFI (Foreign Function Interface).** Un crate dedicado (`gravital-talk-ffi`) expone las funciones del core como funciones C con convención de llamada `extern "C"`. El header C se genera automáticamente con `cbindgen` en cada build. Esta es la interfaz estable que consume cualquier lenguaje que pueda llamar funciones C, que es prácticamente todos: Swift, Kotlin/JNI, Python/ctypes, Node.js/ffi-napi, C++, Go, C#, Ruby, Dart.
 
 **Nivel 3 — SDKs idiomáticos.** Wrappers delgados en el lenguaje nativo de cada plataforma que envuelven las funciones C en APIs que se sienten naturales en cada ecosistema. El SDK de Swift usa tipos de Swift y manejo de memoria de Swift. El SDK de Kotlin usa coroutines. El SDK de TypeScript usa Promises. Ninguno reimplementa lógica de protocolo — todos llaman al mismo core compilado.
 
@@ -83,15 +83,15 @@ La portabilidad se logra mediante una arquitectura de tres niveles:
 
 | Plataforma | Método de instalación |
 |------------|----------------------|
-| Rust (cualquier plataforma) | `cargo add gravital-sound` — uso directo como crate |
-| C/C++ (cualquier plataforma) | Descargar release binario (`.so`/`.dylib`/`.dll` + header `gravital_sound.h`) o compilar desde source |
-| Python | `pip install gravital-sound` — wheel con binario precompilado (via `maturin` / PyO3) |
+| Rust (cualquier plataforma) | `cargo add gravital-talk` — uso directo como crate |
+| C/C++ (cualquier plataforma) | Descargar release binario (`.so`/`.dylib`/`.dll` + header `gravital_talk.h`) o compilar desde source |
+| Python | `pip install gravital-talk` — wheel con binario precompilado (via `maturin` / PyO3) |
 | Swift (iOS/macOS) | Swift Package Manager apuntando al repo, o CocoaPods con XCFramework precompilado |
-| Kotlin/Java (Android) | Dependencia Gradle: `implementation("dev.gravital:sound:0.1.0")` — AAR desde Maven Central o GitHub Packages |
-| TypeScript/JS (Node.js) | `npm install @gravital/sound` — binding nativo via `napi-rs` |
-| TypeScript/JS (Browser) | `npm install @gravital/sound-web` — módulo WASM + WebSocket transport |
+| Kotlin/Java (Android) | Dependencia Gradle: `implementation("dev.gravital:talk:0.1.0")` — AAR desde Maven Central o GitHub Packages |
+| TypeScript/JS (Node.js) | `npm install @gravital/talk` — binding nativo via `napi-rs` |
+| TypeScript/JS (Browser) | `npm install @gravital/talk-web` — módulo WASM + WebSocket transport |
 | Go | `cgo` linking contra la biblioteca C, o wrapper Go puro si se justifica |
-| Docker (servidor) | `docker pull gravital/sound-relay` — imagen mínima con el daemon de relay |
+| Docker (servidor) | `docker pull gravital/talk-relay` — imagen mínima con el daemon de relay |
 | Linux packages | `.deb` y `.rpm` para el CLI y el daemon (via `cargo-deb`, `cargo-generate-rpm`) |
 
 ---
@@ -99,7 +99,7 @@ La portabilidad se logra mediante una arquitectura de tres niveles:
 ## 3. Estructura del repositorio
 
 ```
-gravital-sound/
+gravital-talk/
 │
 ├── Cargo.toml                              # Workspace root
 ├── Cross.toml                              # Configuración de cross-compilation
@@ -137,7 +137,7 @@ gravital-sound/
 │
 ├── crates/
 │   │
-│   ├── gravital-sound-core/                # Núcleo del protocolo (no_std compatible)
+│   ├── gravital-talk-core/                # Núcleo del protocolo (no_std compatible)
 │   │   ├── Cargo.toml                      # [no default features, optional std]
 │   │   └── src/
 │   │       ├── lib.rs                      # Re-exports públicos
@@ -150,7 +150,7 @@ gravital-sound/
 │   │       ├── error.rs                    # Error types (no_std: no usa std::error::Error)
 │   │       └── constants.rs               # Versión del protocolo, defaults, límites
 │   │
-│   ├── gravital-sound-transport/           # Capa de transporte (requiere std)
+│   ├── gravital-talk-transport/           # Capa de transporte (requiere std)
 │   │   ├── Cargo.toml                      # Deps: tokio, socket2
 │   │   └── src/
 │   │       ├── lib.rs
@@ -160,7 +160,7 @@ gravital-sound/
 │   │       ├── jitter_buffer.rs            # Ring buffer con configurable depth
 │   │       └── session_manager.rs          # Orquestación de handshake y lifecycle
 │   │
-│   ├── gravital-sound-codec/               # Codecs y manejo de frames de audio
+│   ├── gravital-talk-codec/               # Codecs y manejo de frames de audio
 │   │   ├── Cargo.toml                      # Deps: opus (optional), rubato (resampling)
 │   │   └── src/
 │   │       ├── lib.rs
@@ -169,7 +169,7 @@ gravital-sound/
 │   │       ├── pcm.rs                      # PCM crudo (referencia/benchmark)
 │   │       └── resampler.rs               # Sample rate conversion
 │   │
-│   ├── gravital-sound-metrics/             # Observabilidad y medición
+│   ├── gravital-talk-metrics/             # Observabilidad y medición
 │   │   ├── Cargo.toml                      # Deps: tracing (optional)
 │   │   └── src/
 │   │       ├── lib.rs
@@ -178,7 +178,7 @@ gravital-sound/
 │   │       ├── loss.rs                     # Packet loss tracking (bitmap window)
 │   │       └── quality.rs                  # MOS-LQ estimation
 │   │
-│   ├── gravital-sound-io/                  # Audio I/O (captura y playback de hardware)
+│   ├── gravital-talk-io/                  # Audio I/O (captura y playback de hardware)
 │   │   ├── Cargo.toml                      # Deps: cpal
 │   │   └── src/
 │   │       ├── lib.rs
@@ -186,10 +186,10 @@ gravital-sound/
 │   │       ├── cpal_backend.rs             # Backend usando cpal (ALSA, CoreAudio, WASAPI, AAudio)
 │   │       └── null_backend.rs             # Null sink/source para servidores y tests
 │   │
-│   ├── gravital-sound-ffi/                 # C ABI — la capa de portabilidad universal
+│   ├── gravital-talk-ffi/                 # C ABI — la capa de portabilidad universal
 │   │   ├── Cargo.toml                      # crate-type = ["cdylib", "staticlib"]
 │   │   ├── cbindgen.toml                   # Config para generación del header C
-│   │   ├── build.rs                        # Genera gravital_sound.h en cada build
+│   │   ├── build.rs                        # Genera gravital_talk.h en cada build
 │   │   └── src/
 │   │       ├── lib.rs                      # Exports extern "C"
 │   │       ├── session.rs                  # gs_session_create, gs_session_connect, etc.
@@ -200,7 +200,7 @@ gravital-sound/
 │   │       ├── error.rs                    # gs_error_last, gs_error_message
 │   │       └── types.rs                    # Opaque handle types (GsSession*, GsTransport*)
 │   │
-│   └── gravital-sound-cli/                 # Herramienta de línea de comandos
+│   └── gravital-talk-cli/                 # Herramienta de línea de comandos
 │       ├── Cargo.toml                      # Deps: clap, tokio
 │       └── src/
 │           └── main.rs                     # Subcommands: send, receive, bench, info, doctor
@@ -215,21 +215,21 @@ gravital-sound/
 │   ├── swift/                              # SDK para iOS y macOS
 │   │   ├── Package.swift                   # Swift Package Manager manifest
 │   │   ├── Sources/
-│   │   │   └── GravitalSound/
-│   │   │       ├── GravitalSound.swift     # API pública de Swift
-│   │   │       ├── Session.swift           # GravitalSoundSession class
+│   │   │   └── GravitalTalk/
+│   │   │       ├── GravitalTalk.swift     # API pública de Swift
+│   │   │       ├── Session.swift           # GravitalTalkSession class
 │   │   │       ├── Transport.swift         # Wrapper de transporte
 │   │   │       ├── AudioIO.swift           # Wrapper de CoreAudio
 │   │   │       └── Metrics.swift           # Métricas observables
 │   │   ├── Tests/
-│   │   └── GravitalSoundFFI/              # XCFramework o bridging header
+│   │   └── GravitalTalkFFI/              # XCFramework o bridging header
 │   │       └── module.modulemap
 │   │
 │   ├── kotlin/                             # SDK para Android
 │   │   ├── build.gradle.kts
 │   │   ├── src/main/
-│   │   │   ├── kotlin/dev/gravital/sound/
-│   │   │   │   ├── GravitalSound.kt       # API pública de Kotlin
+│   │   │   ├── kotlin/dev/gravital/talk/
+│   │   │   │   ├── GravitalTalk.kt       # API pública de Kotlin
 │   │   │   │   ├── Session.kt             # Session con coroutines
 │   │   │   │   ├── Transport.kt
 │   │   │   │   ├── AudioIO.kt             # Wrapper de AAudio/Oboe
@@ -247,7 +247,7 @@ gravital-sound/
 │   │   ├── pyproject.toml                  # Build con maturin (PyO3)
 │   │   ├── Cargo.toml                      # PyO3 crate
 │   │   ├── src/lib.rs                      # PyO3 module bindings
-│   │   ├── gravital_sound/
+│   │   ├── gravital_talk/
 │   │   │   ├── __init__.py
 │   │   │   ├── session.py                  # Pythonic API
 │   │   │   ├── transport.py
@@ -263,7 +263,7 @@ gravital-sound/
 │   │   └── __tests__/
 │   │
 │   └── web/                                # SDK para navegadores (WASM)
-│       ├── package.json                    # @gravital/sound-web
+│       ├── package.json                    # @gravital/talk-web
 │       ├── Cargo.toml                      # wasm-bindgen crate
 │       ├── src/
 │       │   └── lib.rs                      # wasm-bindgen exports
@@ -320,7 +320,7 @@ gravital-sound/
 │   ├── build-wasm.sh                       # Compila WASM + genera JS glue
 │   ├── build-python-wheel.sh               # Genera wheels con maturin
 │   ├── build-all.sh                        # Build completo para todas las plataformas
-│   ├── generate-header.sh                  # Regenera gravital_sound.h con cbindgen
+│   ├── generate-header.sh                  # Regenera gravital_talk.h con cbindgen
 │   └── run-cross-tests.sh                  # Ejecuta tests en targets cross-compiled
 │
 ├── docker/
@@ -335,7 +335,7 @@ gravital-sound/
         ├── bench.yml                       # Benchmarks de regresión (semanal)
         ├── fuzz.yml                        # Fuzzing continuo (semanal)
         ├── release.yml                     # Publicación de crates, SDKs, binarios
-        └── docs.yml                        # Deploy de documentación a gravitalsound.dev
+        └── docs.yml                        # Deploy de documentación a gravitaltalk.dev
 ```
 
 ---
@@ -387,7 +387,7 @@ La capa FFI es el componente más crítico para la portabilidad. Define la inter
 
 ### 5.1 Convenciones de la API C
 
-**Prefijo:** Todas las funciones exportadas usan el prefijo `gs_` (Gravital Sound). Todos los tipos usan el prefijo `Gs`.
+**Prefijo:** Todas las funciones exportadas usan el prefijo `gs_` (Gravital Talk). Todos los tipos usan el prefijo `Gs`.
 
 **Manejo de memoria:** Los objetos creados por la biblioteca (sesiones, transportes, streams) se devuelven como handles opacos (`GsSession*`, `GsTransport*`). Cada `gs_*_create()` tiene un `gs_*_destroy()` correspondiente. La responsabilidad de liberar es siempre del llamador. La biblioteca nunca libera memoria que no haya creado ella.
 
@@ -398,10 +398,10 @@ La capa FFI es el componente más crítico para la portabilidad. Define la inter
 ### 5.2 API C de referencia
 
 ```c
-/* gravital_sound.h — generado por cbindgen, no editar manualmente */
+/* gravital_talk.h — generado por cbindgen, no editar manualmente */
 
-#ifndef GRAVITAL_SOUND_H
-#define GRAVITAL_SOUND_H
+#ifndef GRAVITAL_TALK_H
+#define GRAVITAL_TALK_H
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -486,14 +486,14 @@ GsResult   gs_session_metrics(const GsSession* session, GsMetrics* out);
 const char* gs_version(void);
 uint8_t     gs_protocol_version(void);
 
-#endif /* GRAVITAL_SOUND_H */
+#endif /* GRAVITAL_TALK_H */
 ```
 
 ### 5.3 Ejemplo de uso desde cada lenguaje
 
 **Rust (directo, sin FFI):**
 ```rust
-use gravital_sound::{Session, Config};
+use gravital_talk::{Session, Config};
 
 let config = Config::default().sample_rate(48000).channels(2);
 let mut session = Session::new(config)?;
@@ -506,9 +506,9 @@ while let Some(frame) = capture_audio() {
 
 **Swift (iOS/macOS):**
 ```swift
-import GravitalSound
+import GravitalTalk
 
-let session = try GravitalSoundSession(sampleRate: 48000, channels: 2)
+let session = try GravitalTalkSession(sampleRate: 48000, channels: 2)
 try session.connect(host: "192.168.1.50", port: 9000)
 
 session.onAudioReceived { samples in
@@ -518,7 +518,7 @@ session.onAudioReceived { samples in
 
 **Kotlin (Android):**
 ```kotlin
-val session = GravitalSound.createSession {
+val session = GravitalTalk.createSession {
     sampleRate = 48000
     channels = 2
 }
@@ -531,7 +531,7 @@ session.audioFlow.collect { samples ->
 
 **Python (servidor/scripting):**
 ```python
-import gravital_sound as gs
+import gravital_talk as gs
 
 session = gs.Session(sample_rate=48000, channels=2)
 session.connect("192.168.1.50", 9000)
@@ -543,14 +543,14 @@ while True:
 
 **TypeScript/Browser (WASM):**
 ```typescript
-import { GravitalSound } from '@gravital/sound-web';
+import { GravitalTalk } from '@gravital/talk-web';
 
-const session = await GravitalSound.create({
+const session = await GravitalTalk.create({
   sampleRate: 48000,
   channels: 2,
   transport: 'websocket'
 });
-await session.connect('wss://relay.gravitalsound.dev/session/abc123');
+await session.connect('wss://relay.gravitaltalk.dev/session/abc123');
 
 session.onAudio((samples) => {
   audioContext.playBuffer(samples);
@@ -589,7 +589,7 @@ session.onAudio((samples) => {
 
 ### Fase 2 — Core del protocolo (Semana 4-6)
 
-**Objetivo:** Implementar `gravital-sound-core` como crate `no_std` con serialización eficiente y máquina de estados correcta por construcción.
+**Objetivo:** Implementar `gravital-talk-core` como crate `no_std` con serialización eficiente y máquina de estados correcta por construcción.
 
 | Entregable | Criterio de aceptación |
 |------------|----------------------|
@@ -608,8 +608,8 @@ session.onAudio((samples) => {
 
 | Entregable | Criterio de aceptación |
 |------------|----------------------|
-| `gravital-sound-ffi` crate con exports `extern "C"` | Compila como `cdylib` + `staticlib` |
-| `gravital_sound.h` generado por `cbindgen` | Header válido, verificado con `gcc -fsyntax-only` |
+| `gravital-talk-ffi` crate con exports `extern "C"` | Compila como `cdylib` + `staticlib` |
+| `gravital_talk.h` generado por `cbindgen` | Header válido, verificado con `gcc -fsyntax-only` |
 | Build para Linux `.so`, macOS `.dylib`, Windows `.dll` | `cross build` exitoso para los 3 targets |
 | Build WASM | `wasm-pack build` produce `.wasm` + JS glue funcional |
 | Test de integración C | Un programa `.c` mínimo que crea sesión, codifica/decodifica paquete |
@@ -636,7 +636,7 @@ session.onAudio((samples) => {
 
 | Entregable | Criterio de aceptación |
 |------------|----------------------|
-| `gravital-sound-io` con backend `cpal` | Funciona en Linux (ALSA), macOS (CoreAudio), Windows (WASAPI) |
+| `gravital-talk-io` con backend `cpal` | Funciona en Linux (ALSA), macOS (CoreAudio), Windows (WASAPI) |
 | `null_backend` | Para servidores y CI (sin hardware de audio) |
 | Opus encode/decode | Roundtrip de audio a 48kHz/stereo/64kbps sin artefactos audibles |
 | Jitter buffer (ring buffer fijo) | Configurable 10-200ms, absorbe jitter simulado de ±20ms |
@@ -669,7 +669,7 @@ La prioridad "Alta" de los 4 primeros SDKs refleja la necesidad de cubrir servid
 | Transport negotiation en handshake | Dos peers pueden usar transportes diferentes (uno UDP, otro WebSocket) |
 | `examples/relay_server.rs` | Relay funcional que conecta un browser con un nativo |
 | Browser demo | Página web que se conecta al relay y reproduce audio de un sender nativo |
-| Docker image del relay | `docker pull gravital/sound-relay` funcional |
+| Docker image del relay | `docker pull gravital/talk-relay` funcional |
 
 ### Fase 8 — Estabilización y release (Semana 24-26)
 
@@ -683,9 +683,9 @@ La prioridad "Alta" de los 4 primeros SDKs refleja la necesidad de cubrir servid
 | `SECURITY.md` | Política de reporte de vulnerabilidades |
 | CI completo | Tests, cross-compile, benchmarks, fuzzing, docs |
 | Release binaries | Binarios precompilados para Linux/macOS/Windows en GitHub Releases |
-| Crate en crates.io | `gravital-sound-core`, `gravital-sound-transport`, etc. publicados |
+| Crate en crates.io | `gravital-talk-core`, `gravital-talk-transport`, etc. publicados |
 | SDK packages | PyPI, npm, Maven Central / GitHub Packages, SPM |
-| Landing page | `gravitalsound.dev` con docs, quickstart, benchmarks |
+| Landing page | `gravitaltalk.dev` con docs, quickstart, benchmarks |
 
 ---
 
@@ -717,7 +717,7 @@ La prioridad "Alta" de los 4 primeros SDKs refleja la necesidad de cubrir servid
 
 ### 7.3 Pipeline de benchmarks (semanal)
 
-Ejecuta benchmarks de `criterion` y compara contra la baseline almacenada. Si algún benchmark regresa más de 10%, el resultado se marca como warning. Si regresa más de 25%, se bloquea el merge. Los resultados se publican como artefacto del workflow y se pueden visualizar en `gravitalsound.dev/benchmarks`.
+Ejecuta benchmarks de `criterion` y compara contra la baseline almacenada. Si algún benchmark regresa más de 10%, el resultado se marca como warning. Si regresa más de 25%, se bloquea el merge. Los resultados se publican como artefacto del workflow y se pueden visualizar en `gravitaltalk.dev/benchmarks`.
 
 ---
 
@@ -727,18 +727,18 @@ Ejecuta benchmarks de `criterion` y compara contra la baseline almacenada. Si al
 
 | Crate | Nombre en Cargo.toml | Descripción |
 |-------|---------------------|-------------|
-| Core | `gravital-sound-core` | Tipos, serialización, estados. `no_std`. |
-| Transport | `gravital-sound-transport` | UDP, WebSocket. `std` required. |
-| Codec | `gravital-sound-codec` | Opus, PCM, resampling. |
-| Metrics | `gravital-sound-metrics` | RTT, jitter, loss, MOS. |
-| I/O | `gravital-sound-io` | Audio hardware via cpal. |
-| FFI | `gravital-sound-ffi` | C ABI exports. |
-| CLI | `gravital-sound-cli` | Binary: `gs` |
-| Facade | `gravital-sound` | Re-export de todos los crates para uso directo en Rust |
+| Core | `gravital-talk-core` | Tipos, serialización, estados. `no_std`. |
+| Transport | `gravital-talk-transport` | UDP, WebSocket. `std` required. |
+| Codec | `gravital-talk-codec` | Opus, PCM, resampling. |
+| Metrics | `gravital-talk-metrics` | RTT, jitter, loss, MOS. |
+| I/O | `gravital-talk-io` | Audio hardware via cpal. |
+| FFI | `gravital-talk-ffi` | C ABI exports. |
+| CLI | `gravital-talk-cli` | Binary: `gs` |
+| Facade | `gravital-talk` | Re-export de todos los crates para uso directo en Rust |
 
 ### 8.2 Prefijo del CLI
 
-El binario se llama `gs` (Gravital Sound). Subcommands:
+El binario se llama `gs` (Gravital Talk). Subcommands:
 
 ```
 gs send     --host 192.168.1.50 --port 9000 --input mic
@@ -757,13 +757,13 @@ Todas las funciones: `gs_*`. Todos los tipos: `Gs*`. Todas las constantes: `GS_*
 
 | Ecosistema | Nombre del paquete |
 |------------|-------------------|
-| crates.io | `gravital-sound` |
-| PyPI | `gravital-sound` |
-| npm (Node.js nativo) | `@gravital/sound` |
-| npm (WASM/browser) | `@gravital/sound-web` |
-| Maven / Gradle | `dev.gravital:sound` |
-| Swift Package Manager | `https://github.com/gravital/gravital-sound-swift` |
-| Docker Hub | `gravital/sound-relay` |
+| crates.io | `gravital-talk` |
+| PyPI | `gravital-talk` |
+| npm (Node.js nativo) | `@gravital/talk` |
+| npm (WASM/browser) | `@gravital/talk-web` |
+| Maven / Gradle | `dev.gravital:talk` |
+| Swift Package Manager | `https://github.com/gravital/gravital-talk-swift` |
+| Docker Hub | `gravital/talk-relay` |
 
 ---
 
@@ -801,13 +801,13 @@ El proyecto se evalúa contra criterios concretos y medibles:
 
 ## 11. Relación con el ecosistema Gravital
 
-Gravital Sound es una división autónoma con su propio repositorio, release cycle y versionado. Su relación con otras divisiones de Gravital se define a través de puntos de integración opcionales, nunca de dependencias obligatorias.
+Gravital Talk es una división autónoma con su propio repositorio, release cycle y versionado. Su relación con otras divisiones de Gravital se define a través de puntos de integración opcionales, nunca de dependencias obligatorias.
 
 **Gravital ID.** Un participante de sesión puede autenticarse con su Gravital ID durante el handshake extendido (fase de seguridad). Esto no es requerido para sesiones anónimas o entre peers que se autentican por otros medios. La integración se implementa como una extensión del handshake, usando el rango de tipos de mensaje `0x40-0x7F` reservado para extensiones de aplicación.
 
 **Gravital Cloud.** Las métricas de sesión (RTT, loss, MOS) pueden enviarse a Gravital Cloud para análisis histórico y dashboards. El relay server puede desplegarse como servicio dentro de la infraestructura de Gravital Cloud. Ninguno de estos es un requisito para que el protocolo funcione — son capas de valor añadido para usuarios que ya están en el ecosistema Gravital.
 
-**Gravital Security / Quimera.** Los endpoints que exponen servicios de Gravital Sound (especialmente el relay server) pueden evaluarse con Quimera como parte de auditorías de seguridad.
+**Gravital Security / Quimera.** Los endpoints que exponen servicios de Gravital Talk (especialmente el relay server) pueden evaluarse con Quimera como parte de auditorías de seguridad.
 
 ---
 
@@ -816,7 +816,7 @@ Gravital Sound es una división autónoma con su propio repositorio, release cyc
 El trabajo comienza con la **Fase 0** y la **Fase 1** en paralelo:
 
 **Inmediato (esta semana):**
-1. Crear el repositorio `gravital-sound` con la estructura de workspace.
+1. Crear el repositorio `gravital-talk` con la estructura de workspace.
 2. Configurar `Cargo.toml` raíz con todos los crates (vacíos, solo `lib.rs` con `// TODO`).
 3. Configurar CI básico en GitHub Actions (fmt, clippy, test).
 4. Validar cross-compilation a `aarch64-unknown-linux-gnu` y `wasm32-unknown-unknown`.
@@ -827,5 +827,5 @@ El trabajo comienza con la **Fase 0** y la **Fase 1** en paralelo:
 7. Redactar ADR-001 (Rust + C FFI como estrategia de portabilidad).
 
 **Semana 3:**
-8. Comenzar implementación de `gravital-sound-core` con `Packet` y `MessageType`.
+8. Comenzar implementación de `gravital-talk-core` con `Packet` y `MessageType`.
 9. Primeros tests unitarios y fuzzing setup.

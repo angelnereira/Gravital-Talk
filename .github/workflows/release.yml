@@ -129,10 +129,10 @@ jobs:
         run: |
           if [ "${{ matrix.no_default_features }}" = "true" ]; then
             cargo build --release --target ${{ matrix.target }} \
-              -p gravital-sound-cli --no-default-features
+              -p gravital-talk-cli --no-default-features
           else
             cargo build --release --target ${{ matrix.target }} \
-              -p gravital-sound-cli
+              -p gravital-talk-cli
           fi
 
       - name: Package archive
@@ -211,11 +211,11 @@ jobs:
       - name: Package
         run: |
           TAG="${{ needs.create-release.outputs.tag }}"
-          tar -C sdks/web -czf "gravital-sound-web-${TAG}.tar.gz" pkg
+          tar -C sdks/web -czf "gravital-talk-web-${TAG}.tar.gz" pkg
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.create-release.outputs.tag }}
-          files: gravital-sound-web-*.tar.gz
+          files: gravital-talk-web-*.tar.gz
 
   # ------------------------------------------------------------------
   # 5) Marca el release como público una vez que todos los assets
