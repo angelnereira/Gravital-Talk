@@ -120,12 +120,26 @@
         style="@style/Widget.MaterialComponents.Button.UnelevatedButton"
         android:layout_width="200dp"
         android:layout_height="200dp"
-        android:layout_marginBottom="64dp"
+        android:layout_marginBottom="16dp"
         android:text="@string/ptt_press"
         android:textSize="18sp"
         android:enabled="false"
         app:cornerRadius="100dp"
         app:backgroundTint="@color/ptt_idle"
+        app:layout_constraintBottom_toTopOf="@id/btnHangUp"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent" />
+
+    <!-- ── Colgar ──────────────────────────────────────────── -->
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btnHangUp"
+        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="32dp"
+        android:text="@string/btn_hang_up"
+        android:visibility="gone"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent" />

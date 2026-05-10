@@ -17,8 +17,9 @@ use jni::JNIEnv;
 use std::ffi::CString;
 
 use crate::{
-    gs_session_accept, gs_session_close, gs_session_connect, gs_session_create,
-    gs_session_destroy, gs_session_id, gs_session_is_peer_ptt_active, gs_session_metrics,
+    gs_discover_public_addr, gs_session_accept, gs_session_accept_any, gs_session_close,
+    gs_session_connect, gs_session_create, gs_session_destroy, gs_session_id,
+    gs_session_is_peer_ptt_active, gs_session_local_port, gs_session_metrics,
     gs_session_ptt_press, gs_session_ptt_release, gs_session_recv_audio, gs_session_send_audio,
     GsConfig, GsMetrics, GsSessionHandle, GsStatus,
 };
@@ -286,4 +287,65 @@ pub extern "system" fn Java_com_gravitaltalk_GravitalTalkJni_nativeClose(
         return status_jint(GsStatus::GS_ERR_NULL_POINTER);
     }
     status_jint(unsafe { gs_session_close(handle as *mut GsSessionHandle) })
+}
+
+/// `GravitalTalkJni.nativeGetLocalPort(handle: Long): Int`
+///
+/// Retorna el puerto UDP local del socket (>0), o 0 en error.
+#[no_mangle]
+pub extern "system" fn Java_com_gravitaltalk_GravitalTalkJni_nativeGetLocalPort(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jint {
+    if handle == 0 {
+        return 0;
+    }
+    let mut port: u16 = 0;
+    let st = unsafe { gs_session_local_port(handle as *mut GsSessionHandle, &mut port) };
+    if st == GsStatus::GS_OK { port as jint } else { 0 }
+}
+
+/// `GravitalTalkJni.nativeDiscoverPublicAddr(bindPort: Int): String?`
+///
+/// Descubre la IP pública via STUN. Retorna `"ip:port"` o `null` si falla.
+/// Bloqueante (~5 s de timeout por servidor).
+#[no_mangle]
+pub extern "system" fn Java_com_gravitaltalk_GravitalTalkJni_nativeDiscoverPublicAddr(
+    mut env: JNIEnv,
+    _class: JClass,
+    bind_port: jint,
+) -> jstring {
+    let mut buf = [0i8; 64];
+    let st = unsafe {
+        gs_discover_public_addr(bind_port as u16, buf.as_mut_ptr(), buf.len())
+    };
+    if st != GsStatus::GS_OK {
+        return std::ptr::null_mut();
+    }
+    // Convertir C-string a Java String.
+    let c_str = unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) };
+    let s = match c_str.to_str() {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    env.new_string(s)
+        .map(|js| js.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+/// `GravitalTalkJni.nativeAcceptAny(handle: Long): Int`
+///
+/// Handshake servidor que acepta el primer cliente de cualquier dirección.
+/// Bloqueante hasta completar o error.
+#[no_mangle]
+pub extern "system" fn Java_com_gravitaltalk_GravitalTalkJni_nativeAcceptAny(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jint {
+    if handle == 0 {
+        return status_jint(GsStatus::GS_ERR_NULL_POINTER);
+    }
+    status_jint(unsafe { gs_session_accept_any(handle as *mut GsSessionHandle) })
 }

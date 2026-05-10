@@ -256,6 +256,11 @@ impl Session {
         self.session_id.load(Ordering::Acquire)
     }
 
+    /// Dirección local del transporte subyacente.
+    pub fn local_addr(&self) -> Result<SocketAddr, TransportError> {
+        self.transport.local_addr()
+    }
+
     /// Ejecuta el handshake criptográfico 4-way.
     pub async fn handshake(
         &self,
@@ -305,6 +310,43 @@ impl Session {
                     .lock()
                     .await
                     .transition(SessionEvent::HandshakeTimeout);
+                Err(TransportError::Timeout)
+            }
+        }
+    }
+
+    /// Handshake servidor que acepta el primer cliente que llegue desde
+    /// cualquier dirección (modo QR pairing — el servidor no conoce la IP
+    /// del cliente de antemano).
+    ///
+    /// El peer queda fijado automáticamente tras recibir el primer
+    /// `ClientHello` válido, igual que en `handshake()` para rol `Server`,
+    /// salvo que no se filtra por IP de origen.
+    pub async fn handshake_open(&self) -> Result<(), TransportError> {
+        self.state
+            .lock()
+            .await
+            .transition(SessionEvent::StartAccept)
+            .map_err(|_| TransportError::InvalidState("cannot start open handshake"))?;
+
+        let deadline = Duration::from_millis(HANDSHAKE_TIMEOUT_MS);
+        let result = timeout(deadline, self.handshake_server_any()).await;
+
+        match result {
+            Ok(Ok(())) => {
+                self.state
+                    .lock()
+                    .await
+                    .transition(SessionEvent::HandshakeOk)
+                    .map_err(|_| TransportError::InvalidState("handshake_ok"))?;
+                Ok(())
+            }
+            Ok(Err(e)) => {
+                let _ = self.state.lock().await.transition(SessionEvent::HandshakeTimeout);
+                Err(e)
+            }
+            Err(_) => {
+                let _ = self.state.lock().await.transition(SessionEvent::HandshakeTimeout);
                 Err(TransportError::Timeout)
             }
         }
@@ -599,6 +641,131 @@ impl Session {
             .await?;
 
         // 9. Almacenar claves.
+        *self.encrypt_key.lock().await = Some(enc_key);
+        *self.decrypt_key.lock().await = Some(dec_key);
+        Ok(())
+    }
+
+    // ── Handshake servidor abierto (acepta cualquier cliente) ───────────────
+
+    /// Igual que `handshake_server` pero acepta el primer `ClientHello` válido
+    /// de cualquier dirección. Fija `self.peer` cuando lo encuentra.
+    async fn handshake_server_any(&self) -> Result<(), TransportError> {
+        let mut buf = vec![0u8; self.config.mtu];
+
+        // 1. Esperar ClientHello de cualquier peer.
+        let (client_hello, peer): (ClientHello, SocketAddr) = loop {
+            let (n, from) = self.transport.recv(&mut buf).await?;
+            let view = match PacketView::decode(&buf[..n]) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            if view.header().msg_type != MessageType::HandshakeClientHello.code() {
+                continue;
+            }
+            match ClientHello::decode(view.payload()) {
+                Ok(h) => break (h, from),
+                Err(_) => continue,
+            }
+        };
+
+        // Fijar peer antes de proceder — desde aquí todo el tráfico va a esa dirección.
+        *self.peer.lock().await = Some(peer);
+
+        // El resto del handshake es idéntico a handshake_server pero usando el
+        // `peer` descubierto en lugar del parámetro estático.
+        let client_ver = client_hello.protocol_version;
+        if client_ver < PROTOCOL_VERSION_MIN {
+            return Err(TransportError::Handshake(
+                "version negotiation failed: client version too old",
+            ));
+        }
+        let negotiated_version = client_ver.min(PROTOCOL_VERSION_MAX);
+
+        let server_secret = EphemeralSecret::random_from_rng(rand_core::OsRng);
+        let server_pubkey = PublicKey::from(&server_secret);
+        let server_nonce = random_nonce_32();
+        let session_id = rand_u32_secure();
+        self.session_id.store(session_id, Ordering::Release);
+
+        let chosen_codec = if self.config.supported_codecs.contains(&client_hello.codec_preferred) {
+            client_hello.codec_preferred
+        } else {
+            *self
+                .config
+                .supported_codecs
+                .first()
+                .ok_or(TransportError::Handshake("no supported codecs configured"))?
+        };
+        self.negotiated_codec.store(chosen_codec, Ordering::Release);
+
+        let server_hello = ServerHello {
+            ephemeral_public_key: *server_pubkey.as_bytes(),
+            server_nonce,
+            session_id,
+            protocol_version: negotiated_version,
+            codec_accepted: chosen_codec,
+            sample_rate: client_hello.sample_rate,
+            channels: client_hello.channels,
+            frame_duration_ms: client_hello.frame_duration_ms,
+            max_bitrate: client_hello.max_bitrate.min(self.config.max_bitrate),
+            capability_flags: client_hello.capability_flags & self.config.capability_flags,
+        };
+        let mut sh_payload = [0u8; ServerHello::SIZE];
+        server_hello.encode(&mut sh_payload).map_err(TransportError::Protocol)?;
+        self.send_control(MessageType::HandshakeServerHello, session_id, &sh_payload, peer)
+            .await?;
+
+        let client_pubkey = PublicKey::from(client_hello.ephemeral_public_key);
+        let shared = server_secret.diffie_hellman(&client_pubkey);
+        let transcript = build_transcript(&client_hello.client_nonce, &server_nonce, session_id);
+        let (client_enc, client_dec) = derive_session_keys(shared.as_bytes(), &transcript);
+        let (enc_key, dec_key) = (client_dec, client_enc);
+
+        let ke_msg: KeyExchangeMsg = loop {
+            let (n, from) = self.transport.recv(&mut buf).await?;
+            if from != peer {
+                continue;
+            }
+            let view = match PacketView::decode(&buf[..n]) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            if view.header().msg_type == MessageType::HandshakeClientHello.code() {
+                self.send_control(
+                    MessageType::HandshakeServerHello,
+                    session_id,
+                    &sh_payload,
+                    peer,
+                )
+                .await?;
+                continue;
+            }
+            if view.header().msg_type != MessageType::HandshakeKeyExchange.code() {
+                continue;
+            }
+            match KeyExchangeMsg::decode(view.payload()) {
+                Ok(m) => break m,
+                Err(e) => return Err(TransportError::Protocol(e)),
+            }
+        };
+
+        if ke_msg.session_id != session_id {
+            return Err(TransportError::Handshake("session_id mismatch in KeyExchange"));
+        }
+
+        let expected_client_tag = derive_auth_tag(&dec_key, b"GS-client-fin-v1", &transcript);
+        if !constant_time_eq(&ke_msg.auth_tag, &expected_client_tag) {
+            return Err(TransportError::AuthenticationFailed("client auth tag mismatch"));
+        }
+
+        let server_auth_tag = derive_auth_tag(&enc_key, b"GS-server-fin-v1", &transcript);
+        let confirm = SessionConfirm { session_id, server_auth_tag };
+        let mut sc_payload = [0u8; SessionConfirm::SIZE];
+        confirm.encode(&mut sc_payload).map_err(TransportError::Protocol)?;
+        self.send_control(MessageType::HandshakeSessionConfirm, session_id, &sc_payload, peer)
+            .await?;
+
         *self.encrypt_key.lock().await = Some(enc_key);
         *self.decrypt_key.lock().await = Some(dec_key);
         Ok(())

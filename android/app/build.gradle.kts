@@ -60,4 +60,13 @@ dependencies {
     implementation(libs.lifecycle.viewmodel.ktx)
     implementation(libs.lifecycle.runtime.ktx)
     implementation(libs.coroutines.android)
+
+    // QR generation
+    implementation(libs.zxing.core)
+
+    // QR scanning (CameraX + ML Kit)
+    implementation(libs.camera.camera2)
+    implementation(libs.camera.lifecycle)
+    implementation(libs.camera.view)
+    implementation(libs.mlkit.barcode)
 }
