@@ -32,7 +32,7 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        viewModel = ViewModelProvider(this)[PttViewModel::class.java]
+        viewModel = ViewModelProvider(this, PttViewModelFactory(applicationContext))[PttViewModel::class.java]
 
         ensureMicPermission()
         setupUi()
@@ -124,8 +124,11 @@ class MainActivity : AppCompatActivity() {
                 binding.tilRelay.isEnabled = true
                 binding.tilRoom.isEnabled = true
             }
-            is PttConnectionState.Connecting -> {
-                binding.tvStatus.text = getString(R.string.status_connecting)
+            is PttConnectionState.Connecting, is PttConnectionState.Reconnecting -> {
+                binding.tvStatus.text = if (state is PttConnectionState.Reconnecting)
+                    getString(R.string.status_reconnecting)
+                else
+                    getString(R.string.status_connecting)
                 binding.btnConnect.isEnabled = false
                 binding.btnPtt.isEnabled = false
                 binding.tilRelay.isEnabled = false

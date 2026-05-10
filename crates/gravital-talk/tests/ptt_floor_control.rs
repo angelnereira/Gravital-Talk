@@ -10,7 +10,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gravital_talk::{Config, Session, SessionRole, UdpConfig, UdpTransport};
+use gravital_talk::{Config, Session, SessionRole, Transport, UdpConfig, UdpTransport};
 
 async fn make_loopback_pair() -> (Arc<Session>, Arc<Session>) {
     let t_srv = Arc::new(

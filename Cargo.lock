@@ -912,6 +912,7 @@ dependencies = [
  "crossterm",
  "gravital-talk",
  "gravital-talk-io",
+ "gravital-talk-relay",
  "gravital-talk-transport",
  "hound",
  "tokio",

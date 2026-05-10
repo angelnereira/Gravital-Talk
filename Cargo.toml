@@ -53,6 +53,7 @@ gravital-talk-transport = { path = "crates/gravital-talk-transport", version = "
 gravital-talk-codec     = { path = "crates/gravital-talk-codec", version = "0.1.0-alpha.1" }
 gravital-talk-io        = { path = "crates/gravital-talk-io", version = "0.1.0-alpha.1" }
 gravital-talk           = { path = "crates/gravital-talk", version = "0.1.0-alpha.1" }
+gravital-talk-relay     = { path = "crates/gravital-talk-relay", version = "0.1.0-alpha.1" }
 
 # Async runtime + networking
 tokio             = { version = "1.40", default-features = false }

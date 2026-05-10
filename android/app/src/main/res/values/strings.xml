@@ -5,6 +5,7 @@
     <string name="ptt_release">Suelta para parar</string>
     <string name="status_idle">En espera</string>
     <string name="status_connecting">Conectando…</string>
+    <string name="status_reconnecting">Reconectando…</string>
     <string name="status_connected">Conectado</string>
     <string name="status_transmitting">Transmitiendo</string>
     <string name="status_peer_transmitting">Peer transmitiendo</string>
