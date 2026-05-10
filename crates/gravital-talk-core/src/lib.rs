@@ -18,8 +18,10 @@ pub mod checksum;
 pub mod constants;
 pub mod crypto;
 pub mod error;
+pub mod floor;
 pub mod fragment;
 pub mod header;
+pub mod identity;
 pub mod message;
 pub mod packet;
 pub mod session;
@@ -31,11 +33,17 @@ pub use constants::{
 };
 pub use crypto::{decrypt_in_place, encrypt_in_place, make_nonce, SessionKey, KEY_SIZE, TAG_SIZE};
 pub use error::Error;
+pub use floor::{
+    FloorController, FloorEvent, FloorPayload, FloorState, FloorTransitionError,
+    FLOOR_TIMEOUT_MS,
+};
 pub use fragment::{FragmentHeader, FragmentReassembler};
 pub use header::{Flags, PacketHeader};
+pub use identity::{AuthChallengePayload, AuthResponsePayload, Identity, IdentityPublic};
 pub use message::{
-    ClientHello, ControlBitrateMsg, ErrorCode, FecHeader, HandshakeAccept, HandshakeConfirm,
-    HandshakeInit, KeyExchangeMsg, MessageType, ServerHello, SessionConfirm,
+    AuthChallengeMsg, AuthResponseMsg, ClientHello, ControlBitrateMsg, ErrorCode, FecHeader,
+    HandshakeAccept, HandshakeConfirm, HandshakeInit, KeyExchangeMsg, MessageType, ServerHello,
+    SessionConfirm,
 };
 pub use packet::{Packet, PacketView};
 pub use session::{SessionEvent, SessionId, SessionState, SessionStateMachine, StateTransitionError};

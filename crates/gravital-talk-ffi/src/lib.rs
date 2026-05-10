@@ -469,11 +469,72 @@ pub extern "C" fn gs_error_clear() {
     LAST_ERROR.with(|e| *e.borrow_mut() = None);
 }
 
+/// Solicita el floor (permiso para transmitir).
+///
+/// Envía `FloorRequest` al peer/relay. El resultado real (Grant/Deny)
+/// llega asíncronamente vía `dispatch_packet`.
+#[no_mangle]
+pub unsafe extern "C" fn gs_session_ptt_press(handle: *mut GsSessionHandle) -> GsStatus {
+    if handle.is_null() {
+        return GsStatus::GS_ERR_NULL_POINTER;
+    }
+    let inner = unsafe { &*(handle as *mut SessionInner) };
+    let session = inner.session.clone();
+    match inner.runtime.block_on(async move { session.ptt_press().await }) {
+        Ok(()) => GsStatus::GS_OK,
+        Err(e) => {
+            set_last_error(format!("ptt_press: {e}"));
+            GsStatus::GS_ERR_IO
+        }
+    }
+}
+
+/// Libera el floor (fin de transmisión).
+#[no_mangle]
+pub unsafe extern "C" fn gs_session_ptt_release(handle: *mut GsSessionHandle) -> GsStatus {
+    if handle.is_null() {
+        return GsStatus::GS_ERR_NULL_POINTER;
+    }
+    let inner = unsafe { &*(handle as *mut SessionInner) };
+    let session = inner.session.clone();
+    match inner.runtime.block_on(async move { session.ptt_release().await }) {
+        Ok(()) => GsStatus::GS_OK,
+        Err(e) => {
+            set_last_error(format!("ptt_release: {e}"));
+            GsStatus::GS_ERR_IO
+        }
+    }
+}
+
+/// Devuelve `1` si el peer remoto está transmitiendo actualmente, `0` si no.
+#[no_mangle]
+pub unsafe extern "C" fn gs_session_is_peer_ptt_active(handle: *mut GsSessionHandle) -> c_int {
+    if handle.is_null() {
+        return 0;
+    }
+    let inner = unsafe { &*(handle as *mut SessionInner) };
+    if inner.session.is_peer_ptt_active() { 1 } else { 0 }
+}
+
+/// Devuelve el `local_ssrc` de la sesión.
+#[no_mangle]
+pub unsafe extern "C" fn gs_session_local_ssrc(handle: *mut GsSessionHandle, out_ssrc: *mut u32) -> GsStatus {
+    if handle.is_null() || out_ssrc.is_null() {
+        return GsStatus::GS_ERR_NULL_POINTER;
+    }
+    let inner = unsafe { &*(handle as *mut SessionInner) };
+    unsafe { *out_ssrc = inner.session.local_ssrc() };
+    GsStatus::GS_OK
+}
+
 /// Retorna `GS_OK` — útil como smoke test de linkado.
 #[no_mangle]
 pub extern "C" fn gs_ping() -> c_int {
     0
 }
+
+#[cfg(feature = "android")]
+pub mod jni_bridge;
 
 #[cfg(test)]
 mod tests {

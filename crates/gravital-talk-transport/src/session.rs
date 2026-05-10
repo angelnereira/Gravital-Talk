@@ -118,8 +118,12 @@ pub struct Session {
     fec_enc: Mutex<FecEncoder>,
     /// Decoder FEC (recupera un frame perdido por ventana).
     fec_dec: Mutex<FecDecoder>,
-    /// `true` mientras el usuario mantiene presionado PTT.
+    /// `true` mientras el usuario local tiene el PTT presionado.
     ptt_active: AtomicBool,
+    /// `true` cuando el peer remoto está transmitiendo (recibido ControlResume).
+    peer_ptt_active: AtomicBool,
+    /// SSRC del participante local (derivado del session_id).
+    local_ssrc: AtomicU32,
 }
 
 impl core::fmt::Debug for Session {
@@ -155,6 +159,8 @@ impl Session {
             fec_enc: Mutex::new(FecEncoder::with_default_window()),
             fec_dec: Mutex::new(FecDecoder::with_default_window()),
             ptt_active: AtomicBool::new(false),
+            peer_ptt_active: AtomicBool::new(false),
+            local_ssrc: AtomicU32::new(0),
         }
     }
 
@@ -178,24 +184,31 @@ impl Session {
 
     // ── PTT (Push-to-Talk) ──────────────────────────────────────────────────
 
-    /// Activa PTT: marca el flag local y envía `ControlResume` al peer.
+    /// Activa PTT: marca el flag local y envía FloorRequest + ControlResume al peer.
     ///
-    /// El peer recibe la señal y puede mostrar un indicador de "alguien habla".
-    /// El audio debe enviarse con `send_audio()` mientras PTT esté activo.
+    /// FloorRequest es la señal de floor control (árbitro/relay la maneja).
+    /// ControlResume es el indicador inmediato para el peer (mostrar "alguien habla").
     pub async fn ptt_press(&self) -> Result<(), TransportError> {
         self.ptt_active.store(true, Ordering::Release);
         if let Some(p) = *self.peer.lock().await {
             let sid = self.session_id();
+            // SSRC local = session_id como proxy (sin SSRC dedicado aún)
+            let mut ssrc_buf = [0u8; 4];
+            ssrc_buf.copy_from_slice(&sid.to_be_bytes());
+            self.send_control(MessageType::FloorRequest, sid, &ssrc_buf, p).await?;
             self.send_control(MessageType::ControlResume, sid, &[], p).await?;
         }
         Ok(())
     }
 
-    /// Desactiva PTT: limpia el flag local y envía `ControlPause` al peer.
+    /// Desactiva PTT: limpia el flag local y envía FloorRelease + ControlPause.
     pub async fn ptt_release(&self) -> Result<(), TransportError> {
         self.ptt_active.store(false, Ordering::Release);
         if let Some(p) = *self.peer.lock().await {
             let sid = self.session_id();
+            let mut ssrc_buf = [0u8; 4];
+            ssrc_buf.copy_from_slice(&sid.to_be_bytes());
+            self.send_control(MessageType::FloorRelease, sid, &ssrc_buf, p).await?;
             self.send_control(MessageType::ControlPause, sid, &[], p).await?;
         }
         Ok(())
@@ -205,6 +218,21 @@ impl Session {
     #[must_use]
     pub fn is_ptt_active(&self) -> bool {
         self.ptt_active.load(Ordering::Acquire)
+    }
+
+    /// Devuelve `true` si el peer remoto está actualmente transmitiendo.
+    ///
+    /// Se actualiza cuando se reciben mensajes `ControlResume` (inicio de
+    /// transmisión del peer) y `ControlPause` (fin de transmisión).
+    #[must_use]
+    pub fn is_peer_ptt_active(&self) -> bool {
+        self.peer_ptt_active.load(Ordering::Acquire)
+    }
+
+    /// SSRC local (disponible después del handshake).
+    #[must_use]
+    pub fn local_ssrc(&self) -> u32 {
+        self.local_ssrc.load(Ordering::Acquire)
     }
 
     #[must_use]
@@ -381,6 +409,10 @@ impl Session {
 
                 // 7. Almacenar estado de sesión.
                 self.session_id.store(session_id, Ordering::Release);
+                // SSRC local = los primeros 4 bytes del session_id XOR con
+                // los últimos 4 de la clave de cifrado (distingue cliente/servidor).
+                let ssrc = session_id ^ u32::from_be_bytes([enc_key[0], enc_key[1], enc_key[2], enc_key[3]]);
+                self.local_ssrc.store(ssrc, Ordering::Release);
                 self.negotiated_codec.store(server_hello.codec_accepted, Ordering::Release);
                 *self.encrypt_key.lock().await = Some(enc_key);
                 *self.decrypt_key.lock().await = Some(dec_key);
@@ -877,10 +909,42 @@ impl Session {
                 }
             }
             Ok(MessageType::ControlPause) => {
-                tracing::debug!("remote peer released PTT (ControlPause)");
+                self.peer_ptt_active.store(false, Ordering::Release);
+                tracing::debug!("remote peer released PTT");
             }
             Ok(MessageType::ControlResume) => {
-                tracing::debug!("remote peer pressed PTT (ControlResume)");
+                self.peer_ptt_active.store(true, Ordering::Release);
+                tracing::debug!("remote peer pressed PTT");
+            }
+            // ── Floor Control ─────────────────────────────────────────────────
+            Ok(MessageType::FloorRequest) => {
+                tracing::debug!("floor request received from peer");
+                // En modo P2P optimista, conceder el floor inmediatamente si no
+                // estamos transmitiendo nosotros. El árbitro real está en el relay.
+                if !self.ptt_active.load(Ordering::Acquire) {
+                    if let Some(p) = *self.peer.lock().await {
+                        let ssrc = self.session_id();
+                        let mut payload_buf = [0u8; 4];
+                        payload_buf.copy_from_slice(&ssrc.to_be_bytes());
+                        let _ = self
+                            .send_control(MessageType::FloorGrant, self.session_id(), &payload_buf, p)
+                            .await;
+                    }
+                }
+            }
+            Ok(MessageType::FloorGrant) => {
+                tracing::debug!("floor granted");
+            }
+            Ok(MessageType::FloorDeny) => {
+                tracing::debug!("floor denied");
+                self.ptt_active.store(false, Ordering::Release);
+            }
+            Ok(MessageType::FloorRelease) => {
+                self.peer_ptt_active.store(false, Ordering::Release);
+                tracing::debug!("remote peer released floor");
+            }
+            Ok(MessageType::FloorTaken) => {
+                tracing::debug!("floor taken by another peer");
             }
             Ok(MessageType::ControlBitrate) => {
                 if let Ok(msg) = ControlBitrateMsg::decode(view.payload()) {

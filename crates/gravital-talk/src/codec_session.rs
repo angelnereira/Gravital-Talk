@@ -21,8 +21,10 @@
 //! # Ok(()) }
 //! ```
 
+use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use gravital_talk_codec::{build_pair, CodecError, CodecId, Decoder, Encoder};
 use gravital_talk_transport::{
@@ -53,6 +55,11 @@ pub struct CodecSession {
     channels: u8,
     frame_samples: usize,
     mtu: usize,
+    /// Last sequence number received; used for gap detection (PLC).
+    last_rx_seq: AtomicU32,
+    /// Buffered PCM frames to deliver before the next network frame.
+    /// Populated with silence frames when a gap is detected.
+    plc_queue: Mutex<VecDeque<Vec<i16>>>,
 }
 
 impl core::fmt::Debug for CodecSession {
@@ -97,6 +104,8 @@ impl CodecSession {
             channels,
             frame_samples,
             mtu,
+            last_rx_seq: AtomicU32::new(u32::MAX),
+            plc_queue: Mutex::new(VecDeque::new()),
         })
     }
 
@@ -153,16 +162,52 @@ impl CodecSession {
     }
 
     /// Recibe el próximo frame y lo decodifica a samples PCM i16.
-    /// Devuelve el vector de samples (length = samples_per_channel * channels).
+    ///
+    /// Si se detecta una brecha de secuencia (paquetes perdidos), inserta hasta
+    /// 4 frames de silencio en la cola interna (PLC básico). Las llamadas
+    /// posteriores devuelven esos frames de silencio sin bloquear la red.
     pub async fn recv_samples(&self) -> Result<Vec<i16>, CodecSessionError> {
+        // Return any buffered PLC frames before going to the network.
+        {
+            let mut q = self.plc_queue.lock().await;
+            if let Some(pcm) = q.pop_front() {
+                return Ok(pcm);
+            }
+        }
+
         let frame: Frame = self.inner.recv_audio().await?;
         let expected = self.frame_samples * self.channels as usize;
-        let mut pcm = vec![0i16; expected.max(5760)]; // margin para PLC
-        let mut dec = self.decoder.lock().await;
-        let produced = dec.decode(&frame.payload, &mut pcm)?;
-        let total = produced * self.channels as usize;
-        pcm.truncate(total);
-        Ok(pcm)
+
+        // Detect sequence gap; u32::MAX sentinel = first frame ever received.
+        let prev = self.last_rx_seq.load(Ordering::Relaxed);
+        let gap: u32 = if prev == u32::MAX {
+            0
+        } else {
+            frame.sequence.wrapping_sub(prev).saturating_sub(1)
+        };
+        self.last_rx_seq.store(frame.sequence, Ordering::Relaxed);
+
+        // Decode the real frame.
+        let mut pcm = vec![0i16; expected.max(5760)];
+        let produced = {
+            let mut dec = self.decoder.lock().await;
+            dec.decode(&frame.payload, &mut pcm)?
+        };
+        pcm.truncate(produced * self.channels as usize);
+
+        if gap == 0 {
+            return Ok(pcm);
+        }
+
+        // Gap detected: prepend silence frames (up to 4) then the real frame.
+        let silence_count = gap.min(4) as usize;
+        let mut q = self.plc_queue.lock().await;
+        for _ in 0..silence_count {
+            q.push_back(vec![0i16; expected]);
+        }
+        q.push_back(pcm);
+        // Safety: we just pushed silence_count + 1 items, so pop_front is Some.
+        Ok(q.pop_front().unwrap())
     }
 
     pub async fn close(&self) -> Result<(), CodecSessionError> {

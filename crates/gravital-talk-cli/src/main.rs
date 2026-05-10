@@ -3,6 +3,7 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -10,6 +11,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
+use crossterm::{
+    event::{self, Event, KeyCode, KeyModifiers},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
 use gravital_talk::{
     CodecId, CodecSession, Config, Session, SessionRole, Transport, UdpConfig, UdpTransport,
 };
@@ -140,12 +146,36 @@ enum Command {
     },
     /// Verifica el entorno: versión, red, permisos.
     Doctor,
-    /// Relay básico que hace echo de paquetes entre pares con el mismo `session_id`.
+    /// Relay productivo: UDP + WebSocket + floor control + rooms + métricas Prometheus.
+    ///
+    /// Ejemplo:
+    ///   gs relay --udp-port 9000 --ws-port 9090 --obs-port 9100
+    ///   gs relay --config /etc/gs-relay.toml
     Relay {
+        /// Ruta a un TOML de configuración (parámetros CLI tienen precedencia).
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// Bind address para tráfico UDP.
         #[arg(long, default_value = "0.0.0.0")]
         bind: String,
+        /// Puerto UDP de escucha (default: 9000).
+        #[arg(long, default_value_t = 9000)]
+        udp_port: u16,
+        /// Puerto WebSocket de escucha (default: 9090).
+        #[arg(long, default_value_t = 9090)]
+        ws_port: u16,
+        /// Puerto HTTP de observabilidad / rooms API (default: 9100).
         #[arg(long, default_value_t = 9100)]
-        port: u16,
+        obs_port: u16,
+        /// TTL de sesiones inactivas en segundos (default: 300).
+        #[arg(long, default_value_t = 300)]
+        session_ttl: u64,
+        /// Máximo número de sesiones simultáneas (default: 10000).
+        #[arg(long, default_value_t = 10_000)]
+        max_sessions: usize,
+        /// Máximo de peers por sesión (default: 50).
+        #[arg(long, default_value_t = 50)]
+        max_peers: usize,
     },
     /// Operaciones de sala (room codes para descubrimiento sin intercambiar IPs).
     Room {
@@ -157,6 +187,50 @@ enum Command {
         /// Segundos a escuchar (default: 3).
         #[arg(long, default_value_t = 3)]
         timeout: u64,
+    },
+    /// Push-to-Talk interactivo en tiempo real.
+    ///
+    /// Conecta con un peer directo o a través de un relay usando un room code.
+    /// Usa SPACE para hablar, Q para salir.
+    ///
+    /// Ejemplos:
+    ///   gs ptt --relay 1.2.3.4:9100 --room GRVT-2847
+    ///   gs ptt --peer 192.168.1.5 --peer-port 9000
+    ///   gs ptt --peer 192.168.1.5 --peer-port 9000 --listen
+    Ptt {
+        /// Dirección del relay (HOST). Requiere también --room.
+        #[arg(long)]
+        relay: Option<String>,
+        /// Puerto UDP del relay (default: 9000).
+        #[arg(long, default_value_t = 9000)]
+        relay_port: u16,
+        /// Puerto HTTP de observabilidad del relay para resolver rooms (default: 9100).
+        #[arg(long, default_value_t = 9100)]
+        relay_obs_port: u16,
+        /// Código de sala en formato XXXX-NNNN (requerido con --relay).
+        #[arg(long)]
+        room: Option<String>,
+        /// Peer directo (HOST). Mutualmente exclusivo con --relay.
+        #[arg(long)]
+        peer: Option<String>,
+        /// Puerto del peer directo.
+        #[arg(long, default_value_t = 9000)]
+        peer_port: u16,
+        /// Puerto local de escucha (0 = efímero).
+        #[arg(long, default_value_t = 0)]
+        port: u16,
+        /// Actúa como servidor (espera que el peer conecte primero). Solo P2P.
+        #[arg(long)]
+        listen: bool,
+        /// Dispositivo de entrada de audio (micrófono).
+        #[arg(long, default_value = "default")]
+        device: String,
+        /// Dispositivo de salida de audio (altavoz). Por defecto igual que --device.
+        #[arg(long)]
+        out_device: Option<String>,
+        /// Codec: pcm u opus.
+        #[arg(long, default_value = "opus")]
+        codec: CodecArg,
     },
 }
 
@@ -259,9 +333,46 @@ async fn dispatch(cmd: Command) -> Result<()> {
         Command::Bench { mode, duration } => cmd_bench(mode, duration).await,
         Command::Info { host, port } => cmd_info(host, port).await,
         Command::Doctor => cmd_doctor(),
-        Command::Relay { bind, port } => cmd_relay(bind, port).await,
+        Command::Relay {
+            config,
+            bind,
+            udp_port,
+            ws_port,
+            obs_port,
+            session_ttl,
+            max_sessions,
+            max_peers,
+        } => cmd_relay(config, bind, udp_port, ws_port, obs_port, session_ttl, max_sessions, max_peers).await,
         Command::Room { action } => cmd_room(action).await,
         Command::Discover { timeout } => cmd_discover(timeout).await,
+        Command::Ptt {
+            relay,
+            relay_port,
+            relay_obs_port,
+            room,
+            peer,
+            peer_port,
+            port,
+            listen,
+            device,
+            out_device,
+            codec,
+        } => {
+            cmd_ptt(
+                relay,
+                relay_port,
+                relay_obs_port,
+                room,
+                peer,
+                peer_port,
+                port,
+                listen,
+                device,
+                out_device.unwrap_or_else(|| "default".to_string()),
+                codec,
+            )
+            .await
+        }
     }
 }
 
@@ -542,37 +653,94 @@ fn cmd_doctor() -> Result<()> {
     Ok(())
 }
 
-async fn cmd_relay(bind: String, port: u16) -> Result<()> {
-    let addr: SocketAddr = format!("{bind}:{port}").parse()?;
-    let t = UdpTransport::bind(UdpConfig {
-        bind_addr: addr,
-        reuse_port: true,
-        ..Default::default()
-    })
-    .await?;
-    tracing::info!(local = ?t.local_addr(), "relay listening");
-    use std::collections::HashMap;
-    let mut routes: HashMap<u32, SocketAddr> = HashMap::new();
-    let mut buf = vec![0u8; 1500];
-    loop {
-        let (n, from) = t.recv(&mut buf).await?;
-        let slice = &buf[..n];
-        match gravital_talk::PacketView::decode(slice) {
-            Ok(view) => {
-                let sid = view.header().session_id;
-                if let Some(other) = routes.get(&sid).copied() {
-                    if other != from {
-                        let _ = t.send_to(slice, other).await;
-                        continue;
-                    }
-                }
-                routes.insert(sid, from);
-            }
-            Err(e) => {
-                tracing::debug!(?e, "dropping bad packet");
+async fn cmd_relay(
+    config_path: Option<PathBuf>,
+    bind: String,
+    udp_port: u16,
+    ws_port: u16,
+    obs_port: u16,
+    session_ttl: u64,
+    max_sessions: usize,
+    max_peers: usize,
+) -> Result<()> {
+    use gravital_talk_relay::{
+        config::RelayConfig, metrics::RelayMetrics, observability, router::Router, udp, ws,
+    };
+    use tokio::net::{TcpListener, UdpSocket};
+
+    // Build config: file first, then CLI overrides.
+    let mut cfg = match config_path {
+        Some(ref p) => RelayConfig::from_file(p)
+            .with_context(|| format!("failed to load relay config from {}", p.display()))?,
+        None => RelayConfig::default(),
+    };
+
+    // CLI flags override file values.
+    cfg.udp_bind = format!("{bind}:{udp_port}").parse()?;
+    cfg.ws_bind = format!("{bind}:{ws_port}").parse()?;
+    cfg.observability_bind = format!("{bind}:{obs_port}").parse()?;
+    cfg.session_ttl_secs = session_ttl;
+    cfg.max_sessions = max_sessions;
+    cfg.max_peers_per_session = max_peers;
+
+    tracing::info!(
+        udp    = %cfg.udp_bind,
+        ws     = %cfg.ws_bind,
+        obs    = %cfg.observability_bind,
+        ttl    = cfg.session_ttl_secs,
+        max_sessions = cfg.max_sessions,
+        "starting gs relay"
+    );
+
+    let metrics = RelayMetrics::new();
+    let router = Arc::new(Router::new(cfg.max_sessions, cfg.max_peers_per_session, metrics));
+
+    let udp_socket = Arc::new(UdpSocket::bind(cfg.udp_bind).await
+        .with_context(|| format!("cannot bind UDP {}", cfg.udp_bind))?);
+    let ws_listener = TcpListener::bind(cfg.ws_bind).await
+        .with_context(|| format!("cannot bind WS {}", cfg.ws_bind))?;
+    let obs_listener = TcpListener::bind(cfg.observability_bind).await
+        .with_context(|| format!("cannot bind observability {}", cfg.observability_bind))?;
+
+    println!(
+        "Gravital Talk relay running.\n  UDP  → {}\n  WS   → {}\n  HTTP → {} (/metrics /healthz /api/rooms)\nPress Ctrl-C to stop.",
+        cfg.udp_bind, cfg.ws_bind, cfg.observability_bind
+    );
+
+    // GC: evict sessions idle more than TTL.
+    let gc_router = router.clone();
+    let ttl = cfg.session_ttl_secs;
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(30));
+        loop {
+            tick.tick().await;
+            let removed = gc_router.evict_idle(ttl);
+            if removed > 0 {
+                tracing::info!(removed, "evicted idle sessions");
             }
         }
+    });
+
+    let udp_task = tokio::spawn(udp::run(udp_socket.clone(), router.clone()));
+    let ws_task = tokio::spawn(ws::run(ws_listener, udp_socket.clone(), router.clone()));
+    let obs_task = tokio::spawn(observability::run(obs_listener, router.clone()));
+
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {
+            println!("\nShutting down relay.");
+        }
+        r = udp_task => {
+            tracing::error!(?r, "UDP relay task exited unexpectedly");
+        }
+        r = ws_task => {
+            tracing::error!(?r, "WS relay task exited unexpectedly");
+        }
+        r = obs_task => {
+            tracing::error!(?r, "observability task exited unexpectedly");
+        }
     }
+
+    Ok(())
 }
 
 async fn cmd_room(action: RoomAction) -> Result<()> {
@@ -648,6 +816,334 @@ fn extract_http_body(raw: &[u8]) -> Result<String> {
     } else {
         anyhow::bail!("malformed HTTP response (no header separator)");
     }
+}
+
+// ─── gs ptt ──────────────────────────────────────────────────────────────────
+
+#[allow(clippy::too_many_arguments)]
+async fn cmd_ptt(
+    relay: Option<String>,
+    relay_port: u16,
+    relay_obs_port: u16,
+    room: Option<String>,
+    peer_host: Option<String>,
+    peer_port: u16,
+    local_port: u16,
+    listen: bool,
+    in_device: String,
+    out_device: String,
+    codec_arg: CodecArg,
+) -> Result<()> {
+    // ── Determinar peer y rol ───────────────────────────────────────────────
+    let (peer_addr, role, via_relay): (SocketAddr, SessionRole, bool) = match (&relay, &room, &peer_host) {
+        (Some(relay_host), Some(room_code), None) => {
+            // Modo relay: resolver room → session_id, luego conectar al relay UDP
+            let path = format!("/api/rooms/{room_code}");
+            let resp = http_get(relay_host, relay_obs_port, &path).await
+                .context("failed to resolve room code — is the relay running?")?;
+            tracing::info!(room = room_code, response = %resp, "room resolved");
+            let relay_udp: SocketAddr = format!("{relay_host}:{relay_port}").parse()?;
+            (relay_udp, SessionRole::Client, true)
+        }
+        (None, None, Some(host)) => {
+            let peer: SocketAddr = format!("{host}:{peer_port}").parse()?;
+            let role = if listen { SessionRole::Server } else { SessionRole::Client };
+            (peer, role, false)
+        }
+        _ => bail!("use either --relay + --room  OR  --peer [--listen]"),
+    };
+
+    let bind_addr: SocketAddr = format!("0.0.0.0:{local_port}").parse()?;
+    let codec_id = codec_arg.to_codec_id();
+    let config = Config {
+        sample_rate: 48_000,
+        channels: 1,
+        frame_duration_ms: 20,
+        ..Config::default()
+    };
+
+    // ── Setup audio I/O (sobrevive a reconexiones) ──────────────────────────
+    let stream_cfg = StreamConfig {
+        sample_rate: config.sample_rate,
+        channels: config.channels,
+        frame_duration_ms: config.frame_duration_ms,
+    };
+    let playback = AudioPlayback::start(stream_cfg, Some(&out_device))
+        .context("failed to open output device")?;
+    let tone_tx = playback.sender();
+
+    // ── Flags compartidos (sobreviven reconexiones) ─────────────────────────
+    let ptt_on = Arc::new(AtomicBool::new(false));
+    let quit = Arc::new(AtomicBool::new(false));  // salida definitiva
+
+    // ── Activar UI de terminal (una vez) ────────────────────────────────────
+    enable_raw_mode()?;
+    let mut stdout = std::io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+
+    let mode_str = if via_relay {
+        format!("relay {} room {}", relay.as_deref().unwrap_or("?"), room.as_deref().unwrap_or("?"))
+    } else {
+        format!("direct → {peer_addr}")
+    };
+
+    // ── Bucle de reconexión ─────────────────────────────────────────────────
+    let mut reconnect_delay = Duration::from_secs(2);
+    let result: Result<()> = loop {
+        // Canal de señal de desconexión: el task recv avisa cuando el peer cierra.
+        let (disc_tx, disc_rx) = tokio::sync::mpsc::channel::<()>(1);
+
+        // Crear sesión fresca para cada intento de conexión.
+        let transport = match UdpTransport::bind(UdpConfig { bind_addr, ..Default::default() }).await {
+            Ok(t) => Arc::new(t),
+            Err(e) => { break Err(anyhow::anyhow!("cannot bind UDP: {e}")); }
+        };
+        let cs = match CodecSession::new(transport, config.clone(), codec_id) {
+            Ok(s) => Arc::new(s),
+            Err(e) => { break Err(e.into()); }
+        };
+
+        // Handshake (mostrar estado en pantalla antes de entrar al UI loop).
+        {
+            use std::io::Write;
+            print!("\x1B[2J\x1B[H");
+            println!("Conectando ({mode_str})...");
+            stdout.flush().ok();
+        }
+
+        match cs.handshake(role, peer_addr).await {
+            Ok(()) => {}
+            Err(e) => {
+                tracing::warn!(?e, "handshake failed, will retry");
+                // Mostrar error brevemente en pantalla.
+                print!("\x1B[2J\x1B[H");
+                println!("Handshake fallido: {e}\nReconectando en {}s...", reconnect_delay.as_secs());
+                std::io::stdout().flush().ok();
+                tokio::time::sleep(reconnect_delay).await;
+                reconnect_delay = (reconnect_delay * 2).min(Duration::from_secs(30));
+                continue;
+            }
+        }
+        reconnect_delay = Duration::from_secs(2); // reset backoff on success
+
+        // ── Task de recepción + playback ─────────────────────────────────────
+        let cs_rx = cs.clone();
+        let pb_rx = playback.sender();
+        let quit_rx = quit.clone();
+        let recv_handle = tokio::spawn(async move {
+            while !quit_rx.load(Ordering::Acquire) {
+                match cs_rx.recv_samples().await {
+                    Ok(samples) => { let _ = pb_rx.send(samples); }
+                    Err(e) => {
+                        tracing::debug!(?e, "recv_samples error — signaling disconnect");
+                        let _ = disc_tx.send(()).await;
+                        break;
+                    }
+                }
+            }
+        });
+
+        // ── Task de captura + envío ──────────────────────────────────────────
+        let cs_tx = cs.clone();
+        let ptt_tx = ptt_on.clone();
+        let quit_tx = quit.clone();
+        let in_device_cap = in_device.clone();
+        let send_handle = tokio::spawn(async move {
+            let mut capture: Option<(AudioCapture, std::sync::mpsc::Receiver<Vec<i16>>)> = None;
+            loop {
+                if quit_tx.load(Ordering::Acquire) { break; }
+                if ptt_tx.load(Ordering::Acquire) {
+                    if capture.is_none() {
+                        match AudioCapture::start(stream_cfg, Some(in_device_cap.as_str())) {
+                            Ok((cap, rx)) => { capture = Some((cap, rx)); }
+                            Err(e) => {
+                                tracing::warn!(?e, "audio capture start failed");
+                                tokio::time::sleep(Duration::from_millis(100)).await;
+                                continue;
+                            }
+                        }
+                    }
+                    if let Some((_, ref rx)) = capture {
+                        match rx.try_recv() {
+                            Ok(samples) => {
+                                if let Err(e) = cs_tx.send_samples(&samples).await {
+                                    tracing::debug!(?e, "send_samples error");
+                                }
+                            }
+                            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                                tokio::time::sleep(Duration::from_millis(5)).await;
+                            }
+                            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                                capture = None;
+                            }
+                        }
+                    }
+                } else {
+                    capture = None;
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            }
+        });
+
+        // ── UI interactiva ───────────────────────────────────────────────────
+        let ui_result = ptt_ui_loop(
+            &cs,
+            &ptt_on,
+            &quit,
+            tone_tx.clone(),
+            config.sample_rate,
+            disc_rx,
+        ).await;
+
+        // Limpiar tasks y sesión.
+        recv_handle.abort();
+        send_handle.abort();
+        ptt_on.store(false, Ordering::Release);
+        let _ = cs.session().ptt_release().await;
+        let _ = cs.close().await;
+
+        match ui_result {
+            Ok(PttUiResult::Quit) => break Ok(()),
+            Ok(PttUiResult::Reconnect) => {
+                // Loop de reconexión continúa.
+                continue;
+            }
+            Err(e) => break Err(e),
+        }
+    };
+
+    // Restaurar terminal siempre.
+    let _ = disable_raw_mode();
+    let _ = execute!(std::io::stdout(), LeaveAlternateScreen);
+
+    result
+}
+
+#[derive(Debug)]
+enum PttUiResult {
+    Quit,
+    Reconnect,
+}
+
+async fn ptt_ui_loop(
+    cs: &Arc<CodecSession>,
+    ptt_on: &Arc<AtomicBool>,
+    quit: &Arc<AtomicBool>,
+    tone_tx: std::sync::mpsc::Sender<Vec<i16>>,
+    sample_rate: u32,
+    mut disc_rx: tokio::sync::mpsc::Receiver<()>,
+) -> Result<PttUiResult> {
+    use std::io::Write;
+    let mut stdout = std::io::stdout();
+
+    let mut last_render = Instant::now();
+    let render_interval = Duration::from_millis(200);
+
+    loop {
+        // ── Señal de desconexión del peer ───────────────────────────────────
+        if disc_rx.try_recv().is_ok() {
+            // Mostrar mensaje de reconexión brevemente y volver al bucle.
+            print!("\x1B[2J\x1B[H");
+            println!("╔══════════════════════════════════════════════════╗");
+            println!("║          GRAVITAL TALK — PTT                     ║");
+            println!("╠══════════════════════════════════════════════════╣");
+            println!("║  ⚠  PEER DESCONECTADO — Reconectando...          ║");
+            println!("╚══════════════════════════════════════════════════╝");
+            stdout.flush().ok();
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            return Ok(PttUiResult::Reconnect);
+        }
+
+        // ── Render UI ───────────────────────────────────────────────────────
+        if last_render.elapsed() >= render_interval {
+            last_render = Instant::now();
+
+            let ptt = ptt_on.load(Ordering::Acquire);
+            let peer_ptt = cs.session().is_peer_ptt_active();
+            let snap = cs.session().metrics().snapshot(cs.session().jitter_buffer().fill_percent());
+            let sid = cs.session().session_id();
+
+            // Limpiar y redibujar.
+            print!("\x1B[2J\x1B[H"); // clear screen, cursor home
+            println!("╔══════════════════════════════════════════════════╗");
+            println!("║          GRAVITAL TALK — PTT                     ║");
+            println!("╠══════════════════════════════════════════════════╣");
+            println!("║  Session: 0x{sid:08X}                          ║");
+            println!(
+                "║  Quality: MOS {:.1}  Loss {:.1}%  Jitter {:.0}ms    ║",
+                snap.estimated_mos, snap.loss_percent, snap.jitter_ms
+            );
+            println!("╠══════════════════════════════════════════════════╣");
+
+            if ptt {
+                println!("║  ● TRANSMITIENDO  — suelta [ESPACIO] para parar  ║");
+            } else {
+                println!("║  ○ En espera      — [ESPACIO] para hablar         ║");
+            }
+
+            if peer_ptt {
+                println!("║  ◉ PEER TRANSMITIENDO                            ║");
+            } else {
+                println!("║  ○ Peer escuchando                               ║");
+            }
+
+            println!("╠══════════════════════════════════════════════════╣");
+            println!("║  [ESPACIO] toggle PTT  •  [Q] salir               ║");
+            println!("╚══════════════════════════════════════════════════╝");
+            stdout.flush()?;
+        }
+
+        // ── Eventos de teclado ──────────────────────────────────────────────
+        if event::poll(Duration::from_millis(50))? {
+            match event::read()? {
+                Event::Key(key) => {
+                    match key.code {
+                        KeyCode::Char('q') | KeyCode::Char('Q') => {
+                            quit.store(true, Ordering::Release);
+                            return Ok(PttUiResult::Quit);
+                        }
+                        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            quit.store(true, Ordering::Release);
+                            return Ok(PttUiResult::Quit);
+                        }
+                        KeyCode::Char(' ') => {
+                            let was_on = ptt_on.load(Ordering::Acquire);
+                            ptt_on.store(!was_on, Ordering::Release);
+                            if !was_on {
+                                let _ = cs.session().ptt_press().await;
+                                play_tone(gravital_talk_transport::generate_pcm_tone(880.0, 100, sample_rate), &tone_tx);
+                            } else {
+                                let _ = cs.session().ptt_release().await;
+                                play_tone(gravital_talk_transport::generate_pcm_tone(440.0, 80, sample_rate), &tone_tx);
+                            }
+                        }
+                        // Tecla 'T' como alternativa
+                        KeyCode::Char('t') | KeyCode::Char('T') => {
+                            let was_on = ptt_on.load(Ordering::Acquire);
+                            ptt_on.store(!was_on, Ordering::Release);
+                            if !was_on {
+                                let _ = cs.session().ptt_press().await;
+                                play_tone(gravital_talk_transport::generate_pcm_tone(880.0, 100, sample_rate), &tone_tx);
+                            } else {
+                                let _ = cs.session().ptt_release().await;
+                                play_tone(gravital_talk_transport::generate_pcm_tone(440.0, 80, sample_rate), &tone_tx);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Event::Resize(_, _) => {} // Refrescar en el próximo tick.
+                _ => {}
+            }
+        }
+    }
+
+    Ok(PttUiResult::Quit)
+}
+
+/// Sends PCM i16 samples to the playback channel (non-blocking; drops on full channel).
+fn play_tone(samples: Vec<i16>, tx: &std::sync::mpsc::Sender<Vec<i16>>) {
+    let _ = tx.send(samples);
 }
 
 fn sine_frames_i16(

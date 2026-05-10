@@ -20,9 +20,13 @@ default   = ["alloc"]
 alloc     = []
 std       = ["alloc"]
 simd-crc  = []
+# Habilita el módulo de identidad Ed25519 (requiere std en la práctica).
+identity  = ["dep:ed25519-dalek", "dep:rand_core"]
 
 [dependencies]
 chacha20poly1305 = { workspace = true }
+ed25519-dalek    = { workspace = true, optional = true }
+rand_core        = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

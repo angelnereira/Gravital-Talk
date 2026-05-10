@@ -194,6 +194,29 @@ const char *gs_error_last(void);
 void gs_error_clear(void);
 
 /*
+ Solicita el floor (permiso para transmitir).
+
+ Envía `FloorRequest` al peer/relay. El resultado real (Grant/Deny)
+ llega asíncronamente vía `dispatch_packet`.
+ */
+GsStatus gs_session_ptt_press(GsSessionHandle *handle);
+
+/*
+ Libera el floor (fin de transmisión).
+ */
+GsStatus gs_session_ptt_release(GsSessionHandle *handle);
+
+/*
+ Devuelve `1` si el peer remoto está transmitiendo actualmente, `0` si no.
+ */
+int gs_session_is_peer_ptt_active(GsSessionHandle *handle);
+
+/*
+ Devuelve el `local_ssrc` de la sesión.
+ */
+GsStatus gs_session_local_ssrc(GsSessionHandle *handle, uint32_t *out_ssrc);
+
+/*
  Retorna `GS_OK` — útil como smoke test de linkado.
  */
 int gs_ping(void);

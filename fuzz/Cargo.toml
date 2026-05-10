@@ -1,0 +1,35 @@
+[package]
+name    = "gravital-talk-fuzz"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+gravital-talk-core = { path = "../crates/gravital-talk-core" }
+
+# Activa todas las features para maximizar la cobertura de fuzzing.
+[features]
+default = []
+
+# Necesario para libfuzzer-sys.
+[[bin]]
+name = "fuzz_packet_parse"
+path = "fuzz_targets/fuzz_packet_parse.rs"
+test = false
+doc  = false
+
+[[bin]]
+name = "fuzz_floor_payload"
+path = "fuzz_targets/fuzz_floor_payload.rs"
+test = false
+doc  = false
+
+[[bin]]
+name = "fuzz_message_type"
+path = "fuzz_targets/fuzz_message_type.rs"
+test = false
+doc  = false
