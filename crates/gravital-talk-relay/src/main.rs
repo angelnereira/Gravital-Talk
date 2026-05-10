@@ -55,7 +55,7 @@ async fn main() -> Result<()> {
     tracing::info!(?cfg, "starting gs-relay");
 
     let metrics = RelayMetrics::new();
-    let router = Arc::new(Router::new(cfg.max_sessions, metrics));
+    let router = Arc::new(Router::new(cfg.max_sessions, cfg.max_peers_per_session, metrics));
 
     let udp_socket = Arc::new(UdpSocket::bind(cfg.udp_bind).await?);
     let ws_listener = TcpListener::bind(cfg.ws_bind).await?;

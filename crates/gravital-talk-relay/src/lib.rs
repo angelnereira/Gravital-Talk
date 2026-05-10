@@ -21,6 +21,7 @@
 pub mod config;
 pub mod metrics;
 pub mod observability;
+pub mod rooms;
 pub mod router;
 pub mod udp;
 pub mod ws;

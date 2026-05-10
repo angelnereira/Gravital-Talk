@@ -838,6 +838,7 @@ dependencies = [
  "clap",
  "gravital-talk",
  "gravital-talk-io",
+ "gravital-talk-transport",
  "hound",
  "tokio",
  "tracing",

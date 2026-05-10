@@ -22,6 +22,9 @@ pub struct RelayConfig {
     /// Máximo número de session_id activos simultáneos. Protege memoria.
     #[serde(default = "default_max_sessions")]
     pub max_sessions: usize,
+    /// Máximo de peers por sesión/grupo. Default: 50.
+    #[serde(default = "default_max_peers")]
+    pub max_peers_per_session: usize,
 }
 
 fn default_udp() -> SocketAddr {
@@ -39,6 +42,9 @@ fn default_ttl() -> u64 {
 fn default_max_sessions() -> usize {
     10_000
 }
+fn default_max_peers() -> usize {
+    50
+}
 
 impl Default for RelayConfig {
     fn default() -> Self {
@@ -48,6 +54,7 @@ impl Default for RelayConfig {
             observability_bind: default_obs(),
             session_ttl_secs: default_ttl(),
             max_sessions: default_max_sessions(),
+            max_peers_per_session: default_max_peers(),
         }
     }
 }

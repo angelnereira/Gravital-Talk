@@ -6,6 +6,8 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use gravital_talk::{
@@ -145,6 +147,51 @@ enum Command {
         #[arg(long, default_value_t = 9100)]
         port: u16,
     },
+    /// Operaciones de sala (room codes para descubrimiento sin intercambiar IPs).
+    Room {
+        #[command(subcommand)]
+        action: RoomAction,
+    },
+    /// Descubre peers Gravital Talk en la red local via UDP broadcast.
+    Discover {
+        /// Segundos a escuchar (default: 3).
+        #[arg(long, default_value_t = 3)]
+        timeout: u64,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum RoomAction {
+    /// Registra una sala en un relay y obtiene el código de 9 caracteres.
+    Create {
+        /// Host del relay.
+        #[arg(long, default_value = "127.0.0.1")]
+        relay: String,
+        /// Puerto HTTP de observabilidad del relay (default: 9100).
+        #[arg(long, default_value_t = 9100)]
+        obs_port: u16,
+        /// session_id numérico para la sala (debe ser el mismo que usarán los peers).
+        #[arg(long)]
+        session_id: u32,
+    },
+    /// Resuelve un código de sala en un relay y muestra el session_id.
+    Join {
+        /// Código de sala en formato XXXX-NNNN.
+        code: String,
+        /// Host del relay.
+        #[arg(long, default_value = "127.0.0.1")]
+        relay: String,
+        /// Puerto HTTP de observabilidad del relay.
+        #[arg(long, default_value_t = 9100)]
+        obs_port: u16,
+    },
+    /// Lista todas las salas activas en un relay.
+    List {
+        #[arg(long, default_value = "127.0.0.1")]
+        relay: String,
+        #[arg(long, default_value_t = 9100)]
+        obs_port: u16,
+    },
 }
 
 fn main() -> Result<()> {
@@ -213,6 +260,8 @@ async fn dispatch(cmd: Command) -> Result<()> {
         Command::Info { host, port } => cmd_info(host, port).await,
         Command::Doctor => cmd_doctor(),
         Command::Relay { bind, port } => cmd_relay(bind, port).await,
+        Command::Room { action } => cmd_room(action).await,
+        Command::Discover { timeout } => cmd_discover(timeout).await,
     }
 }
 
@@ -523,6 +572,81 @@ async fn cmd_relay(bind: String, port: u16) -> Result<()> {
                 tracing::debug!(?e, "dropping bad packet");
             }
         }
+    }
+}
+
+async fn cmd_room(action: RoomAction) -> Result<()> {
+    match action {
+        RoomAction::Create { relay, obs_port, session_id } => {
+            let body = format!(r#"{{"session_id":{session_id}}}"#);
+            let resp = http_post(&relay, obs_port, "/api/rooms", &body).await?;
+            println!("{resp}");
+        }
+        RoomAction::Join { code, relay, obs_port } => {
+            let path = format!("/api/rooms/{code}");
+            let resp = http_get(&relay, obs_port, &path).await?;
+            println!("{resp}");
+        }
+        RoomAction::List { relay, obs_port } => {
+            let resp = http_get(&relay, obs_port, "/api/rooms").await?;
+            println!("{resp}");
+        }
+    }
+    Ok(())
+}
+
+async fn cmd_discover(timeout_s: u64) -> Result<()> {
+    use gravital_talk_transport::discovery;
+    println!("Scanning LAN for Gravital Talk peers ({timeout_s}s)...");
+    let timeout = std::time::Duration::from_secs(timeout_s);
+    match discovery::discover_lan(timeout) {
+        Ok(peers) if peers.is_empty() => println!("No peers found."),
+        Ok(peers) => {
+            println!("Found {} peer(s):", peers.len());
+            for p in peers {
+                println!("  {} — session_id={} — \"{}\"", p.addr, p.session_id, p.name);
+            }
+        }
+        Err(e) => println!("Discovery error: {e}"),
+    }
+    Ok(())
+}
+
+/// Minimal HTTP GET using tokio TcpStream.
+async fn http_get(host: &str, port: u16, path: &str) -> Result<String> {
+    let addr: SocketAddr = format!("{host}:{port}").parse()?;
+    let mut stream = tokio::net::TcpStream::connect(addr).await?;
+    let req = format!(
+        "GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n"
+    );
+    stream.write_all(req.as_bytes()).await?;
+    let mut buf = Vec::new();
+    stream.read_to_end(&mut buf).await?;
+    extract_http_body(&buf)
+}
+
+/// Minimal HTTP POST using tokio TcpStream.
+async fn http_post(host: &str, port: u16, path: &str, body: &str) -> Result<String> {
+    let addr: SocketAddr = format!("{host}:{port}").parse()?;
+    let mut stream = tokio::net::TcpStream::connect(addr).await?;
+    let req = format!(
+        "POST {path} HTTP/1.1\r\nHost: {host}:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(req.as_bytes()).await?;
+    let mut buf = Vec::new();
+    stream.read_to_end(&mut buf).await?;
+    extract_http_body(&buf)
+}
+
+/// Extracts the body from a raw HTTP/1.1 response (after the blank line).
+fn extract_http_body(raw: &[u8]) -> Result<String> {
+    let sep = b"\r\n\r\n";
+    if let Some(pos) = raw.windows(4).position(|w| w == sep) {
+        let body = &raw[pos + 4..];
+        Ok(String::from_utf8_lossy(body).trim().to_string())
+    } else {
+        anyhow::bail!("malformed HTTP response (no header separator)");
     }
 }
 

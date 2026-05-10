@@ -15,7 +15,7 @@
 //! Tras el handshake, todo el audio se cifra con ChaCha20-Poly1305.
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -118,6 +118,8 @@ pub struct Session {
     fec_enc: Mutex<FecEncoder>,
     /// Decoder FEC (recupera un frame perdido por ventana).
     fec_dec: Mutex<FecDecoder>,
+    /// `true` mientras el usuario mantiene presionado PTT.
+    ptt_active: AtomicBool,
 }
 
 impl core::fmt::Debug for Session {
@@ -152,6 +154,7 @@ impl Session {
             congestion: CongestionController::new(max_br, CONGESTION_MIN_BITRATE, max_br),
             fec_enc: Mutex::new(FecEncoder::with_default_window()),
             fec_dec: Mutex::new(FecDecoder::with_default_window()),
+            ptt_active: AtomicBool::new(false),
         }
     }
 
@@ -171,6 +174,37 @@ impl Session {
     #[must_use]
     pub fn config(&self) -> &Config {
         &self.config
+    }
+
+    // ── PTT (Push-to-Talk) ──────────────────────────────────────────────────
+
+    /// Activa PTT: marca el flag local y envía `ControlResume` al peer.
+    ///
+    /// El peer recibe la señal y puede mostrar un indicador de "alguien habla".
+    /// El audio debe enviarse con `send_audio()` mientras PTT esté activo.
+    pub async fn ptt_press(&self) -> Result<(), TransportError> {
+        self.ptt_active.store(true, Ordering::Release);
+        if let Some(p) = *self.peer.lock().await {
+            let sid = self.session_id();
+            self.send_control(MessageType::ControlResume, sid, &[], p).await?;
+        }
+        Ok(())
+    }
+
+    /// Desactiva PTT: limpia el flag local y envía `ControlPause` al peer.
+    pub async fn ptt_release(&self) -> Result<(), TransportError> {
+        self.ptt_active.store(false, Ordering::Release);
+        if let Some(p) = *self.peer.lock().await {
+            let sid = self.session_id();
+            self.send_control(MessageType::ControlPause, sid, &[], p).await?;
+        }
+        Ok(())
+    }
+
+    /// Devuelve `true` si PTT está actualmente presionado por el usuario local.
+    #[must_use]
+    pub fn is_ptt_active(&self) -> bool {
+        self.ptt_active.load(Ordering::Acquire)
     }
 
     #[must_use]
@@ -841,6 +875,12 @@ impl Session {
                         }
                     }
                 }
+            }
+            Ok(MessageType::ControlPause) => {
+                tracing::debug!("remote peer released PTT (ControlPause)");
+            }
+            Ok(MessageType::ControlResume) => {
+                tracing::debug!("remote peer pressed PTT (ControlResume)");
             }
             Ok(MessageType::ControlBitrate) => {
                 if let Ok(msg) = ControlBitrateMsg::decode(view.payload()) {
