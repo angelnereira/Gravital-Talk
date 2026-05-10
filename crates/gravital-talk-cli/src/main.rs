@@ -918,7 +918,7 @@ async fn cmd_ptt(
                 // Mostrar error brevemente en pantalla.
                 print!("\x1B[2J\x1B[H");
                 println!("Handshake fallido: {e}\nReconectando en {}s...", reconnect_delay.as_secs());
-                std::io::stdout().flush().ok();
+                { use std::io::Write; std::io::stdout().flush().ok(); }
                 tokio::time::sleep(reconnect_delay).await;
                 reconnect_delay = (reconnect_delay * 2).min(Duration::from_secs(30));
                 continue;
@@ -944,43 +944,62 @@ async fn cmd_ptt(
         });
 
         // ── Task de captura + envío ──────────────────────────────────────────
+        // AudioCapture contiene *mut () (CPAL) y no es Send; se aísla en un
+        // thread de OS para que el tokio::spawn del envío sea Send.
         let cs_tx = cs.clone();
         let ptt_tx = ptt_on.clone();
         let quit_tx = quit.clone();
         let in_device_cap = in_device.clone();
-        let send_handle = tokio::spawn(async move {
-            let mut capture: Option<(AudioCapture, std::sync::mpsc::Receiver<Vec<i16>>)> = None;
-            loop {
-                if quit_tx.load(Ordering::Acquire) { break; }
-                if ptt_tx.load(Ordering::Acquire) {
-                    if capture.is_none() {
-                        match AudioCapture::start(stream_cfg, Some(in_device_cap.as_str())) {
-                            Ok((cap, rx)) => { capture = Some((cap, rx)); }
-                            Err(e) => {
-                                tracing::warn!(?e, "audio capture start failed");
-                                tokio::time::sleep(Duration::from_millis(100)).await;
-                                continue;
-                            }
-                        }
-                    }
-                    if let Some((_, ref rx)) = capture {
-                        match rx.try_recv() {
-                            Ok(samples) => {
-                                if let Err(e) = cs_tx.send_samples(&samples).await {
-                                    tracing::debug!(?e, "send_samples error");
+        let (sample_bridge_tx, sample_bridge_rx) = std::sync::mpsc::sync_channel::<Vec<i16>>(4);
+        {
+            let ptt_thr = ptt_tx.clone();
+            let quit_thr = quit_tx.clone();
+            std::thread::spawn(move || {
+                let mut capture: Option<(AudioCapture, std::sync::mpsc::Receiver<Vec<i16>>)> = None;
+                loop {
+                    if quit_thr.load(Ordering::Acquire) { break; }
+                    if ptt_thr.load(Ordering::Acquire) {
+                        if capture.is_none() {
+                            match AudioCapture::start(stream_cfg, Some(in_device_cap.as_str())) {
+                                Ok((cap, rx)) => { capture = Some((cap, rx)); }
+                                Err(e) => {
+                                    tracing::warn!(?e, "audio capture start failed");
+                                    std::thread::sleep(Duration::from_millis(100));
+                                    continue;
                                 }
                             }
-                            Err(std::sync::mpsc::TryRecvError::Empty) => {
-                                tokio::time::sleep(Duration::from_millis(5)).await;
-                            }
-                            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                                capture = None;
+                        }
+                        if let Some((_, ref rx)) = capture {
+                            match rx.try_recv() {
+                                Ok(samples) => { let _ = sample_bridge_tx.try_send(samples); }
+                                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                                    std::thread::sleep(Duration::from_millis(5));
+                                }
+                                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                                    capture = None;
+                                }
                             }
                         }
+                    } else {
+                        capture = None;
+                        std::thread::sleep(Duration::from_millis(20));
                     }
-                } else {
-                    capture = None;
-                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            });
+        }
+        let send_handle = tokio::spawn(async move {
+            loop {
+                if quit_tx.load(Ordering::Acquire) { break; }
+                match sample_bridge_rx.try_recv() {
+                    Ok(samples) => {
+                        if let Err(e) = cs_tx.send_samples(&samples).await {
+                            tracing::debug!(?e, "send_samples error");
+                        }
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
                 }
             }
         });

@@ -2,6 +2,81 @@
 
 Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y el proyecto usa [SemVer](https://semver.org/lang/es/).
 
+## [0.2.0-alpha.3] — 2026-05-10
+
+Emparejamiento P2P por QR + STUN + Android completo + CI auto-build de binarios.
+
+### Added
+
+**STUN — Descubrimiento de IP pública sin infraestructura propia**
+- `crates/gravital-talk-transport/src/stun.rs` (nuevo): cliente STUN RFC 5389 puro, sin dependencias externas.
+- `discover_public_addr(local_port: u16) -> Result<SocketAddr, StunError>`: crea socket UDP efímero, envía Binding Request a `stun.l.google.com:19302`, fallback a `stun1.l.google.com:19302`, timeout 5 s por servidor.
+- Parsea atributo `XOR-MAPPED-ADDRESS` (type `0x0020`) con XOR cookie `0x2112A442`; fallback a `MAPPED-ADDRESS` para servidores legacy.
+- 3 tests unitarios: parse roundtrip, tx_id incorrecto rechazado, paquete corto rechazado.
+- Exportado desde `gravital-talk-transport` y re-exportado en `gravital-talk`.
+
+**Handshake abierto — Servidor sin IP del cliente**
+- `Session::handshake_open()`: modo servidor que acepta el primer `ClientHello` válido de cualquier dirección IP.
+- Problema resuelto: el `handshake_server(peer)` original filtraba con `if from != peer`, haciendo imposible el pairing cuando no se conoce la IP del cliente de antemano.
+- Tras recibir el primer ClientHello válido: fija `self.peer = Some(from)` y procede con el handshake normal.
+- `Session::local_addr()`: expone el puerto UDP local para incluirlo en el QR.
+- Compatibilidad: `handshake_server()` existente no se modifica.
+
+**FFI C API — Nuevas funciones de pairing**
+- `gs_session_local_port(handle, out_port)`: retorna el puerto UDP local de la sesión.
+- `gs_discover_public_addr(local_port, out_buf, buf_len)`: descubre IP pública vía STUN, escribe `"ip:port"` como C-string.
+- `gs_session_accept_any(handle)`: ejecuta `handshake_open()` bloqueante.
+
+**JNI Bridge Android — Pairing nativo**
+- `nativeGetLocalPort(handle: Long): Int`
+- `nativeDiscoverPublicAddr(bindPort: Int): String?`
+- `nativeAcceptAny(handle: Long): Int`
+
+**Android PairingActivity — UI completa sin relay obligatorio**
+- `PairingActivity.kt` (nueva): Activity con ViewFlipper de 3 pantallas (Home, Host QR, Join).
+- `PairingViewModel.kt` (nuevo): lógica de estado con `StateFlow<PairingUiState>`.
+- **Flujo HOST**: Crear sesión → obtener IP LAN (ConnectivityManager) + IP pública (STUN paralelo) → generar QR con ZXing → mostrar código texto `GRVT-XXXX` → `nativeAcceptAny` bloquea hasta cliente → lanzar PTT screen.
+- **Flujo CLIENT (QR)**: Escanear QR con CameraX + ML Kit → parsear URI → intentar LAN (2 s) → Internet P2P (5 s) → relay fallback (10 s).
+- **Flujo CLIENT (manual)**: Ingresar `host:port` del relay manualmente.
+- **URI canónica**: `gravital-talk://pair?v=1&lan=<ip>:<port>&pub=<ip>:<port>&relay=<host:port>`
+- Deep link `gravital-talk://pair` registrado en AndroidManifest.
+- `activity_pairing.xml`: layouts completos con ImageView para QR, PreviewView para cámara, TabLayout (Escanear | Ingresar).
+- Permiso `CAMERA` y feature `android.hardware.camera` (no obligatoria) en manifest.
+
+**Android PttViewModel — Integración con handle existente**
+- `attachExistingHandle(handle: Long)`: toma ownership de un handle creado por PairingViewModel sin crear nueva sesión.
+
+**Android MainActivity — Colgar y navegar**
+- `btnHangUp`: botón visible durante llamada; al pulsar → `disconnect()` → vuelve a PairingActivity.
+- Si campos de relay vacíos al inicio → redirige a PairingActivity automáticamente.
+- `onNewIntent()`: recibe handle nativo de PairingActivity via `EXTRA_NATIVE_HANDLE`.
+
+**Dependencias Android añadidas**
+- `com.google.zxing:core:3.5.3` — generación de QR.
+- `androidx.camera:camera-camera2/lifecycle/view:1.4.1` — preview de cámara.
+- `com.google.mlkit:barcode-scanning:17.3.0` — decodificación de QR.
+
+**CI auto-build de binarios — `build-outputs.yml`**
+- Nuevo workflow que construye en cada push que toca código compilable.
+- 4 jobs paralelos: `android-apk` (Ubuntu), `linux-cli` (Ubuntu), `macos-cli` (macOS, matrix x86_64+aarch64), `windows-cli` (Windows).
+- Cada job versiona el artefacto como `<nombre>-v<semver>-<short_sha>-<plataforma>`, lo copia a `outputs/<plataforma>/`, actualiza `LATEST.txt` y hace commit+push con `[skip ci]`.
+- Retry/rebase automático para evitar conflictos cuando varios jobs pushean simultáneamente.
+- El commit de CI incluye `[skip ci]` → previene loops infinitos; todos los jobs comprueban que el mensaje del commit anterior no contenga `[skip ci]`.
+- También sube cada artefacto como GitHub Actions artifact (fallback 30 días).
+
+**Directorio `outputs/` — Binarios pre-compilados en repo**
+- `outputs/android/debug/` — APKs de debug versionados.
+- `outputs/linux/x86_64/` — binario `gs` para Linux 64-bit.
+- `outputs/macos/x86_64/` y `outputs/macos/aarch64/` — binario `gs` para Mac Intel y Apple Silicon.
+- `outputs/windows/x86_64/` — ejecutable `gs.exe` para Windows.
+- `outputs/README.md` — documentación de estructura, instalación y scripting con LATEST.txt.
+
+### Changed
+
+- `android.yml`: añadido `if: "!contains(github.event.head_commit.message, '[skip ci]')"` en ambos jobs para no duplicar trabajo con `build-outputs.yml`.
+- `docs/overview.md`: roadmap actualizado; STUN ya implementado (no es trabajo futuro).
+- `docs/session-model.md`: sección 9 sobre `handshake_open()`.
+
 ## [0.2.0-alpha.2] — 2026-04-25
 
 Track A.1 (follow-ups Fase 5) + Track C (relay productivo) + Track D parcial (release infrastructure) + Track E (Infraestructura as Code con Terraform/Helm).
