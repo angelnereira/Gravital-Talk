@@ -164,6 +164,22 @@ class PttViewModel(private val appContext: Context) : ViewModel() {
         startPeerMonitor()
     }
 
+    /**
+     * Toma posesión de un handle nativo ya conectado (creado por PairingViewModel).
+     * Úsalo cuando MainActivity recibe `EXTRA_NATIVE_HANDLE` de PairingActivity.
+     */
+    fun attachExistingHandle(handle: Long) {
+        if (handle == 0L) return
+        viewModelScope.launch(Dispatchers.IO) {
+            nativeHandle = handle
+            val sessionId = GravitalTalkJni.nativeGetSessionId(handle)
+            _connectionState.value = PttConnectionState.Connected(sessionId)
+            startPlayback()
+            startMetricsPolling()
+            startPeerMonitor()
+        }
+    }
+
     fun disconnect() {
         viewModelScope.launch(Dispatchers.IO) {
             stopAllTasks()

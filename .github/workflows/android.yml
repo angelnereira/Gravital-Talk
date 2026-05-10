@@ -25,6 +25,8 @@ jobs:
   build-apk:
     name: Build debug APK
     runs-on: ubuntu-latest
+    # No correr cuando build-outputs.yml ya hizo el trabajo.
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
 
     steps:
       # ── Checkout ──────────────────────────────────────────────────────────────
@@ -106,7 +108,7 @@ jobs:
   build-release-apk:
     name: Build release APK (signed)
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip ci]')
     needs: build-apk
 
     steps:

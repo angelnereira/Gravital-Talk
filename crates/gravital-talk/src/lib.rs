@@ -52,6 +52,7 @@ pub use gravital_talk_transport::{
     jitter_buffer::{Frame, JitterBuffer},
     udp::{UdpConfig, UdpTransport, DEFAULT_SOCKET_BUFFER, DSCP_EF},
     Config, LatencyClass, Session, SessionRole, Transport, TransportError,
+    discover_public_addr, StunError,
 };
 
 /// Version del crate facade.

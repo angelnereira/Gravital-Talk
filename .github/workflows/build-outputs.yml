@@ -1,0 +1,331 @@
+name: Build & commit outputs
+
+# Construye los binarios distribuibles (APK Android + CLI Linux/macOS/Windows)
+# y los hace commit a outputs/<plataforma>/ con versionado automático.
+#
+# Se ejecuta en cada push que toca código compilable.
+# Los commits de CI llevan [skip ci] para no generar loops.
+
+on:
+  push:
+    branches: [main, "claude/**", "feat/**"]
+    paths:
+      - "android/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/build-outputs.yml"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  NDK_VERSION: "26.3.11579264"
+
+# ── Permisos para hacer push de outputs ──────────────────────────────────────
+permissions:
+  contents: write
+
+jobs:
+  # ══════════════════════════════════════════════════════════════════════════════
+  # APK Android (debug)
+  # ══════════════════════════════════════════════════════════════════════════════
+  android-apk:
+    name: Android APK (debug)
+    runs-on: ubuntu-latest
+    # No correr si el último commit ya es un commit de CI (evitar loop).
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Necesitamos token con push para luego hacer commit de los outputs.
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: temurin
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK ${{ env.NDK_VERSION }}
+        run: |
+          sdkmanager "ndk;${{ env.NDK_VERSION }}"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/${{ env.NDK_VERSION }}" >> $GITHUB_ENV
+          echo "NDK_HOME=$ANDROID_SDK_ROOT/ndk/${{ env.NDK_VERSION }}" >> $GITHUB_ENV
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android-outputs
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Compile Rust → .so (all ABIs)
+        run: |
+          for target in aarch64-linux-android armv7-linux-androideabi x86_64-linux-android; do
+            cargo ndk -t $target \
+              -o android/app/src/main/jniLibs \
+              build -p gravital-talk-ffi \
+              --features android \
+              --release
+          done
+
+      - name: Build debug APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      # ── Versionar y copiar a outputs/ ─────────────────────────────────────
+      - name: Version and copy APK to outputs/
+        run: |
+          VERSION=$(grep -m1 '^version' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+          SHA=$(git rev-parse --short HEAD)
+          FILENAME="gravital-talk-v${VERSION}-${SHA}-debug.apk"
+
+          mkdir -p outputs/android/debug
+          cp android/app/build/outputs/apk/debug/app-debug.apk \
+             "outputs/android/debug/${FILENAME}"
+          echo "${FILENAME}" > outputs/android/debug/LATEST.txt
+
+          echo "APK_FILENAME=${FILENAME}" >> $GITHUB_ENV
+          echo "Built: ${FILENAME}"
+          ls -lh "outputs/android/debug/${FILENAME}"
+
+      # ── Commit + push outputs ─────────────────────────────────────────────
+      - name: Commit outputs to branch
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add outputs/android/
+
+          # Solo commitar si hay cambios reales.
+          if git diff --cached --quiet; then
+            echo "No new APK to commit."
+            exit 0
+          fi
+
+          git commit -m "build(android): ${APK_FILENAME} [skip ci]"
+          git push origin HEAD:${{ github.ref_name }}
+
+      - name: Upload APK as artifact (fallback)
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-debug-${{ github.sha }}
+          path: outputs/android/debug/${{ env.APK_FILENAME }}
+          retention-days: 30
+
+      - name: Build summary
+        run: |
+          SIZE=$(du -sh "outputs/android/debug/${APK_FILENAME}" | cut -f1)
+          echo "## Android APK" >> $GITHUB_STEP_SUMMARY
+          echo "| Campo | Valor |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Archivo | \`${APK_FILENAME}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tamaño  | ${SIZE} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit  | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Instalar en dispositivo" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "adb install -r outputs/android/debug/${APK_FILENAME}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+  # ══════════════════════════════════════════════════════════════════════════════
+  # Binario CLI `gs` para Linux x86_64
+  # ══════════════════════════════════════════════════════════════════════════════
+  linux-cli:
+    name: Linux CLI (x86_64)
+    runs-on: ubuntu-latest
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: linux-x86_64-cli
+
+      - name: Install audio deps
+        run: sudo apt-get update && sudo apt-get install -y libopus-dev libasound2-dev pkg-config
+
+      - name: Build CLI
+        run: cargo build --release -p gravital-talk-cli
+
+      - name: Version and copy to outputs/
+        run: |
+          VERSION=$(grep -m1 '^version' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+          SHA=$(git rev-parse --short HEAD)
+          FILENAME="gs-v${VERSION}-${SHA}-linux-x86_64"
+
+          mkdir -p outputs/linux/x86_64
+          cp target/release/gs "outputs/linux/x86_64/${FILENAME}"
+          chmod +x "outputs/linux/x86_64/${FILENAME}"
+          echo "${FILENAME}" > outputs/linux/x86_64/LATEST.txt
+
+          echo "BIN_FILENAME=${FILENAME}" >> $GITHUB_ENV
+          ls -lh "outputs/linux/x86_64/${FILENAME}"
+
+      - name: Commit outputs to branch
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add outputs/linux/
+
+          if git diff --cached --quiet; then
+            echo "No new binary to commit."
+            exit 0
+          fi
+
+          git commit -m "build(linux): ${BIN_FILENAME} [skip ci]"
+
+          # Retry con pull --rebase por si android-apk ya pusheó.
+          for i in 1 2 3 4; do
+            git pull --rebase origin ${{ github.ref_name }} || true
+            git push origin HEAD:${{ github.ref_name }} && break || sleep $((i * 4))
+          done
+
+      - name: Upload as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64-${{ github.sha }}
+          path: outputs/linux/x86_64/${{ env.BIN_FILENAME }}
+          retention-days: 30
+
+  # ══════════════════════════════════════════════════════════════════════════════
+  # Binario CLI `gs` para macOS (Intel + Apple Silicon)
+  # ══════════════════════════════════════════════════════════════════════════════
+  macos-cli:
+    name: macOS CLI (${{ matrix.arch }})
+    runs-on: macos-latest
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            target: x86_64-apple-darwin
+          - arch: aarch64
+            target: aarch64-apple-darwin
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: macos-${{ matrix.arch }}-cli
+
+      - name: Install opus
+        run: brew install opus
+
+      - name: Build CLI
+        env:
+          PKG_CONFIG_PATH: /opt/homebrew/opt/opus/lib/pkgconfig:/usr/local/opt/opus/lib/pkgconfig
+        run: cargo build --release --target ${{ matrix.target }} -p gravital-talk-cli
+
+      - name: Version and copy to outputs/
+        run: |
+          VERSION=$(grep -m1 '^version' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+          SHA=$(git rev-parse --short HEAD)
+          FILENAME="gs-v${VERSION}-${SHA}-macos-${{ matrix.arch }}"
+
+          mkdir -p outputs/macos/${{ matrix.arch }}
+          cp "target/${{ matrix.target }}/release/gs" "outputs/macos/${{ matrix.arch }}/${FILENAME}"
+          chmod +x "outputs/macos/${{ matrix.arch }}/${FILENAME}"
+          echo "${FILENAME}" > outputs/macos/${{ matrix.arch }}/LATEST.txt
+
+          echo "BIN_FILENAME=${FILENAME}" >> $GITHUB_ENV
+
+      - name: Commit outputs to branch
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add outputs/macos/
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "build(macos-${{ matrix.arch }}): ${BIN_FILENAME} [skip ci]"
+          for i in 1 2 3 4; do
+            git pull --rebase origin ${{ github.ref_name }} || true
+            git push origin HEAD:${{ github.ref_name }} && break || sleep $((i * 4))
+          done
+
+      - name: Upload as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}-${{ github.sha }}
+          path: outputs/macos/${{ matrix.arch }}/${{ env.BIN_FILENAME }}
+          retention-days: 30
+
+  # ══════════════════════════════════════════════════════════════════════════════
+  # Binario CLI `gs.exe` para Windows x86_64
+  # ══════════════════════════════════════════════════════════════════════════════
+  windows-cli:
+    name: Windows CLI (x86_64)
+    runs-on: windows-latest
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-x86_64-cli
+
+      - name: Build CLI (no audio deps on Windows)
+        run: cargo build --release -p gravital-talk-cli --no-default-features
+
+      - name: Version and copy to outputs/
+        shell: bash
+        run: |
+          VERSION=$(grep -m1 '^version' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+          SHA=$(git rev-parse --short HEAD)
+          FILENAME="gs-v${VERSION}-${SHA}-windows-x86_64.exe"
+
+          mkdir -p outputs/windows/x86_64
+          cp target/release/gs.exe "outputs/windows/x86_64/${FILENAME}"
+          echo "${FILENAME}" > outputs/windows/x86_64/LATEST.txt
+
+          echo "BIN_FILENAME=${FILENAME}" >> $GITHUB_ENV
+
+      - name: Commit outputs to branch
+        shell: bash
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add outputs/windows/
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "build(windows): ${BIN_FILENAME} [skip ci]"
+          for i in 1 2 3 4; do
+            git pull --rebase origin ${{ github.ref_name }} || true
+            git push origin HEAD:${{ github.ref_name }} && break || sleep $((i * 4))
+          done
+
+      - name: Upload as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x86_64-${{ github.sha }}
+          path: outputs/windows/x86_64/${{ env.BIN_FILENAME }}
+          retention-days: 30
