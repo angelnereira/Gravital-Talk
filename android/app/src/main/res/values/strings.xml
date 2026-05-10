@@ -13,4 +13,20 @@
     <string name="hint_room">Código de sala (p.ej. GRVT-1234)</string>
     <string name="btn_connect">Conectar</string>
     <string name="btn_disconnect">Desconectar</string>
+
+    <!-- Pairing UI -->
+    <string name="btn_create_call">Crear llamada</string>
+    <string name="btn_join_call">Unirse a llamada</string>
+    <string name="btn_cancel">Cancelar</string>
+    <string name="btn_hang_up">Colgar</string>
+    <string name="pairing_preparing">Preparando…</string>
+    <string name="pairing_discovering_ip">Descubriendo IP pública…</string>
+    <string name="pairing_waiting">Esperando conexión…</string>
+    <string name="pairing_connecting_direct">Conectando directamente…</string>
+    <string name="pairing_connecting_relay">Conectando via relay…</string>
+    <string name="share_code">Comparte este código</string>
+    <string name="hint_relay_optional">Relay (opcional, p.ej. relay.host:9000)</string>
+    <string name="hint_relay_host_port">Relay host:puerto</string>
+    <string name="tab_scan_qr">Escanear QR</string>
+    <string name="tab_enter_code">Ingresar manualmente</string>
 </resources>

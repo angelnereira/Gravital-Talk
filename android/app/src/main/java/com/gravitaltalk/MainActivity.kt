@@ -1,6 +1,7 @@
 package com.gravitaltalk
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.MotionEvent
@@ -37,6 +38,20 @@ class MainActivity : AppCompatActivity() {
         ensureMicPermission()
         setupUi()
         observeState()
+
+        // Si llegamos desde PairingActivity con un handle ya conectado, usarlo.
+        val nativeHandle = intent.getLongExtra(PairingActivity.EXTRA_NATIVE_HANDLE, 0L)
+        if (nativeHandle != 0L) {
+            viewModel.attachExistingHandle(nativeHandle)
+        }
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        val nativeHandle = intent?.getLongExtra(PairingActivity.EXTRA_NATIVE_HANDLE, 0L) ?: 0L
+        if (nativeHandle != 0L) {
+            viewModel.attachExistingHandle(nativeHandle)
+        }
     }
 
     // ─── Permisos ─────────────────────────────────────────────────────────────
@@ -52,13 +67,14 @@ class MainActivity : AppCompatActivity() {
     // ─── UI setup ─────────────────────────────────────────────────────────────
 
     private fun setupUi() {
-        // Botón Conectar / Desconectar.
+        // Botón Conectar / Desconectar (flujo relay legacy).
         binding.btnConnect.setOnClickListener {
             val state = viewModel.connectionState.value
             if (state is PttConnectionState.Idle || state is PttConnectionState.Error) {
                 val relay = binding.etRelay.text?.toString()?.trim().orEmpty()
                 if (relay.isEmpty()) {
-                    Snackbar.make(binding.root, "Ingresa el host del relay", Snackbar.LENGTH_SHORT).show()
+                    // Sin relay → redirigir al flujo de pairing QR.
+                    startActivity(Intent(this, PairingActivity::class.java))
                     return@setOnClickListener
                 }
                 viewModel.connect(relay)
@@ -80,6 +96,15 @@ class MainActivity : AppCompatActivity() {
                 }
                 else -> false
             }
+        }
+
+        // Botón Colgar — vuelve al flujo de pairing.
+        binding.btnHangUp.setOnClickListener {
+            viewModel.disconnect()
+            startActivity(Intent(this, PairingActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_CLEAR_TOP
+            })
+            finish()
         }
     }
 
@@ -120,9 +145,11 @@ class MainActivity : AppCompatActivity() {
                 binding.tvStatus.text = getString(R.string.status_idle)
                 binding.tvSessionId.text = ""
                 binding.btnConnect.text = getString(R.string.btn_connect)
+                binding.btnConnect.isEnabled = true
                 binding.btnPtt.isEnabled = false
                 binding.tilRelay.isEnabled = true
                 binding.tilRoom.isEnabled = true
+                binding.btnHangUp.visibility = View.GONE
             }
             is PttConnectionState.Connecting, is PttConnectionState.Reconnecting -> {
                 binding.tvStatus.text = if (state is PttConnectionState.Reconnecting)
@@ -133,6 +160,7 @@ class MainActivity : AppCompatActivity() {
                 binding.btnPtt.isEnabled = false
                 binding.tilRelay.isEnabled = false
                 binding.tilRoom.isEnabled = false
+                binding.btnHangUp.visibility = View.GONE
             }
             is PttConnectionState.Connected -> {
                 binding.tvStatus.text = getString(R.string.status_connected)
@@ -142,6 +170,7 @@ class MainActivity : AppCompatActivity() {
                 binding.btnPtt.isEnabled = true
                 binding.tilRelay.isEnabled = false
                 binding.tilRoom.isEnabled = false
+                binding.btnHangUp.visibility = View.VISIBLE
             }
             is PttConnectionState.Error -> {
                 binding.tvStatus.text = "Error: ${state.message}"
@@ -150,6 +179,7 @@ class MainActivity : AppCompatActivity() {
                 binding.btnPtt.isEnabled = false
                 binding.tilRelay.isEnabled = true
                 binding.tilRoom.isEnabled = true
+                binding.btnHangUp.visibility = View.GONE
                 Snackbar.make(binding.root, state.message, Snackbar.LENGTH_LONG).show()
             }
         }

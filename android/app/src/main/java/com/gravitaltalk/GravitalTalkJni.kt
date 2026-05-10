@@ -96,4 +96,27 @@ object GravitalTalkJni {
 
     /** Cierra la sesión enviando el paquete CLOSE al peer. @return GsStatus. */
     external fun nativeClose(handle: Long): Int
+
+    // ── Pairing (QR / código) ─────────────────────────────────────────────────
+
+    /**
+     * Devuelve el puerto UDP local del socket (>0), o 0 en error.
+     * Necesario para armar el QR de pairing.
+     */
+    external fun nativeGetLocalPort(handle: Long): Int
+
+    /**
+     * Descubre la IP pública via STUN (stun.l.google.com:19302).
+     * Bloqueante ~5 s. Retorna "ip:port" o null si todos los servidores fallan.
+     *
+     * @param bindPort Puerto local (0 = efímero). Usar el mismo que la sesión.
+     */
+    external fun nativeDiscoverPublicAddr(bindPort: Int): String?
+
+    /**
+     * Handshake servidor sin conocer la IP del cliente de antemano.
+     * Acepta el primer cliente que llegue (modo QR pairing). Bloqueante.
+     * @return GsStatus (0 = OK).
+     */
+    external fun nativeAcceptAny(handle: Long): Int
 }

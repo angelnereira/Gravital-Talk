@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use gravital_talk::{
     Config as RustConfig, LatencyClass, MetricsSnapshot, Session, SessionRole, SessionState,
-    UdpConfig, UdpTransport,
+    UdpConfig, UdpTransport, discover_public_addr,
 };
 
 thread_local! {
@@ -525,6 +525,102 @@ pub unsafe extern "C" fn gs_session_local_ssrc(handle: *mut GsSessionHandle, out
     let inner = unsafe { &*(handle as *mut SessionInner) };
     unsafe { *out_ssrc = inner.session.local_ssrc() };
     GsStatus::GS_OK
+}
+
+/// Devuelve el puerto UDP local del socket de la sesión.
+///
+/// Útil para incluirlo en el QR de pairing (el host lo usa como `lan_port`).
+///
+/// # Safety
+/// `handle` debe ser válido y `out_port` no nulo.
+#[no_mangle]
+pub unsafe extern "C" fn gs_session_local_port(
+    handle: *mut GsSessionHandle,
+    out_port: *mut u16,
+) -> GsStatus {
+    if handle.is_null() || out_port.is_null() {
+        return GsStatus::GS_ERR_NULL_POINTER;
+    }
+    let inner = unsafe { &*(handle as *mut SessionInner) };
+    match inner.session.local_addr() {
+        Ok(addr) => {
+            unsafe { *out_port = addr.port() };
+            GsStatus::GS_OK
+        }
+        Err(e) => {
+            set_last_error(format!("local_addr: {e}"));
+            GsStatus::GS_ERR_IO
+        }
+    }
+}
+
+/// Descubre la dirección IP pública usando STUN (stun.l.google.com:19302).
+///
+/// Escribe `"ip:port"` como C-string NUL-terminada en `out_buf`.
+/// `buf_len` debe ser al menos 48 bytes para acomodar IPv4+puerto.
+///
+/// # Safety
+/// `out_buf` debe apuntar a un buffer de al menos `buf_len` bytes escribibles.
+#[no_mangle]
+pub unsafe extern "C" fn gs_discover_public_addr(
+    local_port: u16,
+    out_buf: *mut c_char,
+    buf_len: usize,
+) -> GsStatus {
+    if out_buf.is_null() || buf_len < 8 {
+        return GsStatus::GS_ERR_NULL_POINTER;
+    }
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            set_last_error(format!("runtime: {e}"));
+            return GsStatus::GS_ERR_INTERNAL;
+        }
+    };
+    match runtime.block_on(discover_public_addr(local_port)) {
+        Ok(addr) => {
+            let s = format!("{addr}");
+            let bytes = s.as_bytes();
+            if bytes.len() + 1 > buf_len {
+                return GsStatus::GS_ERR_BUFFER_TOO_SMALL;
+            }
+            unsafe {
+                std::ptr::copy_nonoverlapping(bytes.as_ptr() as *const c_char, out_buf, bytes.len());
+                *out_buf.add(bytes.len()) = 0;
+            }
+            GsStatus::GS_OK
+        }
+        Err(e) => {
+            set_last_error(format!("STUN: {e}"));
+            GsStatus::GS_ERR_TIMEOUT
+        }
+    }
+}
+
+/// Handshake servidor que acepta el primer cliente que llegue desde cualquier
+/// dirección (modo QR/code pairing — no se requiere conocer la IP del cliente).
+///
+/// Bloqueante hasta completar el handshake o agotar el timeout configurado.
+///
+/// # Safety
+/// `handle` debe ser válido y creado con `gs_session_create`.
+#[no_mangle]
+pub unsafe extern "C" fn gs_session_accept_any(handle: *mut GsSessionHandle) -> GsStatus {
+    if handle.is_null() {
+        return GsStatus::GS_ERR_NULL_POINTER;
+    }
+    let inner = unsafe { &*(handle as *mut SessionInner) };
+    let session = inner.session.clone();
+    match inner.runtime.block_on(async move { session.handshake_open().await }) {
+        Ok(()) => GsStatus::GS_OK,
+        Err(e) => {
+            set_last_error(format!("accept_any: {e}"));
+            GsStatus::GS_ERR_HANDSHAKE
+        }
+    }
 }
 
 /// Retorna `GS_OK` — útil como smoke test de linkado.
