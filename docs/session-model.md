@@ -86,3 +86,55 @@ Durante el handshake se distingue el **iniciador** (cliente) del **receptor** (s
 ## 8. Cambio de codec mid-session
 
 No soportado en 0.1. Cambiar codec requiere cerrar la sesión y reabrir una nueva.
+
+## 9. Handshake abierto (modo pairing QR)
+
+El handshake estándar `handshake_server(peer: SocketAddr)` requiere conocer la IP del cliente de antemano. Esto es inviable en el flujo de emparejamiento por QR, donde el servidor no conoce quién se va a conectar.
+
+`handshake_open()` resuelve esto:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ handshake_server(peer)     │ handshake_open()               │
+├────────────────────────────┼────────────────────────────────┤
+│ Filtra paquetes con        │ Acepta ClientHello de          │
+│ from != peer               │ cualquier dirección            │
+│                            │                                │
+│ peer es conocido antes     │ peer se fija al recibir el     │
+│ del handshake              │ primer ClientHello válido      │
+│                            │                                │
+│ Uso: relay, direcciones    │ Uso: pairing por QR/código,    │
+│ fijas, tests               │ LAN discovery, P2P internet    │
+└────────────────────────────┴────────────────────────────────┘
+```
+
+**Secuencia `handshake_open()`:**
+1. Servidor llama `session.handshake_open()`, queda bloqueado.
+2. Servidor genera QR con su dirección local + STUN pública.
+3. Cliente escanea QR, llama `session.handshake_client(server_addr)`.
+4. Servidor recibe `ClientHello` → fija `peer = from` → envía `ServerHello` → completa handshake normal.
+5. A partir de ese momento, todos los paquetes se filtran por esa IP fijada.
+
+**Garantía de seguridad:** el handshake usa el mismo intercambio X25519 + ChaCha20-Poly1305 que el modo estándar. La diferencia es únicamente en qué momento se conoce la IP del peer.
+
+**En Rust:**
+```rust
+// Servidor (host QR)
+let session = Session::new(config, transport)?;
+session.handshake_open().await?;  // bloquea hasta que alguien se conecte
+
+// Cliente (escanea QR)
+let session = Session::new(config, transport)?;
+session.handshake_client(server_addr).await?;
+```
+
+**En C (FFI):**
+```c
+gs_session_accept_any(handle);   // bloqueante, retorna GsStatus
+```
+
+**En Kotlin (Android):**
+```kotlin
+// En coroutine IO
+val status = GravitalTalkJni.nativeAcceptAny(handle)
+```

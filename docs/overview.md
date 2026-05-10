@@ -14,7 +14,7 @@ Objetivos:
 
 ## No objetivos
 
-- **No es un reemplazo de WebRTC** para escenarios navegador-a-navegador con NAT traversal automático. Gravital Talk asume conectividad directa o un relay explícito.
+- **No es un reemplazo de WebRTC** para escenarios navegador-a-navegador con ICE/TURN completo. Gravital Talk implementa STUN para descubrir IPs públicas, pero no ICE ni TURN; redes con NAT simétrico requieren relay.
 - **No incluye transporte confiable.** El medio por defecto es UDP *best effort*. Las aplicaciones que necesiten confiabilidad deben usar el canal de control o capa superior.
 - **No es un codec.** El core transporta frames opacos; el codec (PCM y Opus disponibles desde 0.2.0-alpha.1) vive en `gravital-talk-codec` como capa independiente y se aplica vía `CodecSession` en el facade.
 - **No es un framework de aplicación.** No hay UI, no hay lógica de sala, no hay gestión de participantes más allá del handshake punto a punto o relay.
@@ -40,14 +40,16 @@ Objetivos:
 | Integridad por paquete | ❌ | ✅ (SRTP) | ❌ | ✅ |
 | Codec-agnóstico | ✅ | ❌ | ❌ | ✅ |
 | SDKs idiomáticos | Fragmentado | Fragmentado | ❌ | ✅ |
-| Dependencia de servicios | — | Señalización STUN/TURN | — | Ninguna |
+| Dependencia de servicios | — | Señalización STUN/TURN | — | Opcional (relay fallback) |
+| NAT traversal | ❌ | ✅ (ICE/TURN) | ❌ | Parcial (STUN P2P, relay fallback) |
 
 ## Roadmap resumido
 
 - **0.1.0-alpha.1** ✅ Protocolo core + transporte UDP/WebSocket + SDKs Python/Web + CLI MVP.
 - **0.2.0-alpha.1** ✅ Codec Opus + audio I/O hardware (`cpal`) + CLI productivo con `--device`/`--codec`.
 - **0.2.0-alpha.2** ✅ Negociación de codec en handshake + resampler `rubato` + relay productivo (`gravital-talk-relay`) con Prometheus + Dockerfile + Helm chart + módulos Terraform AWS/Hetzner/DigitalOcean + cloud-init Raspberry Pi + workflows release/docs/terraform.
-- **0.3** Cifrado Noise + rate limiting + NAT traversal STUN.
+- **0.2.0-alpha.3** ✅ Emparejamiento P2P por QR/código sin relay obligatorio + cliente STUN RFC 5389 + `handshake_open()` + Android PairingActivity completa + CI auto-build de binarios a `outputs/`.
+- **0.3** Cifrado Noise + rate limiting + NAT traversal ICE/TURN para redes simétricas.
 - **0.4** SDKs Swift/Kotlin/Node + landing page + publicación crates.io/PyPI/npm.
 - **1.0** Protocolo estable, SemVer compliance, auditoría de seguridad externa.
 
