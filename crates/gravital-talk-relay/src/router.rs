@@ -1,8 +1,8 @@
-//! Routing table del relay: mapea `session_id → endpoints`.
+//! Routing table del relay: mapea `session_id → peers`.
 //!
-//! Cada session_id puede tener hasta 2 endpoints (peer A y peer B).
-//! Cuando llega un datagrama de un endpoint conocido, se reenvía al otro.
-//! Un endpoint puede ser una `SocketAddr` (UDP) o un sender de WebSocket.
+//! Soporta grupos de hasta `max_peers_per_session` participantes.
+//! Cuando llega un datagrama de un peer conocido, se retorna la lista
+//! de todos los demás peers del grupo para broadcast.
 
 use std::net::SocketAddr;
 use std::time::Instant;
@@ -13,12 +13,10 @@ use tokio::sync::mpsc;
 
 use crate::metrics::RelayMetrics;
 
-/// Identifica un peer en una sesión.
+/// Identifica un peer dentro de un grupo.
 #[derive(Debug, Clone)]
 pub enum SessionEndpoint {
-    /// Peer con UDP. Reenviar via `UdpTransport::send_to`.
     Udp(SocketAddr),
-    /// Peer con WebSocket. Reenviar empujando bytes al `mpsc::Sender`.
     WebSocket(mpsc::UnboundedSender<Bytes>),
 }
 
@@ -29,7 +27,7 @@ impl SessionEndpoint {
     pub fn is_ws(&self) -> bool {
         matches!(self, Self::WebSocket(_))
     }
-    /// Considera dos endpoints "iguales" si vienen del mismo origen físico.
+
     pub fn matches(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Udp(a), Self::Udp(b)) => a == b,
@@ -41,33 +39,33 @@ impl SessionEndpoint {
 
 #[derive(Debug)]
 pub struct RouteEntry {
-    pub a: Option<SessionEndpoint>,
-    pub b: Option<SessionEndpoint>,
+    /// Todos los peers activos de esta sesión/grupo.
+    pub peers: Vec<SessionEndpoint>,
     pub last_activity: Instant,
 }
 
 impl RouteEntry {
     fn new() -> Self {
-        Self {
-            a: None,
-            b: None,
-            last_activity: Instant::now(),
-        }
+        Self { peers: Vec::new(), last_activity: Instant::now() }
     }
 }
 
 #[derive(Debug)]
 pub struct Router {
     routes: DashMap<u32, RouteEntry>,
+    rooms: DashMap<String, u32>,
     max_sessions: usize,
+    max_peers_per_session: usize,
     metrics: RelayMetrics,
 }
 
 impl Router {
-    pub fn new(max_sessions: usize, metrics: RelayMetrics) -> Self {
+    pub fn new(max_sessions: usize, max_peers_per_session: usize, metrics: RelayMetrics) -> Self {
         Self {
             routes: DashMap::new(),
+            rooms: DashMap::new(),
             max_sessions,
+            max_peers_per_session,
             metrics,
         }
     }
@@ -76,79 +74,79 @@ impl Router {
         &self.metrics
     }
 
-    /// Resultado de procesar un datagrama entrante.
-    /// `Forward(target)`: reenviar al endpoint indicado.
-    /// `Registered`: registrado como nuevo peer pero sin destino aún.
-    /// `Dropped`: rechazado (sesión llena, etc).
+    /// Registra el datagrama entrante y devuelve la lista de peers destino.
+    ///
+    /// - `Broadcast(targets)` — reenviar a todos los targets de la lista.
+    /// - `Registered` — primer o nuevo peer; sin destinos todavía.
+    /// - `Dropped` — rechazado (sesión llena, session_id=0, max_sessions).
     pub fn route(&self, session_id: u32, from: SessionEndpoint) -> RouteDecision {
         if session_id == 0 {
-            self.metrics
-                .dropped
-                .with_label_values(&["zero_session"])
-                .inc();
+            self.metrics.dropped.with_label_values(&["zero_session"]).inc();
             return RouteDecision::Dropped;
         }
 
-        // Caso fast-path: la entrada ya existe.
         if let Some(mut entry) = self.routes.get_mut(&session_id) {
             entry.last_activity = Instant::now();
 
-            // ¿Es el endpoint A?
-            if let Some(ref a) = entry.a {
-                if a.matches(&from) {
-                    return match entry.b.clone() {
-                        Some(b) => RouteDecision::Forward(b),
-                        None => RouteDecision::Registered,
-                    };
-                }
+            // ¿Ya conocemos a este peer?
+            let known = entry.peers.iter().any(|p| p.matches(&from));
+            if known {
+                // Devolver todos los demás como destinos de broadcast.
+                let targets: Vec<SessionEndpoint> = entry
+                    .peers
+                    .iter()
+                    .filter(|p| !p.matches(&from))
+                    .cloned()
+                    .collect();
+                return if targets.is_empty() {
+                    RouteDecision::Registered
+                } else {
+                    RouteDecision::Broadcast(targets)
+                };
             }
-            // ¿Es el endpoint B?
-            if let Some(ref b) = entry.b {
-                if b.matches(&from) {
-                    return match entry.a.clone() {
-                        Some(a) => RouteDecision::Forward(a),
-                        None => RouteDecision::Registered,
-                    };
-                }
-            }
-            // Es un tercer peer intentando intervenir — descartar.
-            if entry.a.is_some() && entry.b.is_some() {
-                self.metrics
-                    .dropped
-                    .with_label_values(&["session_full"])
-                    .inc();
+
+            // Peer nuevo — ¿hay espacio?
+            if entry.peers.len() >= self.max_peers_per_session {
+                self.metrics.dropped.with_label_values(&["session_full"]).inc();
                 return RouteDecision::Dropped;
             }
-            // Slot libre, asignar como B.
-            entry.b = Some(from);
-            return RouteDecision::Registered;
+
+            // Registrar el peer y devolver los peers ya existentes para broadcast.
+            let existing: Vec<SessionEndpoint> = entry.peers.iter().cloned().collect();
+            entry.peers.push(from);
+            return if existing.is_empty() {
+                RouteDecision::Registered
+            } else {
+                RouteDecision::Broadcast(existing)
+            };
         }
 
         // Sesión nueva.
         if self.routes.len() >= self.max_sessions {
-            self.metrics
-                .dropped
-                .with_label_values(&["max_sessions"])
-                .inc();
+            self.metrics.dropped.with_label_values(&["max_sessions"]).inc();
             return RouteDecision::Dropped;
         }
         let mut entry = RouteEntry::new();
-        entry.a = Some(from);
+        entry.peers.push(from);
         self.routes.insert(session_id, entry);
         self.metrics.active_sessions.set(self.routes.len() as i64);
         RouteDecision::Registered
     }
 
-    /// Elimina entradas inactivas. Devuelve cuántas se removieron.
+    /// Elimina peers cuyo canal WS está cerrado y sesiones inactivas.
     pub fn evict_idle(&self, max_age_secs: u64) -> usize {
         let now = Instant::now();
         let max_age = std::time::Duration::from_secs(max_age_secs);
         let mut removed = 0usize;
         self.routes.retain(|_, entry| {
-            let keep = now.saturating_duration_since(entry.last_activity) < max_age;
-            if !keep {
-                removed += 1;
-            }
+            // Limpiar peers WS desconectados.
+            entry.peers.retain(|p| match p {
+                SessionEndpoint::WebSocket(tx) => !tx.is_closed(),
+                SessionEndpoint::Udp(_) => true,
+            });
+            let keep = !entry.peers.is_empty()
+                && now.saturating_duration_since(entry.last_activity) < max_age;
+            if !keep { removed += 1; }
             keep
         });
         if removed > 0 {
@@ -160,13 +158,50 @@ impl Router {
     pub fn active_sessions(&self) -> usize {
         self.routes.len()
     }
+
+    pub fn peer_count(&self, session_id: u32) -> usize {
+        self.routes.get(&session_id).map(|e| e.peers.len()).unwrap_or(0)
+    }
+
+    // ── Rooms API ────────────────────────────────────────────────────────────
+
+    /// Registra un código de sala → session_id. Devuelve false si el código ya existe.
+    pub fn register_room(&self, code: String, session_id: u32) -> bool {
+        if self.rooms.contains_key(&code) {
+            return false;
+        }
+        self.rooms.insert(code, session_id);
+        true
+    }
+
+    /// Resuelve un código de sala a session_id.
+    pub fn resolve_room(&self, code: &str) -> Option<u32> {
+        self.rooms.get(code).map(|v| *v)
+    }
+
+    /// Elimina un código de sala.
+    pub fn remove_room(&self, code: &str) -> bool {
+        self.rooms.remove(code).is_some()
+    }
+
+    /// Lista todos los códigos activos con su session_id y peer_count.
+    pub fn list_rooms(&self) -> Vec<(String, u32, usize)> {
+        self.rooms
+            .iter()
+            .map(|r| {
+                let sid = *r.value();
+                let peers = self.peer_count(sid);
+                (r.key().clone(), sid, peers)
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug)]
 pub enum RouteDecision {
-    /// Reenviar al endpoint indicado.
-    Forward(SessionEndpoint),
-    /// Endpoint registrado, no hay destino todavía.
+    /// Reenviar (broadcast) al conjunto de peers indicado.
+    Broadcast(Vec<SessionEndpoint>),
+    /// Peer registrado; no hay destinos todavía (primer peer del grupo).
     Registered,
     /// Datagrama descartado.
     Dropped,
@@ -176,66 +211,94 @@ pub enum RouteDecision {
 mod tests {
     use super::*;
 
-    fn ep_udp(s: &str) -> SessionEndpoint {
+    fn ep(s: &str) -> SessionEndpoint {
         SessionEndpoint::Udp(s.parse().unwrap())
     }
 
-    #[test]
-    fn first_packet_registers_endpoint_a() {
-        let router = Router::new(100, RelayMetrics::new());
-        let r = router.route(42, ep_udp("127.0.0.1:1000"));
-        assert!(matches!(r, RouteDecision::Registered));
-        assert_eq!(router.active_sessions(), 1);
+    fn router() -> Router {
+        Router::new(100, 50, RelayMetrics::new())
     }
 
     #[test]
-    fn second_peer_completes_session() {
-        let router = Router::new(100, RelayMetrics::new());
-        router.route(42, ep_udp("127.0.0.1:1000"));
-        let r = router.route(42, ep_udp("127.0.0.1:2000"));
-        assert!(matches!(r, RouteDecision::Registered));
+    fn first_packet_registers() {
+        let r = router();
+        assert!(matches!(r.route(1, ep("127.0.0.1:1000")), RouteDecision::Registered));
+        assert_eq!(r.active_sessions(), 1);
+        assert_eq!(r.peer_count(1), 1);
+    }
 
-        // Tercer datagrama de A debe reenviarse a B.
-        let r = router.route(42, ep_udp("127.0.0.1:1000"));
-        match r {
-            RouteDecision::Forward(SessionEndpoint::Udp(addr)) => {
-                assert_eq!(addr.port(), 2000);
+    #[test]
+    fn second_peer_gets_broadcast_to_first() {
+        let r = router();
+        r.route(1, ep("127.0.0.1:1000"));
+        let d = r.route(1, ep("127.0.0.1:2000"));
+        match d {
+            RouteDecision::Broadcast(targets) => {
+                assert_eq!(targets.len(), 1);
+                match &targets[0] {
+                    SessionEndpoint::Udp(a) => assert_eq!(a.port(), 1000),
+                    _ => panic!("expected UDP endpoint"),
+                }
             }
-            other => panic!("expected Forward to B, got {other:?}"),
+            other => panic!("expected Broadcast, got {other:?}"),
         }
+        assert_eq!(r.peer_count(1), 2);
+    }
 
-        // Y de B debe reenviarse a A.
-        let r = router.route(42, ep_udp("127.0.0.1:2000"));
-        match r {
-            RouteDecision::Forward(SessionEndpoint::Udp(addr)) => {
-                assert_eq!(addr.port(), 1000);
+    #[test]
+    fn existing_peer_broadcasts_to_all_others() {
+        let r = router();
+        r.route(1, ep("127.0.0.1:1000"));
+        r.route(1, ep("127.0.0.1:2000"));
+        r.route(1, ep("127.0.0.1:3000"));
+        assert_eq!(r.peer_count(1), 3);
+
+        let d = r.route(1, ep("127.0.0.1:1000"));
+        match d {
+            RouteDecision::Broadcast(targets) => {
+                assert_eq!(targets.len(), 2);
+                let ports: Vec<u16> = targets
+                    .iter()
+                    .map(|t| match t { SessionEndpoint::Udp(a) => a.port(), _ => 0 })
+                    .collect();
+                assert!(ports.contains(&2000));
+                assert!(ports.contains(&3000));
             }
-            other => panic!("expected Forward to A, got {other:?}"),
+            other => panic!("expected Broadcast, got {other:?}"),
         }
     }
 
     #[test]
-    fn third_peer_in_full_session_is_dropped() {
-        let router = Router::new(100, RelayMetrics::new());
-        router.route(42, ep_udp("127.0.0.1:1000"));
-        router.route(42, ep_udp("127.0.0.1:2000"));
-        let r = router.route(42, ep_udp("127.0.0.1:3000"));
-        assert!(matches!(r, RouteDecision::Dropped));
+    fn session_full_drops_extra_peer() {
+        let r = Router::new(100, 2, RelayMetrics::new());
+        r.route(1, ep("127.0.0.1:1000"));
+        r.route(1, ep("127.0.0.1:2000"));
+        let d = r.route(1, ep("127.0.0.1:3000"));
+        assert!(matches!(d, RouteDecision::Dropped));
+        assert_eq!(r.peer_count(1), 2);
     }
 
     #[test]
     fn zero_session_id_dropped() {
-        let router = Router::new(100, RelayMetrics::new());
-        let r = router.route(0, ep_udp("127.0.0.1:1000"));
-        assert!(matches!(r, RouteDecision::Dropped));
+        let r = router();
+        assert!(matches!(r.route(0, ep("127.0.0.1:1000")), RouteDecision::Dropped));
     }
 
     #[test]
     fn max_sessions_enforced() {
-        let router = Router::new(2, RelayMetrics::new());
-        router.route(1, ep_udp("127.0.0.1:1000"));
-        router.route(2, ep_udp("127.0.0.1:2000"));
-        let r = router.route(3, ep_udp("127.0.0.1:3000"));
-        assert!(matches!(r, RouteDecision::Dropped));
+        let r = Router::new(2, 50, RelayMetrics::new());
+        r.route(1, ep("127.0.0.1:1000"));
+        r.route(2, ep("127.0.0.1:2000"));
+        assert!(matches!(r.route(3, ep("127.0.0.1:3000")), RouteDecision::Dropped));
+    }
+
+    #[test]
+    fn room_registry_roundtrip() {
+        let r = router();
+        assert!(r.register_room("ABCD-1234".into(), 42));
+        assert_eq!(r.resolve_room("ABCD-1234"), Some(42));
+        assert!(!r.register_room("ABCD-1234".into(), 99)); // duplicate
+        assert!(r.remove_room("ABCD-1234"));
+        assert_eq!(r.resolve_room("ABCD-1234"), None);
     }
 }
