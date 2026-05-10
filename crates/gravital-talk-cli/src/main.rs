@@ -793,12 +793,14 @@ async fn cmd_ptt(
     let stream_cfg = StreamConfig {
         sample_rate: config.sample_rate,
         channels: config.channels,
-        frame_duration_ms: config.frame_duration_ms as u32,
+        frame_duration_ms: config.frame_duration_ms,
     };
 
     // Playback siempre activo en background.
-    let playback = AudioPlayback::start(stream_cfg.clone(), Some(&out_device))
+    let playback = AudioPlayback::start(stream_cfg, Some(&out_device))
         .context("failed to open output device")?;
+    // Sender es Clone; movemos al task de recepción sin necesitar Clone en AudioPlayback.
+    let pb_sender = playback.sender();
 
     // ── Flags compartidos ───────────────────────────────────────────────────
     let ptt_on = Arc::new(AtomicBool::new(false));
@@ -806,13 +808,12 @@ async fn cmd_ptt(
 
     // ── Task de recepción + playback ────────────────────────────────────────
     let cs_rx = cs.clone();
-    let pb_tx = playback.clone();
     let running_rx = running.clone();
     tokio::spawn(async move {
         while running_rx.load(Ordering::Acquire) {
             match cs_rx.recv_samples().await {
                 Ok(samples) => {
-                    let _ = pb_tx.push(samples);
+                    let _ = pb_sender.send(samples);
                 }
                 Err(e) => {
                     tracing::debug!(?e, "recv error");
@@ -826,6 +827,7 @@ async fn cmd_ptt(
     let cs_tx = cs.clone();
     let ptt_tx = ptt_on.clone();
     let running_tx = running.clone();
+    let in_device_cap = in_device.clone();
     tokio::spawn(async move {
         let mut capture: Option<(AudioCapture, std::sync::mpsc::Receiver<Vec<i16>>)> = None;
         loop {
@@ -835,7 +837,7 @@ async fn cmd_ptt(
             if ptt_tx.load(Ordering::Acquire) {
                 // Asegurar que la captura está activa.
                 if capture.is_none() {
-                    match AudioCapture::start(stream_cfg.clone(), Some("default")) {
+                    match AudioCapture::start(stream_cfg, Some(in_device_cap.as_str())) {
                         Ok((cap, rx)) => {
                             capture = Some((cap, rx));
                         }
