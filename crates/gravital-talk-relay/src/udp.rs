@@ -23,18 +23,17 @@ pub async fn run(socket: Arc<UdpSocket>, router: Arc<Router>) -> anyhow::Result<
         let session_id = match PacketView::decode(data) {
             Ok(view) => view.header().session_id,
             Err(_) => {
-                router
-                    .metrics()
-                    .dropped
-                    .with_label_values(&["malformed"])
-                    .inc();
+                router.metrics().dropped.with_label_values(&["malformed"]).inc();
                 continue;
             }
         };
 
         match router.route(session_id, SessionEndpoint::Udp(from)) {
-            RouteDecision::Forward(target) => {
-                forward_to(&socket, target, Bytes::copy_from_slice(data), &router).await;
+            RouteDecision::Broadcast(targets) => {
+                let payload = Bytes::copy_from_slice(data);
+                for target in targets {
+                    forward_to(&socket, target, payload.clone(), &router).await;
+                }
             }
             RouteDecision::Registered | RouteDecision::Dropped => {}
         }
@@ -55,20 +54,12 @@ async fn forward_to(
             }
             Err(e) => {
                 tracing::warn!(?addr, ?e, "failed to forward to UDP peer");
-                router
-                    .metrics()
-                    .dropped
-                    .with_label_values(&["send_error"])
-                    .inc();
+                router.metrics().dropped.with_label_values(&["send_error"]).inc();
             }
         },
         SessionEndpoint::WebSocket(tx) => {
             if tx.send(data.clone()).is_err() {
-                router
-                    .metrics()
-                    .dropped
-                    .with_label_values(&["ws_disconnected"])
-                    .inc();
+                router.metrics().dropped.with_label_values(&["ws_disconnected"]).inc();
             } else {
                 router.metrics().packets_out.inc();
                 router.metrics().bytes_out.inc_by(data.len() as u64);

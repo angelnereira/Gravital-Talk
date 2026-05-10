@@ -9,18 +9,22 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 
 pub mod congestion;
+pub mod discovery;
 pub mod error;
 pub mod fec;
 pub mod jitter_buffer;
 pub mod session;
+pub mod tone;
 pub mod traits;
 pub mod udp;
 
 pub use congestion::CongestionController;
+pub use discovery::{announce_lan, discover_lan, PeerInfo, DISCOVERY_PORT};
 pub use error::TransportError;
 pub use fec::{FecDecoder, FecEncoder, FecParity};
 pub use jitter_buffer::JitterBuffer;
 pub use session::{Config, Session, SessionRole};
+pub use tone::{generate_pcm_tone, pcm_to_bytes, ptt_press_tone, ptt_release_tone};
 pub use traits::{LatencyClass, Transport};
 pub use udp::UdpTransport;
 

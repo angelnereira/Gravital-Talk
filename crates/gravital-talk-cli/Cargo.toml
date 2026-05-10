@@ -14,8 +14,9 @@ name = "gs"
 path = "src/main.rs"
 
 [dependencies]
-gravital-talk    = { workspace = true }
-gravital-talk-io = { workspace = true }
+gravital-talk             = { workspace = true }
+gravital-talk-io          = { workspace = true }
+gravital-talk-transport   = { workspace = true }
 tokio             = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync", "macros", "signal", "io-util"] }
 clap              = { workspace = true }
 hound             = { workspace = true }

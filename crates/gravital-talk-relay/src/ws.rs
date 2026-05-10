@@ -1,8 +1,4 @@
 //! WebSocket bridge para peers que no pueden hacer UDP (browser).
-//!
-//! Cada conexión WS es una sesión potencial. El cliente envía y recibe
-//! frames binarios que contienen paquetes Gravital sin modificación —
-//! es el mismo wire protocol, sólo cambia el transporte.
 
 use std::sync::Arc;
 
@@ -46,7 +42,6 @@ async fn handle_connection(
     let (mut ws_sink, mut ws_stream) = ws.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<Bytes>();
 
-    // Task que vuelca lo que le mandan en `rx` hacia el cliente WS.
     let metrics = router.metrics().clone();
     let writer = tokio::spawn(async move {
         while let Some(data) = rx.recv().await {
@@ -68,33 +63,28 @@ async fn handle_connection(
                 let session_id = match PacketView::decode(&bytes) {
                     Ok(view) => view.header().session_id,
                     Err(_) => {
-                        router
-                            .metrics()
-                            .dropped
-                            .with_label_values(&["malformed"])
-                            .inc();
+                        router.metrics().dropped.with_label_values(&["malformed"]).inc();
                         continue;
                     }
                 };
 
-                let from_endpoint = SessionEndpoint::WebSocket(tx.clone());
-                match router.route(session_id, from_endpoint) {
-                    RouteDecision::Forward(target) => {
-                        forward(&udp_socket, target, bytes, &router).await;
+                let from_ep = SessionEndpoint::WebSocket(tx.clone());
+                match router.route(session_id, from_ep) {
+                    RouteDecision::Broadcast(targets) => {
+                        for target in targets {
+                            forward(&udp_socket, target, bytes.clone(), &router).await;
+                        }
                     }
                     RouteDecision::Registered | RouteDecision::Dropped => {}
                 }
             }
             Message::Close(_) => break,
-            Message::Ping(p) => {
-                // tungstenite responde Pong automáticamente; nada que hacer.
-                let _ = p;
-            }
-            _ => {} // Ignorar text/pong/etc.
+            Message::Ping(_) => {}
+            _ => {}
         }
     }
 
-    drop(tx); // Cierra el writer task.
+    drop(tx);
     let _ = writer.await;
     let _ = peer_addr;
     Ok(())
@@ -113,11 +103,7 @@ async fn forward(udp: &Arc<UdpSocket>, target: SessionEndpoint, data: Bytes, rou
         },
         SessionEndpoint::WebSocket(peer_tx) => {
             if peer_tx.send(data.clone()).is_err() {
-                router
-                    .metrics()
-                    .dropped
-                    .with_label_values(&["ws_disconnected"])
-                    .inc();
+                router.metrics().dropped.with_label_values(&["ws_disconnected"]).inc();
             } else {
                 router.metrics().packets_out.inc();
                 router.metrics().bytes_out.inc_by(data.len() as u64);
