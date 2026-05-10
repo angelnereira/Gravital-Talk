@@ -1,0 +1,15 @@
+# Android local config — NO commitear
+local.properties
+
+# Build outputs
+build/
+app/build/
+
+# Android Studio
+.idea/
+*.iml
+.gradle/
+
+# jniLibs: tracked vacíos, las .so las genera CI
+# (no ignorar la carpeta entera para preservar la estructura)
+app/src/main/jniLibs/**/*.so
