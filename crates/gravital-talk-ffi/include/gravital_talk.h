@@ -217,6 +217,38 @@ int gs_session_is_peer_ptt_active(GsSessionHandle *handle);
 GsStatus gs_session_local_ssrc(GsSessionHandle *handle, uint32_t *out_ssrc);
 
 /*
+ Devuelve el puerto UDP local del socket de la sesión.
+
+ Útil para incluirlo en el QR de pairing (el host lo usa como `lan_port`).
+
+ # Safety
+ `handle` debe ser válido y `out_port` no nulo.
+ */
+GsStatus gs_session_local_port(GsSessionHandle *handle, uint16_t *out_port);
+
+/*
+ Descubre la dirección IP pública usando STUN (stun.l.google.com:19302).
+
+ Escribe `"ip:port"` como C-string NUL-terminada en `out_buf`.
+ `buf_len` debe ser al menos 48 bytes para acomodar IPv4+puerto.
+
+ # Safety
+ `out_buf` debe apuntar a un buffer de al menos `buf_len` bytes escribibles.
+ */
+GsStatus gs_discover_public_addr(uint16_t local_port, char *out_buf, uintptr_t buf_len);
+
+/*
+ Handshake servidor que acepta el primer cliente que llegue desde cualquier
+ dirección (modo QR/code pairing — no se requiere conocer la IP del cliente).
+
+ Bloqueante hasta completar el handshake o agotar el timeout configurado.
+
+ # Safety
+ `handle` debe ser válido y creado con `gs_session_create`.
+ */
+GsStatus gs_session_accept_any(GsSessionHandle *handle);
+
+/*
  Retorna `GS_OK` — útil como smoke test de linkado.
  */
 int gs_ping(void);
