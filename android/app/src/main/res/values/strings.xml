@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Gravital Talk</string>
+    <string name="ptt_press">Mantén para hablar</string>
+    <string name="ptt_release">Suelta para parar</string>
+    <string name="status_idle">En espera</string>
+    <string name="status_connecting">Conectando…</string>
+    <string name="status_connected">Conectado</string>
+    <string name="status_transmitting">Transmitiendo</string>
+    <string name="status_peer_transmitting">Peer transmitiendo</string>
+    <string name="hint_relay">Host del relay (p.ej. 1.2.3.4)</string>
+    <string name="hint_room">Código de sala (p.ej. GRVT-1234)</string>
+    <string name="btn_connect">Conectar</string>
+    <string name="btn_disconnect">Desconectar</string>
+</resources>

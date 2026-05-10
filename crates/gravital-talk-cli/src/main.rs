@@ -3,6 +3,7 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -10,6 +11,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
+use crossterm::{
+    event::{self, Event, KeyCode, KeyModifiers},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
 use gravital_talk::{
     CodecId, CodecSession, Config, Session, SessionRole, Transport, UdpConfig, UdpTransport,
 };
@@ -158,6 +164,50 @@ enum Command {
         #[arg(long, default_value_t = 3)]
         timeout: u64,
     },
+    /// Push-to-Talk interactivo en tiempo real.
+    ///
+    /// Conecta con un peer directo o a través de un relay usando un room code.
+    /// Usa SPACE para hablar, Q para salir.
+    ///
+    /// Ejemplos:
+    ///   gs ptt --relay 1.2.3.4:9100 --room GRVT-2847
+    ///   gs ptt --peer 192.168.1.5 --peer-port 9000
+    ///   gs ptt --peer 192.168.1.5 --peer-port 9000 --listen
+    Ptt {
+        /// Dirección del relay (HOST). Requiere también --room.
+        #[arg(long)]
+        relay: Option<String>,
+        /// Puerto UDP del relay (default: 9000).
+        #[arg(long, default_value_t = 9000)]
+        relay_port: u16,
+        /// Puerto HTTP de observabilidad del relay para resolver rooms (default: 9100).
+        #[arg(long, default_value_t = 9100)]
+        relay_obs_port: u16,
+        /// Código de sala en formato XXXX-NNNN (requerido con --relay).
+        #[arg(long)]
+        room: Option<String>,
+        /// Peer directo (HOST). Mutualmente exclusivo con --relay.
+        #[arg(long)]
+        peer: Option<String>,
+        /// Puerto del peer directo.
+        #[arg(long, default_value_t = 9000)]
+        peer_port: u16,
+        /// Puerto local de escucha (0 = efímero).
+        #[arg(long, default_value_t = 0)]
+        port: u16,
+        /// Actúa como servidor (espera que el peer conecte primero). Solo P2P.
+        #[arg(long)]
+        listen: bool,
+        /// Dispositivo de entrada de audio (micrófono).
+        #[arg(long, default_value = "default")]
+        device: String,
+        /// Dispositivo de salida de audio (altavoz). Por defecto igual que --device.
+        #[arg(long)]
+        out_device: Option<String>,
+        /// Codec: pcm u opus.
+        #[arg(long, default_value = "opus")]
+        codec: CodecArg,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -262,6 +312,34 @@ async fn dispatch(cmd: Command) -> Result<()> {
         Command::Relay { bind, port } => cmd_relay(bind, port).await,
         Command::Room { action } => cmd_room(action).await,
         Command::Discover { timeout } => cmd_discover(timeout).await,
+        Command::Ptt {
+            relay,
+            relay_port,
+            relay_obs_port,
+            room,
+            peer,
+            peer_port,
+            port,
+            listen,
+            device,
+            out_device,
+            codec,
+        } => {
+            cmd_ptt(
+                relay,
+                relay_port,
+                relay_obs_port,
+                room,
+                peer,
+                peer_port,
+                port,
+                listen,
+                device,
+                out_device.unwrap_or_else(|| "default".to_string()),
+                codec,
+            )
+            .await
+        }
     }
 }
 
@@ -648,6 +726,260 @@ fn extract_http_body(raw: &[u8]) -> Result<String> {
     } else {
         anyhow::bail!("malformed HTTP response (no header separator)");
     }
+}
+
+// ─── gs ptt ──────────────────────────────────────────────────────────────────
+
+#[allow(clippy::too_many_arguments)]
+async fn cmd_ptt(
+    relay: Option<String>,
+    relay_port: u16,
+    relay_obs_port: u16,
+    room: Option<String>,
+    peer_host: Option<String>,
+    peer_port: u16,
+    local_port: u16,
+    listen: bool,
+    in_device: String,
+    out_device: String,
+    codec_arg: CodecArg,
+) -> Result<()> {
+    // ── Determinar peer y rol ───────────────────────────────────────────────
+    let (peer_addr, role, via_relay): (SocketAddr, SessionRole, bool) = match (&relay, &room, &peer_host) {
+        (Some(relay_host), Some(room_code), None) => {
+            // Modo relay: resolver room → session_id, luego conectar al relay UDP
+            let path = format!("/api/rooms/{room_code}");
+            let resp = http_get(relay_host, relay_obs_port, &path).await
+                .context("failed to resolve room code — is the relay running?")?;
+            tracing::info!(room = room_code, response = %resp, "room resolved");
+            let relay_udp: SocketAddr = format!("{relay_host}:{relay_port}").parse()?;
+            (relay_udp, SessionRole::Client, true)
+        }
+        (None, None, Some(host)) => {
+            let peer: SocketAddr = format!("{host}:{peer_port}").parse()?;
+            let role = if listen { SessionRole::Server } else { SessionRole::Client };
+            (peer, role, false)
+        }
+        _ => bail!("use either --relay + --room  OR  --peer [--listen]"),
+    };
+
+    let bind_addr: SocketAddr = format!("0.0.0.0:{local_port}").parse()?;
+    let transport = Arc::new(
+        UdpTransport::bind(UdpConfig { bind_addr, ..Default::default() }).await?,
+    );
+    let codec_id = codec_arg.to_codec_id();
+    let config = Config {
+        sample_rate: 48_000,
+        channels: 1,
+        frame_duration_ms: 20,
+        ..Config::default()
+    };
+    let cs = Arc::new(CodecSession::new(transport, config.clone(), codec_id)?);
+
+    // ── Handshake ───────────────────────────────────────────────────────────
+    let mode_str = if via_relay {
+        format!("relay {} room {}", relay.as_deref().unwrap_or("?"), room.as_deref().unwrap_or("?"))
+    } else {
+        format!("direct → {peer_addr}")
+    };
+    eprintln!("Connecting ({mode_str})...");
+    cs.handshake(role, peer_addr).await.context("handshake failed")?;
+    eprintln!(
+        "Connected! session_id=0x{:08X}  codec={codec_id:?}",
+        cs.session().session_id()
+    );
+
+    // ── Setup audio I/O ─────────────────────────────────────────────────────
+    let stream_cfg = StreamConfig {
+        sample_rate: config.sample_rate,
+        channels: config.channels,
+        frame_duration_ms: config.frame_duration_ms as u32,
+    };
+
+    // Playback siempre activo en background.
+    let playback = AudioPlayback::start(stream_cfg.clone(), Some(&out_device))
+        .context("failed to open output device")?;
+
+    // ── Flags compartidos ───────────────────────────────────────────────────
+    let ptt_on = Arc::new(AtomicBool::new(false));
+    let running = Arc::new(AtomicBool::new(true));
+
+    // ── Task de recepción + playback ────────────────────────────────────────
+    let cs_rx = cs.clone();
+    let pb_tx = playback.clone();
+    let running_rx = running.clone();
+    tokio::spawn(async move {
+        while running_rx.load(Ordering::Acquire) {
+            match cs_rx.recv_samples().await {
+                Ok(samples) => {
+                    let _ = pb_tx.push(samples);
+                }
+                Err(e) => {
+                    tracing::debug!(?e, "recv error");
+                    break;
+                }
+            }
+        }
+    });
+
+    // ── Task de captura + envío (activo solo cuando PTT está presionado) ────
+    let cs_tx = cs.clone();
+    let ptt_tx = ptt_on.clone();
+    let running_tx = running.clone();
+    tokio::spawn(async move {
+        let mut capture: Option<(AudioCapture, std::sync::mpsc::Receiver<Vec<i16>>)> = None;
+        loop {
+            if !running_tx.load(Ordering::Acquire) {
+                break;
+            }
+            if ptt_tx.load(Ordering::Acquire) {
+                // Asegurar que la captura está activa.
+                if capture.is_none() {
+                    match AudioCapture::start(stream_cfg.clone(), Some("default")) {
+                        Ok((cap, rx)) => {
+                            capture = Some((cap, rx));
+                        }
+                        Err(e) => {
+                            tracing::warn!(?e, "failed to start audio capture");
+                            tokio::time::sleep(Duration::from_millis(100)).await;
+                            continue;
+                        }
+                    }
+                }
+                if let Some((_, ref rx)) = capture {
+                    match rx.try_recv() {
+                        Ok(samples) => {
+                            if let Err(e) = cs_tx.send_samples(&samples).await {
+                                tracing::debug!(?e, "send_samples error");
+                            }
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => {
+                            tokio::time::sleep(Duration::from_millis(5)).await;
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            capture = None;
+                        }
+                    }
+                }
+            } else {
+                // PTT inactivo: descartar captura para silenciar el micrófono.
+                capture = None;
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }
+    });
+
+    // ── UI interactiva ──────────────────────────────────────────────────────
+    enable_raw_mode()?;
+    let mut stdout = std::io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+
+    let result = ptt_ui_loop(&cs, &ptt_on, &running).await;
+
+    // Restaurar terminal siempre, independientemente del resultado.
+    let _ = disable_raw_mode();
+    let _ = execute!(std::io::stdout(), LeaveAlternateScreen);
+
+    // PTT off + close.
+    let _ = cs.session().ptt_release().await;
+    let _ = cs.close().await;
+
+    result
+}
+
+async fn ptt_ui_loop(
+    cs: &Arc<CodecSession>,
+    ptt_on: &Arc<AtomicBool>,
+    running: &Arc<AtomicBool>,
+) -> Result<()> {
+    use std::io::Write;
+    let mut stdout = std::io::stdout();
+
+    let mut last_render = Instant::now();
+    let render_interval = Duration::from_millis(200);
+
+    loop {
+        // ── Render UI ───────────────────────────────────────────────────────
+        if last_render.elapsed() >= render_interval {
+            last_render = Instant::now();
+
+            let ptt = ptt_on.load(Ordering::Acquire);
+            let peer_ptt = cs.session().is_peer_ptt_active();
+            let snap = cs.session().metrics().snapshot(cs.session().jitter_buffer().fill_percent());
+            let sid = cs.session().session_id();
+
+            // Limpiar y redibujar.
+            print!("\x1B[2J\x1B[H"); // clear screen, cursor home
+            println!("╔══════════════════════════════════════════════════╗");
+            println!("║          GRAVITAL TALK — PTT                     ║");
+            println!("╠══════════════════════════════════════════════════╣");
+            println!("║  Session: 0x{sid:08X}                          ║");
+            println!(
+                "║  Quality: MOS {:.1}  Loss {:.1}%  Jitter {:.0}ms    ║",
+                snap.estimated_mos, snap.loss_percent, snap.jitter_ms
+            );
+            println!("╠══════════════════════════════════════════════════╣");
+
+            if ptt {
+                println!("║  ● TRANSMITIENDO  — suelta [ESPACIO] para parar  ║");
+            } else {
+                println!("║  ○ En espera      — [ESPACIO] para hablar         ║");
+            }
+
+            if peer_ptt {
+                println!("║  ◉ PEER TRANSMITIENDO                            ║");
+            } else {
+                println!("║  ○ Peer escuchando                               ║");
+            }
+
+            println!("╠══════════════════════════════════════════════════╣");
+            println!("║  [ESPACIO] toggle PTT  •  [Q] salir               ║");
+            println!("╚══════════════════════════════════════════════════╝");
+            stdout.flush()?;
+        }
+
+        // ── Eventos de teclado ──────────────────────────────────────────────
+        if event::poll(Duration::from_millis(50))? {
+            match event::read()? {
+                Event::Key(key) => {
+                    match key.code {
+                        KeyCode::Char('q') | KeyCode::Char('Q') => {
+                            running.store(false, Ordering::Release);
+                            break;
+                        }
+                        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            running.store(false, Ordering::Release);
+                            break;
+                        }
+                        KeyCode::Char(' ') => {
+                            let was_on = ptt_on.load(Ordering::Acquire);
+                            ptt_on.store(!was_on, Ordering::Release);
+                            if !was_on {
+                                let _ = cs.session().ptt_press().await;
+                            } else {
+                                let _ = cs.session().ptt_release().await;
+                            }
+                        }
+                        // Tecla 'T' como alternativa
+                        KeyCode::Char('t') | KeyCode::Char('T') => {
+                            let was_on = ptt_on.load(Ordering::Acquire);
+                            ptt_on.store(!was_on, Ordering::Release);
+                            if !was_on {
+                                let _ = cs.session().ptt_press().await;
+                            } else {
+                                let _ = cs.session().ptt_release().await;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Event::Resize(_, _) => {} // Refrescar en el próximo tick.
+                _ => {}
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn sine_frames_i16(

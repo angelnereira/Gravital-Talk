@@ -36,7 +36,25 @@ pub enum MessageType {
     ControlMetrics,
     /// Bitrate adjustment solicitado por el receptor (payload: ControlBitrate).
     ControlBitrate,
-    /// Rango `0x40..=0x7F` reservado para extensiones de aplicación.
+    /// Solicita el floor (permiso para transmitir).
+    FloorRequest,
+    /// Concede el floor a un participante.
+    FloorGrant,
+    /// Deniega la solicitud de floor.
+    FloorDeny,
+    /// Libera el floor.
+    FloorRelease,
+    /// Notifica que otro participante tomó el floor.
+    FloorTaken,
+    /// Servidor envía challenge (nonce 32 B) al cliente para autenticación Ed25519.
+    AuthChallenge,
+    /// Cliente responde con su llave pública Ed25519 + firma del nonce.
+    AuthResponse,
+    /// Servidor acepta la autenticación.
+    AuthAccepted,
+    /// Servidor rechaza la autenticación.
+    AuthRejected,
+    /// Rango `0x45..=0x4F | 0x54..=0x7F` reservado para extensiones de aplicación.
     Extension(u8),
     Error,
     Close,
@@ -60,6 +78,15 @@ impl MessageType {
             Self::ControlResume => 0x31,
             Self::ControlMetrics => 0x32,
             Self::ControlBitrate => 0x33,
+            Self::FloorRequest => 0x40,
+            Self::FloorGrant => 0x41,
+            Self::FloorDeny => 0x42,
+            Self::FloorRelease => 0x43,
+            Self::FloorTaken => 0x44,
+            Self::AuthChallenge => 0x50,
+            Self::AuthResponse => 0x51,
+            Self::AuthAccepted => 0x52,
+            Self::AuthRejected => 0x53,
             Self::Extension(b) => b,
             Self::Error => 0xFE,
             Self::Close => 0xFF,
@@ -82,14 +109,23 @@ impl MessageType {
             0x31 => Self::ControlResume,
             0x32 => Self::ControlMetrics,
             0x33 => Self::ControlBitrate,
-            0x40..=0x7F => Self::Extension(code),
+            0x40 => Self::FloorRequest,
+            0x41 => Self::FloorGrant,
+            0x42 => Self::FloorDeny,
+            0x43 => Self::FloorRelease,
+            0x44 => Self::FloorTaken,
+            0x50 => Self::AuthChallenge,
+            0x51 => Self::AuthResponse,
+            0x52 => Self::AuthAccepted,
+            0x53 => Self::AuthRejected,
+            0x45..=0x4F | 0x54..=0x7F => Self::Extension(code),
             0xFE => Self::Error,
             0xFF => Self::Close,
             other => return Err(Error::UnknownMessageType(other)),
         })
     }
 
-    /// Si el mensaje es parte del handshake.
+    /// Si el mensaje es parte del handshake de sesión.
     #[must_use]
     pub const fn is_handshake(self) -> bool {
         matches!(
@@ -98,6 +134,31 @@ impl MessageType {
                 | Self::HandshakeServerHello
                 | Self::HandshakeSessionConfirm
                 | Self::HandshakeKeyExchange
+        )
+    }
+
+    /// Si el mensaje es de floor control (PTT).
+    #[must_use]
+    pub const fn is_floor_control(self) -> bool {
+        matches!(
+            self,
+            Self::FloorRequest
+                | Self::FloorGrant
+                | Self::FloorDeny
+                | Self::FloorRelease
+                | Self::FloorTaken
+        )
+    }
+
+    /// Si el mensaje es de autenticación de identidad.
+    #[must_use]
+    pub const fn is_auth(self) -> bool {
+        matches!(
+            self,
+            Self::AuthChallenge
+                | Self::AuthResponse
+                | Self::AuthAccepted
+                | Self::AuthRejected
         )
     }
 }
@@ -395,6 +456,75 @@ impl ControlBitrateMsg {
     }
 }
 
+// ─── Payloads de autenticación Ed25519 ───────────────────────────────────────
+
+/// Payload de AuthChallenge (0x50): servidor → cliente.
+///
+/// ```text
+/// nonce [32 bytes] — desafío aleatorio criptográfico
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AuthChallengeMsg {
+    pub nonce: [u8; 32],
+}
+
+impl AuthChallengeMsg {
+    pub const SIZE: usize = 32;
+
+    pub fn encode(&self, buf: &mut [u8]) -> Result<(), Error> {
+        if buf.len() < Self::SIZE {
+            return Err(Error::BufferTooSmall);
+        }
+        buf[0..32].copy_from_slice(&self.nonce);
+        Ok(())
+    }
+
+    pub fn decode(buf: &[u8]) -> Result<Self, Error> {
+        if buf.len() < Self::SIZE {
+            return Err(Error::MalformedPayload);
+        }
+        let mut nonce = [0u8; 32];
+        nonce.copy_from_slice(&buf[0..32]);
+        Ok(Self { nonce })
+    }
+}
+
+/// Payload de AuthResponse (0x51): cliente → servidor.
+///
+/// ```text
+/// public_key [32 bytes] — llave pública Ed25519 del cliente
+/// signature  [64 bytes] — firma Ed25519 del nonce recibido en AuthChallenge
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthResponseMsg {
+    pub public_key: [u8; 32],
+    pub signature: [u8; 64],
+}
+
+impl AuthResponseMsg {
+    pub const SIZE: usize = 96;
+
+    pub fn encode(&self, buf: &mut [u8]) -> Result<(), Error> {
+        if buf.len() < Self::SIZE {
+            return Err(Error::BufferTooSmall);
+        }
+        buf[0..32].copy_from_slice(&self.public_key);
+        buf[32..96].copy_from_slice(&self.signature);
+        Ok(())
+    }
+
+    pub fn decode(buf: &[u8]) -> Result<Self, Error> {
+        if buf.len() < Self::SIZE {
+            return Err(Error::MalformedPayload);
+        }
+        let mut public_key = [0u8; 32];
+        let mut signature = [0u8; 64];
+        public_key.copy_from_slice(&buf[0..32]);
+        signature.copy_from_slice(&buf[32..96]);
+        Ok(Self { public_key, signature })
+    }
+}
+
 // ─── Aliases de compatibilidad (nombres anteriores) ──────────────────────────
 
 /// Alias de compatibilidad → [`ClientHello`].
@@ -461,21 +591,64 @@ mod tests {
     fn message_type_roundtrip_canonical() {
         for code in [
             0x01u8, 0x02, 0x03, 0x04, 0x10, 0x11, 0x12, 0x20, 0x21, 0x30, 0x31, 0x32, 0x33,
+            0x40, 0x41, 0x42, 0x43, 0x44, 0x50, 0x51, 0x52, 0x53,
             0xFE, 0xFF,
         ] {
             let m = MessageType::from_code(code).unwrap();
-            assert_eq!(m.code(), code);
+            assert_eq!(m.code(), code, "roundtrip failed for 0x{code:02X}");
         }
     }
 
     #[test]
     fn message_type_extension_range() {
-        for code in 0x40u8..=0x7F {
+        // Extension range ahora excluye los tipos de floor (0x40-0x44) y auth (0x50-0x53)
+        for code in (0x45u8..=0x4F).chain(0x54u8..=0x7F) {
             assert_eq!(
                 MessageType::from_code(code).unwrap(),
-                MessageType::Extension(code)
+                MessageType::Extension(code),
+                "expected Extension for 0x{code:02X}"
             );
         }
+    }
+
+    #[test]
+    fn floor_control_types_are_floor() {
+        assert!(MessageType::FloorRequest.is_floor_control());
+        assert!(MessageType::FloorGrant.is_floor_control());
+        assert!(MessageType::FloorDeny.is_floor_control());
+        assert!(MessageType::FloorRelease.is_floor_control());
+        assert!(MessageType::FloorTaken.is_floor_control());
+        assert!(!MessageType::AudioFrame.is_floor_control());
+        assert!(!MessageType::AuthChallenge.is_floor_control());
+    }
+
+    #[test]
+    fn auth_types_are_auth() {
+        assert!(MessageType::AuthChallenge.is_auth());
+        assert!(MessageType::AuthResponse.is_auth());
+        assert!(MessageType::AuthAccepted.is_auth());
+        assert!(MessageType::AuthRejected.is_auth());
+        assert!(!MessageType::FloorRequest.is_auth());
+        assert!(!MessageType::AudioFrame.is_auth());
+    }
+
+    #[test]
+    fn auth_challenge_roundtrip() {
+        let msg = AuthChallengeMsg { nonce: [0xABu8; 32] };
+        let mut buf = [0u8; AuthChallengeMsg::SIZE];
+        msg.encode(&mut buf).unwrap();
+        assert_eq!(AuthChallengeMsg::decode(&buf).unwrap(), msg);
+    }
+
+    #[test]
+    fn auth_response_roundtrip() {
+        let msg = AuthResponseMsg {
+            public_key: [0x11u8; 32],
+            signature: [0x22u8; 64],
+        };
+        let mut buf = [0u8; AuthResponseMsg::SIZE];
+        msg.encode(&mut buf).unwrap();
+        assert_eq!(AuthResponseMsg::decode(&buf).unwrap(), msg);
     }
 
     #[test]

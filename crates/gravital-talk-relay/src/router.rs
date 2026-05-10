@@ -3,15 +3,27 @@
 //! Soporta grupos de hasta `max_peers_per_session` participantes.
 //! Cuando llega un datagrama de un peer conocido, se retorna la lista
 //! de todos los demás peers del grupo para broadcast.
+//!
+//! ## Floor Arbitration
+//!
+//! El relay actúa como árbitro de floor control. Cuando recibe un
+//! `FloorRequest` (0x40), evalúa si el floor está libre y retorna la
+//! decisión apropiada. El loop UDP actúa sobre esa decisión enviando
+//! `FloorGrant` (0x41) o `FloorDeny` (0x42) de vuelta al solicitante,
+//! y `FloorTaken` (0x44) a los demás peers.
 
 use std::net::SocketAddr;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use dashmap::DashMap;
 use tokio::sync::mpsc;
 
 use crate::metrics::RelayMetrics;
+
+/// Timeout de transmisión máxima: si el holder no libera en 30s, el relay
+/// auto-libera el floor. Estándar 3GPP MCX.
+const FLOOR_MAX_HOLD_SECS: u64 = 30;
 
 /// Identifica un peer dentro de un grupo.
 #[derive(Debug, Clone)]
@@ -42,11 +54,31 @@ pub struct RouteEntry {
     /// Todos los peers activos de esta sesión/grupo.
     pub peers: Vec<SessionEndpoint>,
     pub last_activity: Instant,
+    /// Quien tiene el floor actualmente (None = libre).
+    pub floor_holder: Option<SocketAddr>,
+    /// Momento en que se concedió el floor.
+    pub floor_granted_at: Option<Instant>,
 }
 
 impl RouteEntry {
     fn new() -> Self {
-        Self { peers: Vec::new(), last_activity: Instant::now() }
+        Self {
+            peers: Vec::new(),
+            last_activity: Instant::now(),
+            floor_holder: None,
+            floor_granted_at: None,
+        }
+    }
+
+    /// `true` si nadie tiene el floor (o el holder superó el timeout).
+    fn floor_is_free(&self) -> bool {
+        match (self.floor_holder, self.floor_granted_at) {
+            (None, _) => true,
+            (Some(_), Some(granted)) => {
+                granted.elapsed() > Duration::from_secs(FLOOR_MAX_HOLD_SECS)
+            }
+            (Some(_), None) => false,
+        }
     }
 }
 
@@ -163,6 +195,75 @@ impl Router {
         self.routes.get(&session_id).map(|e| e.peers.len()).unwrap_or(0)
     }
 
+    // ── Floor Arbitration ────────────────────────────────────────────────────
+
+    /// Procesa una solicitud de floor.
+    ///
+    /// Si el floor está libre, lo concede al solicitante y retorna `Granted`
+    /// con la lista de peers a notificar. Si está ocupado, retorna `Denied`.
+    pub fn floor_request(&self, session_id: u32, from: SocketAddr) -> FloorDecision {
+        let Some(mut entry) = self.routes.get_mut(&session_id) else {
+            return FloorDecision::Unknown;
+        };
+        let is_known = entry.peers.iter().any(|p| p.matches(&SessionEndpoint::Udp(from)));
+        if !is_known {
+            return FloorDecision::Unknown;
+        }
+
+        // Auto-liberar si el holder superó el timeout.
+        if !entry.floor_is_free() {
+            if let (Some(holder), Some(granted)) = (entry.floor_holder, entry.floor_granted_at) {
+                if granted.elapsed() > Duration::from_secs(FLOOR_MAX_HOLD_SECS) {
+                    tracing::info!(session_id, ?holder, "floor auto-released (timeout)");
+                    entry.floor_holder = None;
+                    entry.floor_granted_at = None;
+                }
+            }
+        }
+
+        if !entry.floor_is_free() {
+            return FloorDecision::Denied;
+        }
+
+        entry.floor_holder = Some(from);
+        entry.floor_granted_at = Some(Instant::now());
+
+        let others: Vec<SessionEndpoint> = entry
+            .peers
+            .iter()
+            .filter(|p| !p.matches(&SessionEndpoint::Udp(from)))
+            .cloned()
+            .collect();
+        FloorDecision::Granted { others }
+    }
+
+    /// Procesa una liberación de floor.
+    pub fn floor_release(&self, session_id: u32, from: SocketAddr) -> FloorDecision {
+        let Some(mut entry) = self.routes.get_mut(&session_id) else {
+            return FloorDecision::Unknown;
+        };
+        // Solo el holder puede liberar (o se permite si el timeout expiró).
+        let is_holder = entry.floor_holder == Some(from) || entry.floor_is_free();
+        if !is_holder {
+            return FloorDecision::Denied;
+        }
+        entry.floor_holder = None;
+        entry.floor_granted_at = None;
+
+        let others: Vec<SessionEndpoint> = entry
+            .peers
+            .iter()
+            .filter(|p| !p.matches(&SessionEndpoint::Udp(from)))
+            .cloned()
+            .collect();
+        FloorDecision::Released { others }
+    }
+
+    /// Devuelve el holder actual del floor para una sesión.
+    pub fn floor_holder(&self, session_id: u32) -> Option<SocketAddr> {
+        self.routes.get(&session_id)?.floor_holder
+    }
+
     // ── Rooms API ────────────────────────────────────────────────────────────
 
     /// Registra un código de sala → session_id. Devuelve false si el código ya existe.
@@ -205,6 +306,24 @@ pub enum RouteDecision {
     Registered,
     /// Datagrama descartado.
     Dropped,
+}
+
+/// Decisión del árbitro de floor control.
+#[derive(Debug)]
+pub enum FloorDecision {
+    /// Floor concedido al solicitante. Notificar a los demás con FloorTaken.
+    Granted {
+        /// Peers a los que notificar (todos excepto el solicitante).
+        others: Vec<SessionEndpoint>,
+    },
+    /// Floor denegado (otra persona ya lo tiene).
+    Denied,
+    /// El floor fue liberado. Notificar a todos los peers.
+    Released {
+        others: Vec<SessionEndpoint>,
+    },
+    /// Sesión desconocida o peer no registrado.
+    Unknown,
 }
 
 #[cfg(test)]
