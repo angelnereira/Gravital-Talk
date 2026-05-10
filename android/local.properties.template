@@ -1,0 +1,13 @@
+# Copia este archivo como local.properties y ajusta la ruta:
+#   cp local.properties.template local.properties
+#
+# local.properties NO debe commitearse (está en .gitignore).
+
+# macOS (Android Studio):
+sdk.dir=/Users/TU_USUARIO/Library/Android/sdk
+
+# Linux:
+# sdk.dir=/home/TU_USUARIO/Android/Sdk
+
+# Windows:
+# sdk.dir=C\:\\Users\\TU_USUARIO\\AppData\\Local\\Android\\Sdk
