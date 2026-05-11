@@ -15,7 +15,7 @@ path = "src/lib.rs"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
-gravital-talk          = { workspace = true }
+gravital-talk          = { workspace = true, default-features = false, features = ["std"] }
 tokio                   = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync", "macros"] }
 jni                     = { version = "0.21", default-features = false, optional = true }
 

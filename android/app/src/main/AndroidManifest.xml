@@ -1,14 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Audio capture y red -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <!-- Mantener CPU activa durante PTT -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <!-- Cámara para escanear QR -->
     <uses-permission android:name="android.permission.CAMERA" />
 
     <uses-feature android:name="android.hardware.microphone" android:required="true" />
@@ -22,8 +19,9 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.GravitalTalk">
 
+        <!-- PairingActivity es el punto de entrada principal -->
         <activity
-            android:name=".MainActivity"
+            android:name=".PairingActivity"
             android:exported="true"
             android:screenOrientation="portrait"
             android:windowSoftInputMode="adjustResize">
@@ -31,13 +29,6 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-        </activity>
-
-        <activity
-            android:name=".PairingActivity"
-            android:exported="true"
-            android:screenOrientation="portrait"
-            android:windowSoftInputMode="adjustResize">
             <!-- Deep link: gravital-talk://pair?... -->
             <intent-filter android:autoVerify="false">
                 <action android:name="android.intent.action.VIEW" />
@@ -46,6 +37,14 @@
                 <data android:scheme="gravital-talk" android:host="pair" />
             </intent-filter>
         </activity>
+
+        <!-- PTT screen — abierta sólo desde PairingActivity -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="false"
+            android:screenOrientation="portrait"
+            android:windowSoftInputMode="adjustResize"
+            android:launchMode="singleTop" />
 
     </application>
 
