@@ -14,7 +14,7 @@
 use jni::objects::{JByteArray, JClass, JFloatArray, JString};
 use jni::sys::{jbyteArray, jfloatArray, jint, jlong, jstring};
 use jni::JNIEnv;
-use std::ffi::CString;
+use std::ffi::{c_char, CStr, CString};
 
 use crate::{
     gs_discover_public_addr, gs_session_accept, gs_session_accept_any, gs_session_close,
@@ -316,7 +316,7 @@ pub extern "system" fn Java_com_gravitaltalk_GravitalTalkJni_nativeDiscoverPubli
     _class: JClass,
     bind_port: jint,
 ) -> jstring {
-    let mut buf = [0i8; 64];
+    let mut buf: [c_char; 64] = [0; 64];
     let st = unsafe {
         gs_discover_public_addr(bind_port as u16, buf.as_mut_ptr(), buf.len())
     };
@@ -324,7 +324,7 @@ pub extern "system" fn Java_com_gravitaltalk_GravitalTalkJni_nativeDiscoverPubli
         return std::ptr::null_mut();
     }
     // Convertir C-string a Java String.
-    let c_str = unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) };
+    let c_str = unsafe { CStr::from_ptr(buf.as_ptr()) };
     let s = match c_str.to_str() {
         Ok(s) => s,
         Err(_) => return std::ptr::null_mut(),

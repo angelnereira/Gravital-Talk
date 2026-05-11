@@ -23,7 +23,7 @@ opus = ["gravital-talk-codec/opus"]
 gravital-talk-core      = { workspace = true, default-features = false }
 gravital-talk-metrics   = { workspace = true }
 gravital-talk-transport = { workspace = true }
-gravital-talk-codec     = { workspace = true }
+gravital-talk-codec     = { workspace = true, default-features = false }
 tokio                    = { workspace = true, features = ["rt-multi-thread", "sync", "macros"] }
 thiserror                = { workspace = true }
 

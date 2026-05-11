@@ -14,7 +14,7 @@ name = "gs"
 path = "src/main.rs"
 
 [dependencies]
-gravital-talk             = { workspace = true }
+gravital-talk             = { workspace = true, features = ["std"] }
 gravital-talk-io          = { workspace = true }
 gravital-talk-relay       = { workspace = true }
 gravital-talk-transport   = { workspace = true }

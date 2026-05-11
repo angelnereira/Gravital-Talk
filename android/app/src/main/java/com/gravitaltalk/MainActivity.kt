@@ -126,6 +126,7 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             viewModel.isPeerPttActive.collect { active ->
                 binding.tvPeerStatus.text = if (active) "● Peer transmitiendo" else ""
+                binding.cardPeerStatus.visibility = if (active) View.VISIBLE else View.GONE
             }
         }
 
@@ -147,6 +148,7 @@ class MainActivity : AppCompatActivity() {
                 binding.btnConnect.text = getString(R.string.btn_connect)
                 binding.btnConnect.isEnabled = true
                 binding.btnPtt.isEnabled = false
+                binding.layoutRelayConnect.visibility = View.VISIBLE
                 binding.tilRelay.isEnabled = true
                 binding.tilRoom.isEnabled = true
                 binding.btnHangUp.visibility = View.GONE
@@ -154,8 +156,7 @@ class MainActivity : AppCompatActivity() {
             is PttConnectionState.Connecting, is PttConnectionState.Reconnecting -> {
                 binding.tvStatus.text = if (state is PttConnectionState.Reconnecting)
                     getString(R.string.status_reconnecting)
-                else
-                    getString(R.string.status_connecting)
+                else getString(R.string.status_connecting)
                 binding.btnConnect.isEnabled = false
                 binding.btnPtt.isEnabled = false
                 binding.tilRelay.isEnabled = false
@@ -165,11 +166,8 @@ class MainActivity : AppCompatActivity() {
             is PttConnectionState.Connected -> {
                 binding.tvStatus.text = getString(R.string.status_connected)
                 binding.tvSessionId.text = "session 0x%08X".format(state.sessionId)
-                binding.btnConnect.text = getString(R.string.btn_disconnect)
-                binding.btnConnect.isEnabled = true
+                binding.layoutRelayConnect.visibility = View.GONE
                 binding.btnPtt.isEnabled = true
-                binding.tilRelay.isEnabled = false
-                binding.tilRoom.isEnabled = false
                 binding.btnHangUp.visibility = View.VISIBLE
             }
             is PttConnectionState.Error -> {
@@ -177,6 +175,7 @@ class MainActivity : AppCompatActivity() {
                 binding.btnConnect.text = getString(R.string.btn_connect)
                 binding.btnConnect.isEnabled = true
                 binding.btnPtt.isEnabled = false
+                binding.layoutRelayConnect.visibility = View.VISIBLE
                 binding.tilRelay.isEnabled = true
                 binding.tilRoom.isEnabled = true
                 binding.btnHangUp.visibility = View.GONE

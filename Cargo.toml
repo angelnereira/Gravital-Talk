@@ -50,9 +50,9 @@ categories = ["multimedia::audio", "network-programming"]
 gravital-talk-core      = { path = "crates/gravital-talk-core", version = "0.1.0-alpha.1", default-features = false }
 gravital-talk-metrics   = { path = "crates/gravital-talk-metrics", version = "0.1.0-alpha.1" }
 gravital-talk-transport = { path = "crates/gravital-talk-transport", version = "0.1.0-alpha.1" }
-gravital-talk-codec     = { path = "crates/gravital-talk-codec", version = "0.1.0-alpha.1" }
+gravital-talk-codec     = { path = "crates/gravital-talk-codec", version = "0.1.0-alpha.1", default-features = false }
 gravital-talk-io        = { path = "crates/gravital-talk-io", version = "0.1.0-alpha.1" }
-gravital-talk           = { path = "crates/gravital-talk", version = "0.1.0-alpha.1" }
+gravital-talk           = { path = "crates/gravital-talk", version = "0.1.0-alpha.1", default-features = false }
 gravital-talk-relay     = { path = "crates/gravital-talk-relay", version = "0.1.0-alpha.1" }
 
 # Async runtime + networking
