@@ -43,7 +43,9 @@ class PairingViewModel(private val appContext: Context) : ViewModel() {
     private val _uiState = MutableStateFlow(PairingUiState())
     val uiState: StateFlow<PairingUiState> = _uiState.asStateFlow()
 
-    private var nativeHandle: Long = 0L
+    // Acceso sincronizado sólo desde el hilo main (StateFlow/ViewModel).
+    // Antes de destruir un handle siempre se pone a 0 para evitar doble-free.
+    @Volatile private var nativeHandle: Long = 0L
     private var hostJob: Job? = null
 
     // ── Modo HOST ──────────────────────────────────────────────────────────────
@@ -104,17 +106,21 @@ class PairingViewModel(private val appContext: Context) : ViewModel() {
                 statusMsg = appContext.getString(R.string.pairing_waiting),
             )
 
-            // 6. Esperar cliente (bloqueante — nativeAcceptAny no tiene timeout de UI).
+            // 6. Esperar cliente (bloqueante). nativeClose() en otro hilo lo interrumpe.
             val status = GravitalTalkJni.nativeAcceptAny(handle)
+
+            // Si hangUp() tomó el ownership mientras esperábamos, no tocamos nada.
+            if (nativeHandle != handle) return@launch
+
             if (status != 0) {
-                _uiState.value = _uiState.value.copy(
-                    error = "Handshake failed: $status",
-                    statusMsg = "",
-                )
-                GravitalTalkJni.nativeDestroy(handle)
                 nativeHandle = 0L
+                runCatching { GravitalTalkJni.nativeDestroy(handle) }
+                _uiState.value = _uiState.value.copy(
+                    screen = PairingScreen.Home,
+                    statusMsg = "",
+                    error = if (status == -7) null else "Handshake failed ($status)",
+                )
             } else {
-                // Conectado — transferir handle al PttViewModel via PairingScreen.Connected.
                 _uiState.value = _uiState.value.copy(
                     screen = PairingScreen.Connected(handle),
                     statusMsg = "",
@@ -170,15 +176,17 @@ class PairingViewModel(private val appContext: Context) : ViewModel() {
     // ── Colgar ─────────────────────────────────────────────────────────────────
 
     fun hangUp() {
+        // Tomar ownership PRIMERO antes de cancelar el job para evitar doble-free.
+        val h = nativeHandle
+        nativeHandle = 0L
         hostJob?.cancel()
         hostJob = null
-        val h = nativeHandle
         if (h != 0L) {
+            // nativeClose interrumpe nativeAcceptAny en el hilo IO, luego destroy.
             viewModelScope.launch(Dispatchers.IO) {
-                GravitalTalkJni.nativeClose(h)
-                GravitalTalkJni.nativeDestroy(h)
+                runCatching { GravitalTalkJni.nativeClose(h) }
+                runCatching { GravitalTalkJni.nativeDestroy(h) }
             }
-            nativeHandle = 0L
         }
         _uiState.value = PairingUiState(screen = PairingScreen.Home)
     }
@@ -188,10 +196,10 @@ class PairingViewModel(private val appContext: Context) : ViewModel() {
     override fun onCleared() {
         super.onCleared()
         val h = nativeHandle
+        nativeHandle = 0L
         if (h != 0L) {
-            GravitalTalkJni.nativeClose(h)
-            GravitalTalkJni.nativeDestroy(h)
-            nativeHandle = 0L
+            runCatching { GravitalTalkJni.nativeClose(h) }
+            runCatching { GravitalTalkJni.nativeDestroy(h) }
         }
     }
 
