@@ -27,8 +27,8 @@
             android:orientation="vertical"
             android:gravity="center_horizontal"
             android:paddingHorizontal="24dp"
-            android:paddingTop="56dp"
-            android:paddingBottom="32dp">
+            android:paddingTop="48dp"
+            android:paddingBottom="40dp">
 
             <!-- Icono / logo -->
             <TextView
@@ -61,12 +61,11 @@
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/btnCreateCall"
                 android:layout_width="match_parent"
-                android:layout_height="64dp"
+                android:layout_height="60dp"
                 android:text="@string/btn_create_call"
                 android:textAppearance="?attr/textAppearanceLabelLarge"
-                android:layout_marginBottom="12dp"
-                app:cornerRadius="32dp"
-                app:icon="@android:drawable/ic_menu_share"
+                android:layout_marginBottom="16dp"
+                app:cornerRadius="30dp"
                 app:iconGravity="textStart"
                 app:iconPadding="12dp" />
 
@@ -74,13 +73,12 @@
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/btnJoinCall"
                 android:layout_width="match_parent"
-                android:layout_height="64dp"
+                android:layout_height="60dp"
                 android:text="@string/btn_join_call"
                 android:textAppearance="?attr/textAppearanceLabelLarge"
-                android:layout_marginBottom="36dp"
+                android:layout_marginBottom="40dp"
                 style="@style/Widget.Material3.Button.OutlinedButton"
-                app:cornerRadius="32dp"
-                app:icon="@android:drawable/ic_menu_camera"
+                app:cornerRadius="30dp"
                 app:iconGravity="textStart"
                 app:iconPadding="12dp" />
 
@@ -103,8 +101,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:hint="@string/hint_relay_optional"
-                style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
-                app:startIconDrawable="@android:drawable/ic_dialog_info">
+                style="@style/Widget.Material3.TextInputLayout.OutlinedBox">
 
                 <com.google.android.material.textfield.TextInputEditText
                     android:id="@+id/etRelayOptional"
