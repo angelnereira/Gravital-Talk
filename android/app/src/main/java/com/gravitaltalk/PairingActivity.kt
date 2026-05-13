@@ -57,6 +57,7 @@ class PairingActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        supportActionBar?.hide()   // El layout ya muestra el título; la ActionBar es redundante
         binding = ActivityPairingBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
@@ -81,6 +82,14 @@ class PairingActivity : AppCompatActivity() {
                 qrHandled = false
                 viewModel.joinFromQr(uri.toString())
             }
+        }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        when (binding.viewFlipper.displayedChild) {
+            SCREEN_HOST, SCREEN_JOIN -> viewModel.hangUp()   // volver a Home sin crash
+            else -> @Suppress("DEPRECATION") super.onBackPressed()
         }
     }
 
