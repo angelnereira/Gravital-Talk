@@ -124,6 +124,8 @@ pub struct Session {
     peer_ptt_active: AtomicBool,
     /// SSRC del participante local (derivado del session_id).
     local_ssrc: AtomicU32,
+    /// Señal de cancelación: se activa en `close()` para interrumpir loops bloqueantes.
+    closed: AtomicBool,
 }
 
 impl core::fmt::Debug for Session {
@@ -161,6 +163,7 @@ impl Session {
             ptt_active: AtomicBool::new(false),
             peer_ptt_active: AtomicBool::new(false),
             local_ssrc: AtomicU32::new(0),
+            closed: AtomicBool::new(false),
         }
     }
 
@@ -329,25 +332,43 @@ impl Session {
             .transition(SessionEvent::StartAccept)
             .map_err(|_| TransportError::InvalidState("cannot start open handshake"))?;
 
-        let deadline = Duration::from_millis(HANDSHAKE_TIMEOUT_MS);
-        let result = timeout(deadline, self.handshake_server_any()).await;
+        // Loop de reintento: acepta hasta completar o que close() sea llamado.
+        // Cada intento tiene 30 s de timeout; si falla se reinicia el handshake
+        // (state: Closed → Reconnecting → Handshaking) para que un segundo
+        // dispositivo pueda conectarse si el primero falló a mitad.
+        loop {
+            if self.closed.load(Ordering::Acquire) {
+                let _ = self.state.lock().await.transition(SessionEvent::Close);
+                return Err(TransportError::PeerClosed("session closed"));
+            }
 
-        match result {
-            Ok(Ok(())) => {
-                self.state
-                    .lock()
-                    .await
-                    .transition(SessionEvent::HandshakeOk)
-                    .map_err(|_| TransportError::InvalidState("handshake_ok"))?;
-                Ok(())
-            }
-            Ok(Err(e)) => {
-                let _ = self.state.lock().await.transition(SessionEvent::HandshakeTimeout);
-                Err(e)
-            }
-            Err(_) => {
-                let _ = self.state.lock().await.transition(SessionEvent::HandshakeTimeout);
-                Err(TransportError::Timeout)
+            let deadline = Duration::from_millis(30_000);
+            let result = timeout(deadline, self.handshake_server_any()).await;
+
+            match result {
+                Ok(Ok(())) => {
+                    self.state
+                        .lock()
+                        .await
+                        .transition(SessionEvent::HandshakeOk)
+                        .map_err(|_| TransportError::InvalidState("handshake_ok"))?;
+                    return Ok(());
+                }
+                Ok(Err(TransportError::PeerClosed(_))) => {
+                    // close() fue llamado — salir limpiamente.
+                    let _ = self.state.lock().await.transition(SessionEvent::Close);
+                    return Err(TransportError::PeerClosed("session closed"));
+                }
+                Ok(Err(_)) | Err(_) => {
+                    // Error de red o timeout de 30 s: reintentar.
+                    // Transicionar: Handshaking → Closed → Reconnecting → Handshaking
+                    let mut sm = self.state.lock().await;
+                    let _ = sm.transition(SessionEvent::HandshakeTimeout);
+                    let _ = sm.transition(SessionEvent::Reconnect);
+                    let _ = sm.transition(SessionEvent::StartAccept);
+                    drop(sm);
+                    *self.peer.lock().await = None;
+                }
             }
         }
     }
@@ -591,7 +612,15 @@ impl Session {
         // Si llega un ClientHello repetido (nuestro ServerHello se perdió),
         // reenviar ServerHello para que el cliente pueda avanzar.
         let ke_msg: KeyExchangeMsg = loop {
-            let (n, from) = self.transport.recv(&mut buf).await?;
+            if self.closed.load(Ordering::Acquire) {
+                return Err(TransportError::PeerClosed("session closed"));
+            }
+            let recv_res = timeout(Duration::from_millis(500), self.transport.recv(&mut buf)).await;
+            let (n, from) = match recv_res {
+                Ok(Ok(r)) => r,
+                Ok(Err(e)) => return Err(e),
+                Err(_) => continue, // timeout de 500ms, volver a chequear closed
+            };
             if from != peer {
                 continue;
             }
@@ -654,8 +683,17 @@ impl Session {
         let mut buf = vec![0u8; self.config.mtu];
 
         // 1. Esperar ClientHello de cualquier peer.
+        // Cada recv tiene un timeout de 500 ms para poder chequear `closed`.
         let (client_hello, peer): (ClientHello, SocketAddr) = loop {
-            let (n, from) = self.transport.recv(&mut buf).await?;
+            if self.closed.load(Ordering::Acquire) {
+                return Err(TransportError::PeerClosed("session closed"));
+            }
+            let recv_res = timeout(Duration::from_millis(500), self.transport.recv(&mut buf)).await;
+            let (n, from) = match recv_res {
+                Ok(Ok(r)) => r,
+                Ok(Err(e)) => return Err(e),
+                Err(_) => continue, // timeout de 500ms, volver a chequear closed
+            };
             let view = match PacketView::decode(&buf[..n]) {
                 Ok(v) => v,
                 Err(_) => continue,
@@ -1137,6 +1175,10 @@ impl Session {
 
     /// Envía CLOSE y transiciona a `Closing` → `Closed`.
     pub async fn close(&self) -> Result<(), TransportError> {
+        // Activar señal de cancelación ANTES de todo para que los loops
+        // bloqueantes (handshake_server_any, recv_audio) salgan en ≤500 ms.
+        self.closed.store(true, Ordering::Release);
+
         // Borrar claves de sesión al cerrar.
         *self.encrypt_key.lock().await = None;
         *self.decrypt_key.lock().await = None;

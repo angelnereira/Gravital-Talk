@@ -17,7 +17,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import java.net.Inet4Address
 import java.net.URI
 
@@ -83,9 +82,16 @@ class PairingViewModel(private val appContext: Context) : ViewModel() {
             // 2. Obtener IP LAN (primer IPv4 de la interfaz activa).
             val lanIp = getLanAddress()
 
-            // 3. Descubrir IP pública via STUN (bloqueante ~5 s).
+            // 3. Descubrir IP pública via STUN usando puerto efímero (0) para evitar
+            //    conflicto con el socket de sesión ya bindeado en localPort.
+            //    Combinamos la IP pública que devuelve STUN con el puerto local de sesión.
             _uiState.value = _uiState.value.copy(statusMsg = appContext.getString(R.string.pairing_discovering_ip))
-            val publicAddr = GravitalTalkJni.nativeDiscoverPublicAddr(localPort)
+            val stunResult = GravitalTalkJni.nativeDiscoverPublicAddr(0)
+            // stunResult tiene formato "ip:puerto_efimero" — sólo nos interesa la IP.
+            val publicAddr = stunResult?.let { result ->
+                val stunIp = result.substringBeforeLast(":")
+                if (stunIp.isNotBlank()) "$stunIp:$localPort" else null
+            }
 
             // 4. Armar URI del QR.
             val uriBuilder = StringBuilder("gravital-talk://pair?v=1")
@@ -106,7 +112,8 @@ class PairingViewModel(private val appContext: Context) : ViewModel() {
                 statusMsg = appContext.getString(R.string.pairing_waiting),
             )
 
-            // 6. Esperar cliente (bloqueante). nativeClose() en otro hilo lo interrumpe.
+            // 6. Esperar cliente. El loop en Rust reintenta hasta que close() sea llamado.
+            //    nativeClose (desde hangUp) activa el flag closed → sale en ≤500 ms.
             val status = GravitalTalkJni.nativeAcceptAny(handle)
 
             // Si hangUp() tomó el ownership mientras esperábamos, no tocamos nada.
@@ -115,11 +122,14 @@ class PairingViewModel(private val appContext: Context) : ViewModel() {
             if (status != 0) {
                 nativeHandle = 0L
                 runCatching { GravitalTalkJni.nativeDestroy(handle) }
-                _uiState.value = _uiState.value.copy(
-                    screen = PairingScreen.Home,
-                    statusMsg = "",
-                    error = if (status == -7) null else "Handshake failed ($status)",
-                )
+                // -8 = GS_ERR_CLOSED (close() llamado intencionalmente) → no mostrar error
+                if (status != -8) {
+                    _uiState.value = _uiState.value.copy(
+                        screen = PairingScreen.Home,
+                        statusMsg = "",
+                        error = null,
+                    )
+                }
             } else {
                 _uiState.value = _uiState.value.copy(
                     screen = PairingScreen.Connected(handle),
@@ -205,49 +215,64 @@ class PairingViewModel(private val appContext: Context) : ViewModel() {
 
     // ── Helpers privados ───────────────────────────────────────────────────────
 
+    /**
+     * Intenta conectar a los candidatos en orden: LAN → IP pública → relay.
+     *
+     * Cada candidato usa un handle NUEVO e independiente. nativeConnect es
+     * una llamada JNI bloqueante — nunca se llama dos veces sobre el mismo
+     * handle para evitar acceso concurrente a la misma sesión nativa.
+     * El timeout por intento lo gestiona Rust (HANDSHAKE_TIMEOUT_MS = 10 s).
+     */
     private suspend fun attemptConnect(lan: String?, pub: String?, relay: String?) {
-        val handle = GravitalTalkJni.nativeCreate(48_000, 1, 0)
-        if (handle == 0L) {
-            _uiState.value = _uiState.value.copy(error = "Failed to create session")
+        val candidates = buildList {
+            if (lan != null) add(Pair(lan, R.string.pairing_connecting_direct))
+            if (pub != null) add(Pair(pub, R.string.pairing_connecting_direct))
+            if (relay != null) add(Pair(relay, R.string.pairing_connecting_relay))
+        }
+
+        if (candidates.isEmpty()) {
+            _uiState.value = _uiState.value.copy(
+                error = "QR no contiene dirección de conexión",
+                screen = PairingScreen.Joining,
+            )
             return
         }
-        nativeHandle = handle
 
-        // Intentar LAN (2 s) → IP pública (5 s) → relay (sin timeout adicional).
-        val candidates = buildList {
-            if (lan != null) add(Pair(lan, 2_000L))
-            if (pub != null) add(Pair(pub, 5_000L))
-            if (relay != null) add(Pair(relay, 10_000L))
-        }
-
-        for ((addr, timeoutMs) in candidates) {
+        for ((addr, statusRes) in candidates) {
             val (host, port) = parseHostPort(addr) ?: continue
-            _uiState.value = _uiState.value.copy(
-                statusMsg = appContext.getString(
-                    if (timeoutMs <= 2_000L) R.string.pairing_connecting_direct
-                    else R.string.pairing_connecting_relay
-                )
-            )
-            val ok = withTimeoutOrNull(timeoutMs) {
-                withContext(Dispatchers.IO) {
-                    GravitalTalkJni.nativeConnect(handle, host, port) == 0
-                }
-            } ?: false
 
-            if (ok) {
+            // Crear handle fresco para este intento.
+            val h = GravitalTalkJni.nativeCreate(48_000, 1, 0)
+            if (h == 0L) continue
+            nativeHandle = h
+
+            _uiState.value = _uiState.value.copy(
+                statusMsg = appContext.getString(statusRes)
+            )
+
+            // nativeConnect bloquea hasta completar o timeout Rust (10 s).
+            // NO envolver con withTimeoutOrNull: cancelar Kotlin no cancela JNI.
+            val status = GravitalTalkJni.nativeConnect(h, host, port)
+
+            // Verificar que nadie más tomó el handle (hangUp).
+            if (nativeHandle != h) return
+
+            if (status == 0) {
                 _uiState.value = _uiState.value.copy(
-                    screen = PairingScreen.Connected(handle),
+                    screen = PairingScreen.Connected(h),
                     statusMsg = "",
                 )
                 return
             }
+
+            // Fallido: liberar este handle y probar el siguiente.
+            nativeHandle = 0L
+            runCatching { GravitalTalkJni.nativeDestroy(h) }
         }
 
-        // Todos los intentos fallaron.
-        GravitalTalkJni.nativeDestroy(handle)
-        nativeHandle = 0L
+        // Todos los candidatos fallaron.
         _uiState.value = _uiState.value.copy(
-            error = "Could not connect to peer",
+            error = "No se pudo conectar. Asegúrate de estar en la misma red.",
             screen = PairingScreen.Joining,
         )
     }
