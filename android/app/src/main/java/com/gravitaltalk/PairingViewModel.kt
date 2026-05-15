@@ -183,6 +183,24 @@ class PairingViewModel(private val appContext: Context) : ViewModel() {
         }
     }
 
+    /**
+     * Conecta a una "red" (relay) sin QR. El usuario introduce host:port directamente.
+     * Soporta formato "host:port" o "host" (usa 9000 como puerto por defecto).
+     */
+    fun joinFromRoom(addr: String) {
+        val lastColon = addr.lastIndexOf(':')
+        val host: String
+        val port: Int
+        if (lastColon > 0) {
+            host = addr.substring(0, lastColon)
+            port = addr.substring(lastColon + 1).toIntOrNull() ?: 9000
+        } else {
+            host = addr
+            port = 9000
+        }
+        joinFromRelay(host, port)
+    }
+
     // ── Colgar ─────────────────────────────────────────────────────────────────
 
     fun hangUp() {
