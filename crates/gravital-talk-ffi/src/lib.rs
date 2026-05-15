@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use gravital_talk::{
     Config as RustConfig, LatencyClass, MetricsSnapshot, Session, SessionRole, SessionState,
-    UdpConfig, UdpTransport, discover_public_addr,
+    TransportError, UdpConfig, UdpTransport, discover_public_addr,
 };
 
 thread_local! {
@@ -616,6 +616,7 @@ pub unsafe extern "C" fn gs_session_accept_any(handle: *mut GsSessionHandle) -> 
     let session = inner.session.clone();
     match inner.runtime.block_on(async move { session.handshake_open().await }) {
         Ok(()) => GsStatus::GS_OK,
+        Err(TransportError::PeerClosed(_) | TransportError::Closed) => GsStatus::GS_ERR_CLOSED,
         Err(e) => {
             set_last_error(format!("accept_any: {e}"));
             GsStatus::GS_ERR_HANDSHAKE

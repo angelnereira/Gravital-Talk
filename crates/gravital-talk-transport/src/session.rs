@@ -761,7 +761,15 @@ impl Session {
         let (enc_key, dec_key) = (client_dec, client_enc);
 
         let ke_msg: KeyExchangeMsg = loop {
-            let (n, from) = self.transport.recv(&mut buf).await?;
+            if self.closed.load(Ordering::Acquire) {
+                return Err(TransportError::PeerClosed("session closed"));
+            }
+            let recv_res = timeout(Duration::from_millis(500), self.transport.recv(&mut buf)).await;
+            let (n, from) = match recv_res {
+                Ok(Ok(r)) => r,
+                Ok(Err(e)) => return Err(e),
+                Err(_) => continue,
+            };
             if from != peer {
                 continue;
             }

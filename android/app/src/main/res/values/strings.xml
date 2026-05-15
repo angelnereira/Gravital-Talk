@@ -29,4 +29,5 @@
     <string name="hint_relay_host_port">Relay host:puerto</string>
     <string name="tab_scan_qr">Escanear QR</string>
     <string name="tab_enter_code">Ingresar manualmente</string>
+    <string name="btn_join_room">Conectar a red</string>
 </resources>

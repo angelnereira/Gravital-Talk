@@ -6,10 +6,8 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.annotation.OptIn
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
-import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -17,9 +15,11 @@ import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
-import com.google.mlkit.vision.barcode.BarcodeScanning
-import com.google.mlkit.vision.barcode.common.Barcode
-import com.google.mlkit.vision.common.InputImage
+import com.google.zxing.BinaryBitmap
+import com.google.zxing.MultiFormatReader
+import com.google.zxing.NotFoundException
+import com.google.zxing.PlanarYUVLuminanceSource
+import com.google.zxing.common.HybridBinarizer
 import com.gravitaltalk.databinding.ActivityPairingBinding
 import kotlinx.coroutines.launch
 import java.util.concurrent.ExecutorService
@@ -28,13 +28,11 @@ import java.util.concurrent.Executors
 /**
  * Pantalla de emparejamiento P2P.
  *
- * Flujos disponibles:
+ * Flujos:
  * 1. HOME     → botones "Crear llamada" / "Unirse a llamada"
  * 2. HOSTING  → muestra QR + código de texto, espera cliente
  * 3. JOINING  → cámara para escanear QR O campo de texto para relay manual
  * 4. CONNECTED→ lanza MainActivity con el handle nativo ya conectado
- *
- * La actividad también acepta deep links `gravital-talk://pair?...`
  */
 class PairingActivity : AppCompatActivity() {
 
@@ -42,10 +40,9 @@ class PairingActivity : AppCompatActivity() {
     private lateinit var viewModel: PairingViewModel
 
     private var cameraExecutor: ExecutorService? = null
+    private var cameraProvider: ProcessCameraProvider? = null
     private var cameraStarted = false
     private var qrHandled = false
-
-    // ── Permiso de cámara ──────────────────────────────────────────────────────
 
     private val requestCamera = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -53,11 +50,9 @@ class PairingActivity : AppCompatActivity() {
         if (granted) startCamera() else showJoinManual()
     }
 
-    // ── Lifecycle ──────────────────────────────────────────────────────────────
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        supportActionBar?.hide()   // El layout ya muestra el título; la ActionBar es redundante
+        supportActionBar?.hide()
         binding = ActivityPairingBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
@@ -67,7 +62,6 @@ class PairingActivity : AppCompatActivity() {
         setupTabs()
         observeState()
 
-        // Manejar deep link (gravital-talk://pair?...) si llegamos por ese camino.
         intent?.data?.let { uri ->
             if (uri.scheme == "gravital-talk" && uri.host == "pair") {
                 viewModel.joinFromQr(uri.toString())
@@ -88,7 +82,7 @@ class PairingActivity : AppCompatActivity() {
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         when (binding.viewFlipper.displayedChild) {
-            SCREEN_HOST, SCREEN_JOIN -> viewModel.hangUp()   // volver a Home sin crash
+            SCREEN_HOST, SCREEN_JOIN -> viewModel.hangUp()
             else -> @Suppress("DEPRECATION") super.onBackPressed()
         }
     }
@@ -96,9 +90,8 @@ class PairingActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         cameraExecutor?.shutdown()
+        cameraExecutor = null
     }
-
-    // ── Tabs ───────────────────────────────────────────────────────────────────
 
     private fun setupTabs() {
         binding.tabHost.addOnTabSelectedListener(object : com.google.android.material.tabs.TabLayout.OnTabSelectedListener {
@@ -118,8 +111,6 @@ class PairingActivity : AppCompatActivity() {
         })
     }
 
-    // ── Botones ────────────────────────────────────────────────────────────────
-
     private fun setupButtons() {
         binding.btnCreateCall.setOnClickListener {
             val relay = binding.etRelayOptional.text?.toString()?.trim()
@@ -137,11 +128,17 @@ class PairingActivity : AppCompatActivity() {
         binding.btnJoinManual.setOnClickListener {
             val relay = binding.etManualRelay.text?.toString()?.trim()
             if (relay.isNullOrBlank()) {
-                Toast.makeText(this, getString(R.string.hint_relay_optional), Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, getString(R.string.hint_relay_host_port), Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-            val (host, port) = parseHostPort(relay) ?: run {
+            val lastColon = relay.lastIndexOf(':')
+            if (lastColon < 0) {
                 Toast.makeText(this, "Formato: host:puerto", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            val host = relay.substring(0, lastColon)
+            val port = relay.substring(lastColon + 1).toIntOrNull() ?: run {
+                Toast.makeText(this, "Puerto inválido", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
             viewModel.joinFromRelay(host, port)
@@ -150,9 +147,16 @@ class PairingActivity : AppCompatActivity() {
         binding.btnBackToHome.setOnClickListener {
             viewModel.hangUp()
         }
-    }
 
-    // ── Observar estado ────────────────────────────────────────────────────────
+        binding.btnJoinRoom.setOnClickListener {
+            val addr = binding.etRoomRelay.text?.toString()?.trim()
+            if (addr.isNullOrBlank()) {
+                Toast.makeText(this, "Ingresa la dirección del relay", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            viewModel.joinFromRoom(addr)
+        }
+    }
 
     private fun observeState() {
         lifecycleScope.launch {
@@ -163,15 +167,12 @@ class PairingActivity : AppCompatActivity() {
                     is PairingScreen.Joining -> showJoinScreen()
                     is PairingScreen.Connected -> launchPttScreen(state.screen.handle)
                 }
-
                 state.error?.let { err ->
                     Toast.makeText(this@PairingActivity, err, Toast.LENGTH_LONG).show()
                 }
             }
         }
     }
-
-    // ── Transiciones de pantalla ───────────────────────────────────────────────
 
     private fun showHome() {
         binding.viewFlipper.displayedChild = SCREEN_HOME
@@ -195,8 +196,6 @@ class PairingActivity : AppCompatActivity() {
         binding.tabHost.getTabAt(1)?.select()
     }
 
-    // ── QR scan (CameraX) ──────────────────────────────────────────────────────
-
     private fun requestCameraIfNeeded() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
             == PackageManager.PERMISSION_GRANTED
@@ -207,69 +206,95 @@ class PairingActivity : AppCompatActivity() {
         }
     }
 
-    @OptIn(ExperimentalGetImage::class)
     private fun startCamera() {
         if (cameraStarted) return
-        cameraExecutor = Executors.newSingleThreadExecutor()
+        cameraStarted = true
 
-        val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
-        cameraProviderFuture.addListener({
-            val provider = cameraProviderFuture.get()
+        val executor = Executors.newSingleThreadExecutor()
+        cameraExecutor = executor
 
-            val preview = Preview.Builder().build().also {
-                it.setSurfaceProvider(binding.cameraPreview.surfaceProvider)
-            }
+        ProcessCameraProvider.getInstance(this).also { future ->
+            future.addListener({
+                val provider = future.get()
+                cameraProvider = provider
 
-            val analysis = ImageAnalysis.Builder()
-                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .build()
-
-            val scanner = BarcodeScanning.getClient()
-
-            analysis.setAnalyzer(cameraExecutor!!) { imageProxy ->
-                if (qrHandled) {
-                    imageProxy.close()
-                    return@setAnalyzer
+                val preview = Preview.Builder().build().also {
+                    it.setSurfaceProvider(binding.cameraPreview.surfaceProvider)
                 }
-                val mediaImage = imageProxy.image
-                if (mediaImage != null) {
-                    val img = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
-                    scanner.process(img)
-                        .addOnSuccessListener { barcodes ->
-                            barcodes.firstOrNull { it.format == Barcode.FORMAT_QR_CODE }
-                                ?.rawValue
-                                ?.let { raw ->
-                                    if (!qrHandled) {
-                                        qrHandled = true
-                                        runOnUiThread { viewModel.joinFromQr(raw) }
-                                    }
-                                }
+
+                val analysis = ImageAnalysis.Builder()
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    .build()
+
+                analysis.setAnalyzer(executor) { imageProxy ->
+                    if (qrHandled) { imageProxy.close(); return@setAnalyzer }
+                    try {
+                        val buffer = imageProxy.planes[0].buffer
+                        val bytes = ByteArray(buffer.remaining())
+                        buffer.get(bytes)
+                        val w = imageProxy.width
+                        val h = imageProxy.height
+
+                        // Try original orientation first, then rotate 90° (portrait cameras)
+                        val raw = decodeQr(bytes, w, h)
+                            ?: decodeQr(rotateYuv90(bytes, w, h), h, w)
+
+                        if (raw != null && !qrHandled) {
+                            qrHandled = true
+                            runOnUiThread { viewModel.joinFromQr(raw) }
                         }
-                        .addOnCompleteListener { imageProxy.close() }
-                } else {
-                    imageProxy.close()
+                    } catch (_: Exception) {
+                        // Ignore per-frame errors; try next frame
+                    } finally {
+                        imageProxy.close()
+                    }
                 }
-            }
 
-            runCatching {
-                provider.unbindAll()
-                provider.bindToLifecycle(
-                    this,
-                    CameraSelector.DEFAULT_BACK_CAMERA,
-                    preview,
-                    analysis,
-                )
-                cameraStarted = true
+                runCatching {
+                    provider.unbindAll()
+                    provider.bindToLifecycle(
+                        this,
+                        CameraSelector.DEFAULT_BACK_CAMERA,
+                        preview,
+                        analysis,
+                    )
+                }.onFailure {
+                    cameraStarted = false
+                }
+            }, ContextCompat.getMainExecutor(this))
+        }
+    }
+
+    private fun decodeQr(bytes: ByteArray, w: Int, h: Int): String? {
+        return try {
+            val source = PlanarYUVLuminanceSource(bytes, w, h, 0, 0, w, h, false)
+            val bmp = BinaryBitmap(HybridBinarizer(source))
+            MultiFormatReader().decode(bmp).text
+        } catch (_: NotFoundException) {
+            null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** Rotate YUV Y-plane 90° clockwise for portrait-mode cameras. */
+    private fun rotateYuv90(src: ByteArray, w: Int, h: Int): ByteArray {
+        val dst = ByteArray(src.size)
+        for (y in 0 until h) {
+            for (x in 0 until w) {
+                dst[x * h + (h - y - 1)] = src[y * w + x]
             }
-        }, ContextCompat.getMainExecutor(this))
+        }
+        return dst
     }
 
     private fun stopCamera() {
         cameraStarted = false
-        runCatching { ProcessCameraProvider.getInstance(this).get().unbindAll() }
+        cameraProvider?.unbindAll()
+        cameraProvider = null
+        cameraExecutor?.shutdown()
+        cameraExecutor = null
     }
-
-    // ── Lanzar PTT screen ──────────────────────────────────────────────────────
 
     private fun launchPttScreen(handle: Long) {
         val intent = Intent(this, MainActivity::class.java).apply {
@@ -278,16 +303,6 @@ class PairingActivity : AppCompatActivity() {
         }
         startActivity(intent)
         finish()
-    }
-
-    // ── Utils ──────────────────────────────────────────────────────────────────
-
-    private fun parseHostPort(addr: String): Pair<String, Int>? {
-        val lastColon = addr.lastIndexOf(':')
-        if (lastColon < 0) return null
-        val host = addr.substring(0, lastColon)
-        val port = addr.substring(lastColon + 1).toIntOrNull() ?: return null
-        return Pair(host, port)
     }
 
     companion object {
