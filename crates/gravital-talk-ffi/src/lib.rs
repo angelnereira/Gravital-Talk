@@ -122,6 +122,8 @@ impl From<&GsConfig> for RustConfig {
             capability_flags: c.capability_flags,
             jitter_buffer_ms: c.jitter_buffer_ms,
             mtu: c.mtu as usize,
+            relay_session_id: 0,
+            relay_peer: None,
         }
     }
 }

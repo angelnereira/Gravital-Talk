@@ -17,7 +17,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use gravital_talk::{
-    CodecId, CodecSession, Config, Session, SessionRole, Transport, UdpConfig, UdpTransport,
+    CodecId, CodecSession, Config, Session, SessionRole, UdpConfig, UdpTransport,
 };
 use gravital_talk_io::{AudioCapture, AudioPlayback, StreamConfig};
 use hound::{SampleFormat, WavSpec, WavWriter};
@@ -94,6 +94,10 @@ enum Command {
         channels: u8,
     },
     /// Recibe audio y lo escribe a un WAV (+ playback si `--device` activo).
+    ///
+    /// Si se omiten `--peer` y `--peer-port`, acepta la primera conexión
+    /// entrante (modo servidor abierto — no se necesita conocer el puerto
+    /// efímero del emisor).
     Receive {
         /// Dirección de bind.
         #[arg(long, default_value = "0.0.0.0")]
@@ -101,12 +105,12 @@ enum Command {
         /// Puerto.
         #[arg(long, default_value_t = 9000)]
         port: u16,
-        /// Peer esperado.
+        /// Peer esperado (opcional). Si se omite, acepta cualquier emisor.
         #[arg(long)]
-        peer: String,
-        /// Puerto del peer.
+        peer: Option<String>,
+        /// Puerto del peer (opcional, sólo si se especifica --peer).
         #[arg(long)]
-        peer_port: u16,
+        peer_port: Option<u16>,
         /// Ruta de salida WAV.
         #[arg(long)]
         output: PathBuf,
@@ -194,9 +198,10 @@ enum Command {
     /// Usa SPACE para hablar, Q para salir.
     ///
     /// Ejemplos:
-    ///   gs ptt --relay 1.2.3.4:9100 --room GRVT-2847
-    ///   gs ptt --peer 192.168.1.5 --peer-port 9000
-    ///   gs ptt --peer 192.168.1.5 --peer-port 9000 --listen
+    ///   gs ptt --relay 1.2.3.4 --room GRVT-2847
+    ///   gs ptt --peer 192.168.1.5 --peer-port 9000 --listen --port 9001
+    ///   gs ptt --peer 192.168.1.5 --peer-port 9001 --port 9000
+    ///   gs ptt --listen --port 9000          # servidor abierto sin filtro de IP
     Ptt {
         /// Dirección del relay (HOST). Requiere también --room.
         #[arg(long)]
@@ -213,13 +218,15 @@ enum Command {
         /// Peer directo (HOST). Mutualmente exclusivo con --relay.
         #[arg(long)]
         peer: Option<String>,
-        /// Puerto del peer directo.
+        /// Puerto del peer directo (requerido en modo cliente).
         #[arg(long, default_value_t = 9000)]
         peer_port: u16,
-        /// Puerto local de escucha (0 = efímero).
+        /// Puerto local de escucha. Con --listen debe ser > 0 para que el cliente
+        /// pueda conectarse a un puerto conocido.
         #[arg(long, default_value_t = 0)]
         port: u16,
-        /// Actúa como servidor (espera que el peer conecte primero). Solo P2P.
+        /// Actúa como servidor: espera conexiones entrantes en lugar de iniciarlas.
+        /// Funciona tanto en modo P2P (con o sin --peer) como en modo relay.
         #[arg(long)]
         listen: bool,
         /// Dispositivo de entrada de audio (micrófono).
@@ -318,7 +325,7 @@ async fn dispatch(cmd: Command) -> Result<()> {
             cmd_receive(
                 bind,
                 port,
-                peer,
+                peer.as_deref(),
                 peer_port,
                 output,
                 device.as_deref(),
@@ -469,8 +476,8 @@ async fn cmd_send(
 async fn cmd_receive(
     bind: String,
     port: u16,
-    peer: String,
-    peer_port: u16,
+    peer: Option<&str>,
+    peer_port: Option<u16>,
     output: PathBuf,
     device: Option<&str>,
     codec_arg: CodecArg,
@@ -479,7 +486,6 @@ async fn cmd_receive(
     channels: u8,
 ) -> Result<()> {
     let bind_addr: SocketAddr = format!("{bind}:{port}").parse()?;
-    let peer_addr: SocketAddr = format!("{peer}:{peer_port}").parse()?;
 
     let transport = Arc::new(
         UdpTransport::bind(UdpConfig {
@@ -496,7 +502,20 @@ async fn cmd_receive(
     };
     let codec_id = codec_arg.to_codec_id();
     let cs = CodecSession::new(transport, config.clone(), codec_id)?;
-    cs.handshake(SessionRole::Server, peer_addr).await?;
+
+    // Si se especificó --peer, filtramos estrictamente por esa dirección.
+    // Si no, usamos handshake_open para aceptar la primera conexión entrante
+    // (el sender puede tener un puerto efímero desconocido de antemano).
+    match (peer, peer_port) {
+        (Some(p), Some(pp)) => {
+            let peer_addr: SocketAddr = format!("{p}:{pp}").parse()?;
+            cs.handshake(SessionRole::Server, peer_addr).await?;
+        }
+        _ => {
+            tracing::info!("modo servidor abierto: esperando la primera conexión entrante en {bind_addr}");
+            cs.handshake_open().await?;
+        }
+    }
     tracing::info!(session_id = cs.session().session_id(), codec = ?codec_id, "handshake OK");
 
     let spec = WavSpec {
@@ -818,6 +837,17 @@ fn extract_http_body(raw: &[u8]) -> Result<String> {
     }
 }
 
+/// Parses a numeric field from a JSON object like `{"field": 12345, ...}`.
+/// Works without pulling in serde_json — just naive string scanning.
+fn parse_room_field(json: &str, field: &str) -> Option<u32> {
+    let key = format!("\"{field}\"");
+    let pos = json.find(&key)?;
+    let after = json[pos + key.len()..].trim_start();
+    let after = after.strip_prefix(':')?.trim_start();
+    let end = after.find(|c: char| !c.is_ascii_digit()).unwrap_or(after.len());
+    after[..end].parse().ok()
+}
+
 // ─── gs ptt ──────────────────────────────────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]
@@ -835,30 +865,58 @@ async fn cmd_ptt(
     codec_arg: CodecArg,
 ) -> Result<()> {
     // ── Determinar peer y rol ───────────────────────────────────────────────
-    let (peer_addr, role, via_relay): (SocketAddr, SessionRole, bool) = match (&relay, &room, &peer_host) {
-        (Some(relay_host), Some(room_code), None) => {
-            // Modo relay: resolver room → session_id, luego conectar al relay UDP
-            let path = format!("/api/rooms/{room_code}");
-            let resp = http_get(relay_host, relay_obs_port, &path).await
-                .context("failed to resolve room code — is the relay running?")?;
-            tracing::info!(room = room_code, response = %resp, "room resolved");
-            let relay_udp: SocketAddr = format!("{relay_host}:{relay_port}").parse()?;
-            (relay_udp, SessionRole::Client, true)
-        }
-        (None, None, Some(host)) => {
-            let peer: SocketAddr = format!("{host}:{peer_port}").parse()?;
-            let role = if listen { SessionRole::Server } else { SessionRole::Client };
-            (peer, role, false)
-        }
-        _ => bail!("use either --relay + --room  OR  --peer [--listen]"),
-    };
+    // Returns: (peer_addr, role, relay_session_id, use_open_handshake)
+    let (peer_addr, role, relay_session_id, use_open_hs): (SocketAddr, SessionRole, u32, bool) =
+        match (&relay, &room, &peer_host) {
+            (Some(relay_host), Some(room_code), None) => {
+                // Modo relay: resolver room → session_id + peer_count
+                let path = format!("/api/rooms/{room_code}");
+                let resp = http_get(relay_host, relay_obs_port, &path).await
+                    .context("failed to resolve room code — is the relay running?")?;
+                tracing::info!(room = room_code, response = %resp, "room resolved");
+
+                let session_id = parse_room_field(&resp, "session_id")
+                    .context("room response missing session_id")?;
+                let peer_count = parse_room_field(&resp, "peer_count").unwrap_or(0);
+
+                // First peer to join is server (opens handshake), second is client.
+                let relay_udp: SocketAddr = format!("{relay_host}:{relay_port}").parse()?;
+                if peer_count == 0 {
+                    tracing::info!("relay mode: acting as SERVER (first peer)");
+                    (relay_udp, SessionRole::Server, session_id, true)
+                } else {
+                    tracing::info!("relay mode: acting as CLIENT (second peer)");
+                    (relay_udp, SessionRole::Client, session_id, false)
+                }
+            }
+            (None, None, Some(host)) => {
+                let peer: SocketAddr = format!("{host}:{peer_port}").parse()?;
+                if listen {
+                    tracing::info!("P2P mode: listening (open handshake)");
+                    (peer, SessionRole::Server, 0, true)
+                } else {
+                    tracing::info!("P2P mode: connecting to {peer}");
+                    (peer, SessionRole::Client, 0, false)
+                }
+            }
+            (None, None, None) if listen => {
+                // Listen without a specific peer: bind and wait for anyone.
+                let any: SocketAddr = "0.0.0.0:0".parse().unwrap();
+                tracing::info!("P2P mode: open listen on {local_port}");
+                (any, SessionRole::Server, 0, true)
+            }
+            _ => bail!("use either --relay + --room  OR  --peer [--listen]  OR  --listen"),
+        };
 
     let bind_addr: SocketAddr = format!("0.0.0.0:{local_port}").parse()?;
     let codec_id = codec_arg.to_codec_id();
+    let relay_peer_opt = if relay_session_id != 0 { Some(peer_addr) } else { None };
     let config = Config {
         sample_rate: 48_000,
         channels: 1,
         frame_duration_ms: 20,
+        relay_session_id,
+        relay_peer: relay_peer_opt,
         ..Config::default()
     };
 
@@ -881,10 +939,16 @@ async fn cmd_ptt(
     let mut stdout = std::io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
 
-    let mode_str = if via_relay {
-        format!("relay {} room {}", relay.as_deref().unwrap_or("?"), room.as_deref().unwrap_or("?"))
+    let mode_str = if relay_session_id != 0 {
+        format!(
+            "relay {} room {} (sid={relay_session_id} role={role:?})",
+            relay.as_deref().unwrap_or("?"),
+            room.as_deref().unwrap_or("?"),
+        )
+    } else if use_open_hs {
+        format!("P2P listen on :{local_port}")
     } else {
-        format!("direct → {peer_addr}")
+        format!("P2P direct → {peer_addr}")
     };
 
     // ── Bucle de reconexión ─────────────────────────────────────────────────
@@ -911,11 +975,15 @@ async fn cmd_ptt(
             stdout.flush().ok();
         }
 
-        match cs.handshake(role, peer_addr).await {
+        let hs_result = if use_open_hs {
+            cs.handshake_open().await
+        } else {
+            cs.handshake(role, peer_addr).await
+        };
+        match hs_result {
             Ok(()) => {}
             Err(e) => {
                 tracing::warn!(?e, "handshake failed, will retry");
-                // Mostrar error brevemente en pantalla.
                 print!("\x1B[2J\x1B[H");
                 println!("Handshake fallido: {e}\nReconectando en {}s...", reconnect_delay.as_secs());
                 { use std::io::Write; std::io::stdout().flush().ok(); }
@@ -1156,8 +1224,6 @@ async fn ptt_ui_loop(
             }
         }
     }
-
-    Ok(PttUiResult::Quit)
 }
 
 /// Sends PCM i16 samples to the playback channel (non-blocking; drops on full channel).

@@ -37,6 +37,7 @@ anyhow             = { workspace = true }
 tracing            = { workspace = true }
 async-trait        = { workspace = true }
 proptest           = { workspace = true }
+gravital-talk-io  = { workspace = true }
 
 [[bench]]
 name = "encode_decode"

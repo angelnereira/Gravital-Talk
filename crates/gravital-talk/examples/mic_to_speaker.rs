@@ -113,7 +113,7 @@ async fn run(codec_id: CodecId, duration_s: u64) -> anyhow::Result<()> {
                 let us = t0.elapsed().as_micros() as u64;
                 let _ = hist.record(us);
                 if let Some(ref pb) = playback {
-                    let _ = pb.push(decoded);
+                    let _ = pb.push(decoded as Vec<i16>);
                 }
             }
             Ok(Err(e)) => tracing::warn!(?e, "recv error"),
