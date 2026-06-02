@@ -72,6 +72,13 @@ pub struct Config {
     pub jitter_buffer_ms: u16,
     /// MTU efectivo en bytes.
     pub mtu: usize,
+    /// Session ID pre-acordado para modo relay. Si > 0, se usa en los headers
+    /// de los paquetes de handshake para que el relay pueda enrutarlos entre
+    /// los dos peers. Ambos peers deben configurar el mismo valor.
+    pub relay_session_id: u32,
+    /// Dirección del relay (sólo modo relay). Si está configurada, `handshake_open`
+    /// enviará un heartbeat de registro al relay antes de esperar conexiones.
+    pub relay_peer: Option<std::net::SocketAddr>,
 }
 
 impl Default for Config {
@@ -86,6 +93,8 @@ impl Default for Config {
             capability_flags: 0,
             jitter_buffer_ms: DEFAULT_JITTER_BUFFER_MS,
             mtu: DEFAULT_MTU,
+            relay_session_id: 0,
+            relay_peer: None,
         }
     }
 }
@@ -325,7 +334,29 @@ impl Session {
     /// El peer queda fijado automáticamente tras recibir el primer
     /// `ClientHello` válido, igual que en `handshake()` para rol `Server`,
     /// salvo que no se filtra por IP de origen.
+    ///
+    /// En modo relay (`Config::relay_peer` configurado), envía primero un
+    /// heartbeat de registro al relay para que éste sepa que este peer
+    /// pertenece a la sesión `relay_session_id`. Así, cuando el peer remoto
+    /// envíe su `ClientHello`, el relay puede reenviarlo a este servidor.
     pub async fn handshake_open(&self) -> Result<(), TransportError> {
+        // Modo relay: registrar presencia con el relay ANTES de transicionar
+        // al estado Handshaking. Esto asegura que el relay enrute los paquetes
+        // del cliente a este servidor cuando lleguen.
+        if let Some(relay) = self.config.relay_peer {
+            *self.peer.lock().await = Some(relay);
+            if self.config.relay_session_id != 0 {
+                let _ = self
+                    .send_control(
+                        MessageType::Heartbeat,
+                        self.config.relay_session_id,
+                        &[],
+                        relay,
+                    )
+                    .await;
+            }
+        }
+
         self.state
             .lock()
             .await
@@ -398,11 +429,16 @@ impl Session {
         let mut hello_payload = [0u8; ClientHello::SIZE];
         hello.encode(&mut hello_payload).map_err(TransportError::Protocol)?;
 
+        // En modo relay, usamos relay_session_id en el header para que el relay
+        // pueda enrutar el ClientHello al servidor ya registrado. En modo P2P
+        // directo se usa 0 (el servidor aún no tiene session_id asignado).
+        let routing_sid = self.config.relay_session_id;
+
         // Reintento con backoff hasta el timeout del caller.
         let mut attempt: u32 = 0;
         let mut buf = vec![0u8; self.config.mtu];
         loop {
-            self.send_control(MessageType::HandshakeClientHello, 0, &hello_payload, peer)
+            self.send_control(MessageType::HandshakeClientHello, routing_sid, &hello_payload, peer)
                 .await?;
 
             let backoff = Duration::from_millis(HANDSHAKE_RETRY_BASE_MS << attempt.min(4));
@@ -559,10 +595,16 @@ impl Session {
         let negotiated_version = client_ver.min(PROTOCOL_VERSION_MAX);
 
         // 2. Generar clave efímera, nonce y session_id del servidor.
+        // En modo relay, usamos el session_id pre-acordado del room para que
+        // el relay pueda enrutar correctamente. En P2P se genera aleatoriamente.
         let server_secret = EphemeralSecret::random_from_rng(rand_core::OsRng);
         let server_pubkey = PublicKey::from(&server_secret);
         let server_nonce = random_nonce_32();
-        let session_id = rand_u32_secure();
+        let session_id = if self.config.relay_session_id != 0 {
+            self.config.relay_session_id
+        } else {
+            rand_u32_secure()
+        };
         self.session_id.store(session_id, Ordering::Release);
 
         // 3. Negociar codec.
@@ -669,7 +711,10 @@ impl Session {
         self.send_control(MessageType::HandshakeSessionConfirm, session_id, &sc_payload, peer)
             .await?;
 
-        // 9. Almacenar claves.
+        // 9. Almacenar claves y computar SSRC local del servidor.
+        let ssrc = session_id
+            ^ u32::from_be_bytes([enc_key[0], enc_key[1], enc_key[2], enc_key[3]]);
+        self.local_ssrc.store(ssrc, Ordering::Release);
         *self.encrypt_key.lock().await = Some(enc_key);
         *self.decrypt_key.lock().await = Some(dec_key);
         Ok(())
@@ -723,7 +768,12 @@ impl Session {
         let server_secret = EphemeralSecret::random_from_rng(rand_core::OsRng);
         let server_pubkey = PublicKey::from(&server_secret);
         let server_nonce = random_nonce_32();
-        let session_id = rand_u32_secure();
+        // En modo relay usamos el session_id pre-acordado del room.
+        let session_id = if self.config.relay_session_id != 0 {
+            self.config.relay_session_id
+        } else {
+            rand_u32_secure()
+        };
         self.session_id.store(session_id, Ordering::Release);
 
         let chosen_codec = if self.config.supported_codecs.contains(&client_hello.codec_preferred) {
@@ -812,6 +862,9 @@ impl Session {
         self.send_control(MessageType::HandshakeSessionConfirm, session_id, &sc_payload, peer)
             .await?;
 
+        let ssrc = session_id
+            ^ u32::from_be_bytes([enc_key[0], enc_key[1], enc_key[2], enc_key[3]]);
+        self.local_ssrc.store(ssrc, Ordering::Release);
         *self.encrypt_key.lock().await = Some(enc_key);
         *self.decrypt_key.lock().await = Some(dec_key);
         Ok(())
@@ -848,14 +901,8 @@ impl Session {
         prefixed.extend_from_slice(payload);
 
         // Construir header con flag ENCRYPTED.
-        let mut header = PacketHeader {
-            version: 1,
-            flags: Flags::ENCRYPTED,
-            msg_type: MessageType::AudioFrame.code(),
-            session_id: sid,
-            sequence: seq,
-            timestamp: ts,
-        };
+        let mut header = PacketHeader::new(MessageType::AudioFrame.code(), sid, seq, ts);
+        header.flags.set(Flags::ENCRYPTED);
 
         // Cifrar prefixed si hay clave disponible.
         let (wire_payload, encrypt_flag_active) = if let Some(key) = self.encrypt_key.lock().await.as_ref() {
@@ -906,14 +953,8 @@ impl Session {
 
         let seq = self.tx_sequence.fetch_add(1, Ordering::Relaxed);
         let ts = self.micros_since_epoch();
-        let header = PacketHeader {
-            version: 1,
-            flags: Flags::ENCRYPTED,
-            msg_type: MessageType::AudioFec.code(),
-            session_id: sid,
-            sequence: seq,
-            timestamp: ts,
-        };
+        let mut header = PacketHeader::new(MessageType::AudioFec.code(), sid, seq, ts);
+        header.flags.set(Flags::ENCRYPTED);
 
         if let Some(key) = self.encrypt_key.lock().await.as_ref() {
             let nonce = make_nonce(seq, sid);

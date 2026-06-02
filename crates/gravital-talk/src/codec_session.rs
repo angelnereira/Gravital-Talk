@@ -149,6 +149,27 @@ impl CodecSession {
         Ok(())
     }
 
+    /// Ejecuta el handshake en modo "servidor abierto": acepta el primer peer
+    /// que conecte desde cualquier dirección. Útil cuando la IP/puerto del
+    /// cliente no se conocen de antemano (P2P con puerto efímero, QR pairing,
+    /// modo relay).
+    ///
+    /// Valida que el codec negociado coincida con el configurado.
+    pub async fn handshake_open(&self) -> Result<(), CodecSessionError> {
+        self.inner.handshake_open().await?;
+        let negotiated_code = self.inner.negotiated_codec();
+        if negotiated_code != 0 {
+            let negotiated = CodecId::from_code(negotiated_code);
+            if negotiated != self.codec_id {
+                return Err(CodecSessionError::CodecMismatch {
+                    requested: self.codec_id,
+                    negotiated,
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// Envía `samples` (interleaved si `channels > 1`). `samples.len()` debe
     /// ser `frame_samples * channels`.
     pub async fn send_samples(&self, samples: &[i16]) -> Result<(), CodecSessionError> {

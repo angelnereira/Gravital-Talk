@@ -891,6 +891,7 @@ dependencies = [
  "criterion",
  "gravital-talk-codec",
  "gravital-talk-core",
+ "gravital-talk-io",
  "gravital-talk-metrics",
  "gravital-talk-transport",
  "hdrhistogram",
