@@ -373,10 +373,28 @@ impl Session {
         // Cada intento tiene 30 s de timeout; si falla se reinicia el handshake
         // (state: Closed → Reconnecting → Handshaking) para que un segundo
         // dispositivo pueda conectarse si el primero falló a mitad.
+        //
+        // En modo relay re-enviamos el heartbeat de registro en cada iteración
+        // para que el relay no elimine la ruta por inactividad (TTL del relay).
         loop {
             if self.closed.load(Ordering::Acquire) {
                 let _ = self.state.lock().await.transition(SessionEvent::Close);
                 return Err(TransportError::PeerClosed("session closed"));
+            }
+
+            // Re-register with relay on every attempt so the route stays alive
+            // across relay session GC cycles (default TTL 300 s).
+            if let Some(relay) = self.config.relay_peer {
+                if self.config.relay_session_id != 0 {
+                    let _ = self
+                        .send_control(
+                            MessageType::Heartbeat,
+                            self.config.relay_session_id,
+                            &[],
+                            relay,
+                        )
+                        .await;
+                }
             }
 
             let deadline = Duration::from_millis(30_000);

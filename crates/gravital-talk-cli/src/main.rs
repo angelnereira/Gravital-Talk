@@ -521,7 +521,10 @@ async fn cmd_receive(
             let peer_addr: SocketAddr = format!("{p}:{pp}").parse()?;
             cs.handshake(SessionRole::Server, peer_addr).await?;
         }
-        _ => {
+        (Some(_), None) => {
+            anyhow::bail!("--peer-port is required when --peer is specified");
+        }
+        (None, _) => {
             tracing::info!(
                 "modo servidor abierto: esperando la primera conexión entrante en {bind_addr}"
             );
