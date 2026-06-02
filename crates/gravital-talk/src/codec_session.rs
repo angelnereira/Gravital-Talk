@@ -23,8 +23,8 @@
 
 use std::collections::VecDeque;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 
 use gravital_talk_codec::{build_pair, CodecError, CodecId, Decoder, Encoder};
 use gravital_talk_transport::{

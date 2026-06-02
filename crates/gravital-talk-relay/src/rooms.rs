@@ -28,7 +28,9 @@ pub fn generate_code() -> String {
 
     let mut rng = seed;
     let mut next = || -> u8 {
-        rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        rng = rng
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         (rng >> 33) as u8
     };
 
@@ -55,8 +57,7 @@ pub fn is_valid_code(code: &str) -> bool {
     if bytes.len() != 9 || bytes[4] != b'-' {
         return false;
     }
-    bytes[..4].iter().all(|b| LETTERS.contains(b))
-        && bytes[5..].iter().all(|b| DIGITS.contains(b))
+    bytes[..4].iter().all(|b| LETTERS.contains(b)) && bytes[5..].iter().all(|b| DIGITS.contains(b))
 }
 
 /// Genera un session_id aleatorio no-cero para una sala nueva.
@@ -68,7 +69,11 @@ pub fn generate_session_id() -> u32 {
     let c = COUNTER.fetch_add(1, Ordering::Relaxed);
     let h = t.wrapping_add(c.wrapping_mul(2654435761));
     let id = (h ^ (h >> 32)) as u32;
-    if id == 0 { 0xDEAD_BEEF } else { id }
+    if id == 0 {
+        0xDEAD_BEEF
+    } else {
+        id
+    }
 }
 
 #[cfg(test)]

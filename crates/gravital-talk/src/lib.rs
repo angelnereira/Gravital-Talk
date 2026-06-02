@@ -49,10 +49,10 @@ pub use gravital_talk_metrics::{
 };
 
 pub use gravital_talk_transport::{
+    discover_public_addr,
     jitter_buffer::{Frame, JitterBuffer},
     udp::{UdpConfig, UdpTransport, DEFAULT_SOCKET_BUFFER, DSCP_EF},
-    Config, LatencyClass, Session, SessionRole, Transport, TransportError,
-    discover_public_addr, StunError,
+    Config, LatencyClass, Session, SessionRole, StunError, Transport, TransportError,
 };
 
 /// Version del crate facade.

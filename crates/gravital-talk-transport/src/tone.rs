@@ -94,7 +94,7 @@ mod tests {
     fn tone_amplitude_in_range() {
         let samples = generate_pcm_tone(440.0, 10, 48_000);
         for s in samples {
-            assert!(s >= -20_001 && s <= 20_001);
+            assert!((-20_001..=20_001).contains(&s));
         }
     }
 }

@@ -83,7 +83,10 @@ impl AuthResponsePayload {
         let mut signature = [0u8; 64];
         public_key.copy_from_slice(&buf[0..32]);
         signature.copy_from_slice(&buf[32..96]);
-        Ok(Self { public_key, signature })
+        Ok(Self {
+            public_key,
+            signature,
+        })
     }
 }
 
@@ -186,11 +189,15 @@ pub struct Identity {
 #[cfg(not(feature = "identity"))]
 impl Identity {
     pub fn generate() -> Self {
-        Self { secret_bytes: [0u8; 32] }
+        Self {
+            secret_bytes: [0u8; 32],
+        }
     }
 
     pub fn from_bytes(secret_bytes: &[u8; 32]) -> Self {
-        Self { secret_bytes: *secret_bytes }
+        Self {
+            secret_bytes: *secret_bytes,
+        }
     }
 
     pub fn to_bytes(&self) -> [u8; 32] {
@@ -227,7 +234,9 @@ mod tests {
 
     #[test]
     fn auth_challenge_payload_roundtrip() {
-        let p = AuthChallengePayload { nonce: [0xABu8; 32] };
+        let p = AuthChallengePayload {
+            nonce: [0xABu8; 32],
+        };
         let mut buf = [0u8; AuthChallengePayload::SIZE];
         p.encode(&mut buf).unwrap();
         assert_eq!(AuthChallengePayload::decode(&buf).unwrap(), p);
@@ -270,7 +279,9 @@ mod tests {
         let identity = Identity::generate();
         let nonce = [0x42u8; 32];
         let response = identity.respond_to_challenge(&nonce);
-        let pk = IdentityPublic { bytes: response.public_key };
+        let pk = IdentityPublic {
+            bytes: response.public_key,
+        };
         assert!(pk.verify(&nonce, &response.signature));
     }
 

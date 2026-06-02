@@ -229,7 +229,9 @@ mod tests {
     use super::*;
 
     fn make_payload(seq: u32, size: usize) -> Vec<u8> {
-        (0..size).map(|i| (seq as u8).wrapping_add(i as u8)).collect()
+        (0..size)
+            .map(|i| (seq as u8).wrapping_add(i as u8))
+            .collect()
     }
 
     #[test]
@@ -326,7 +328,10 @@ mod tests {
         dec.push_data(1, Bytes::from(payloads[1].clone()));
 
         let result = dec.push_parity(parity);
-        assert!(result.is_none(), "sin pérdidas no devuelve frame recuperado");
+        assert!(
+            result.is_none(),
+            "sin pérdidas no devuelve frame recuperado"
+        );
     }
 
     #[test]

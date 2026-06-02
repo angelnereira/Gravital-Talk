@@ -16,9 +16,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use gravital_talk::{
-    CodecId, CodecSession, Config, Session, SessionRole, UdpConfig, UdpTransport,
-};
+use gravital_talk::{CodecId, CodecSession, Config, Session, SessionRole, UdpConfig, UdpTransport};
 use gravital_talk_io::{AudioCapture, AudioPlayback, StreamConfig};
 use hound::{SampleFormat, WavSpec, WavWriter};
 use tracing_subscriber::EnvFilter;
@@ -349,7 +347,19 @@ async fn dispatch(cmd: Command) -> Result<()> {
             session_ttl,
             max_sessions,
             max_peers,
-        } => cmd_relay(config, bind, udp_port, ws_port, obs_port, session_ttl, max_sessions, max_peers).await,
+        } => {
+            cmd_relay(
+                config,
+                bind,
+                udp_port,
+                ws_port,
+                obs_port,
+                session_ttl,
+                max_sessions,
+                max_peers,
+            )
+            .await
+        }
         Command::Room { action } => cmd_room(action).await,
         Command::Discover { timeout } => cmd_discover(timeout).await,
         Command::Ptt {
@@ -512,7 +522,9 @@ async fn cmd_receive(
             cs.handshake(SessionRole::Server, peer_addr).await?;
         }
         _ => {
-            tracing::info!("modo servidor abierto: esperando la primera conexión entrante en {bind_addr}");
+            tracing::info!(
+                "modo servidor abierto: esperando la primera conexión entrante en {bind_addr}"
+            );
             cs.handshake_open().await?;
         }
     }
@@ -672,6 +684,7 @@ fn cmd_doctor() -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn cmd_relay(
     config_path: Option<PathBuf>,
     bind: String,
@@ -712,13 +725,22 @@ async fn cmd_relay(
     );
 
     let metrics = RelayMetrics::new();
-    let router = Arc::new(Router::new(cfg.max_sessions, cfg.max_peers_per_session, metrics));
+    let router = Arc::new(Router::new(
+        cfg.max_sessions,
+        cfg.max_peers_per_session,
+        metrics,
+    ));
 
-    let udp_socket = Arc::new(UdpSocket::bind(cfg.udp_bind).await
-        .with_context(|| format!("cannot bind UDP {}", cfg.udp_bind))?);
-    let ws_listener = TcpListener::bind(cfg.ws_bind).await
+    let udp_socket = Arc::new(
+        UdpSocket::bind(cfg.udp_bind)
+            .await
+            .with_context(|| format!("cannot bind UDP {}", cfg.udp_bind))?,
+    );
+    let ws_listener = TcpListener::bind(cfg.ws_bind)
+        .await
         .with_context(|| format!("cannot bind WS {}", cfg.ws_bind))?;
-    let obs_listener = TcpListener::bind(cfg.observability_bind).await
+    let obs_listener = TcpListener::bind(cfg.observability_bind)
+        .await
         .with_context(|| format!("cannot bind observability {}", cfg.observability_bind))?;
 
     println!(
@@ -764,12 +786,20 @@ async fn cmd_relay(
 
 async fn cmd_room(action: RoomAction) -> Result<()> {
     match action {
-        RoomAction::Create { relay, obs_port, session_id } => {
+        RoomAction::Create {
+            relay,
+            obs_port,
+            session_id,
+        } => {
             let body = format!(r#"{{"session_id":{session_id}}}"#);
             let resp = http_post(&relay, obs_port, "/api/rooms", &body).await?;
             println!("{resp}");
         }
-        RoomAction::Join { code, relay, obs_port } => {
+        RoomAction::Join {
+            code,
+            relay,
+            obs_port,
+        } => {
             let path = format!("/api/rooms/{code}");
             let resp = http_get(&relay, obs_port, &path).await?;
             println!("{resp}");
@@ -791,7 +821,10 @@ async fn cmd_discover(timeout_s: u64) -> Result<()> {
         Ok(peers) => {
             println!("Found {} peer(s):", peers.len());
             for p in peers {
-                println!("  {} — session_id={} — \"{}\"", p.addr, p.session_id, p.name);
+                println!(
+                    "  {} — session_id={} — \"{}\"",
+                    p.addr, p.session_id, p.name
+                );
             }
         }
         Err(e) => println!("Discovery error: {e}"),
@@ -803,9 +836,7 @@ async fn cmd_discover(timeout_s: u64) -> Result<()> {
 async fn http_get(host: &str, port: u16, path: &str) -> Result<String> {
     let addr: SocketAddr = format!("{host}:{port}").parse()?;
     let mut stream = tokio::net::TcpStream::connect(addr).await?;
-    let req = format!(
-        "GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n"
-    );
+    let req = format!("GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n");
     stream.write_all(req.as_bytes()).await?;
     let mut buf = Vec::new();
     stream.read_to_end(&mut buf).await?;
@@ -844,7 +875,9 @@ fn parse_room_field(json: &str, field: &str) -> Option<u32> {
     let pos = json.find(&key)?;
     let after = json[pos + key.len()..].trim_start();
     let after = after.strip_prefix(':')?.trim_start();
-    let end = after.find(|c: char| !c.is_ascii_digit()).unwrap_or(after.len());
+    let end = after
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(after.len());
     after[..end].parse().ok()
 }
 
@@ -871,7 +904,8 @@ async fn cmd_ptt(
             (Some(relay_host), Some(room_code), None) => {
                 // Modo relay: resolver room → session_id + peer_count
                 let path = format!("/api/rooms/{room_code}");
-                let resp = http_get(relay_host, relay_obs_port, &path).await
+                let resp = http_get(relay_host, relay_obs_port, &path)
+                    .await
                     .context("failed to resolve room code — is the relay running?")?;
                 tracing::info!(room = room_code, response = %resp, "room resolved");
 
@@ -910,7 +944,11 @@ async fn cmd_ptt(
 
     let bind_addr: SocketAddr = format!("0.0.0.0:{local_port}").parse()?;
     let codec_id = codec_arg.to_codec_id();
-    let relay_peer_opt = if relay_session_id != 0 { Some(peer_addr) } else { None };
+    let relay_peer_opt = if relay_session_id != 0 {
+        Some(peer_addr)
+    } else {
+        None
+    };
     let config = Config {
         sample_rate: 48_000,
         channels: 1,
@@ -932,7 +970,7 @@ async fn cmd_ptt(
 
     // ── Flags compartidos (sobreviven reconexiones) ─────────────────────────
     let ptt_on = Arc::new(AtomicBool::new(false));
-    let quit = Arc::new(AtomicBool::new(false));  // salida definitiva
+    let quit = Arc::new(AtomicBool::new(false)); // salida definitiva
 
     // ── Activar UI de terminal (una vez) ────────────────────────────────────
     enable_raw_mode()?;
@@ -958,13 +996,22 @@ async fn cmd_ptt(
         let (disc_tx, disc_rx) = tokio::sync::mpsc::channel::<()>(1);
 
         // Crear sesión fresca para cada intento de conexión.
-        let transport = match UdpTransport::bind(UdpConfig { bind_addr, ..Default::default() }).await {
+        let transport = match UdpTransport::bind(UdpConfig {
+            bind_addr,
+            ..Default::default()
+        })
+        .await
+        {
             Ok(t) => Arc::new(t),
-            Err(e) => { break Err(anyhow::anyhow!("cannot bind UDP: {e}")); }
+            Err(e) => {
+                break Err(anyhow::anyhow!("cannot bind UDP: {e}"));
+            }
         };
         let cs = match CodecSession::new(transport, config.clone(), codec_id) {
             Ok(s) => Arc::new(s),
-            Err(e) => { break Err(e.into()); }
+            Err(e) => {
+                break Err(e.into());
+            }
         };
 
         // Handshake (mostrar estado en pantalla antes de entrar al UI loop).
@@ -985,8 +1032,14 @@ async fn cmd_ptt(
             Err(e) => {
                 tracing::warn!(?e, "handshake failed, will retry");
                 print!("\x1B[2J\x1B[H");
-                println!("Handshake fallido: {e}\nReconectando en {}s...", reconnect_delay.as_secs());
-                { use std::io::Write; std::io::stdout().flush().ok(); }
+                println!(
+                    "Handshake fallido: {e}\nReconectando en {}s...",
+                    reconnect_delay.as_secs()
+                );
+                {
+                    use std::io::Write;
+                    std::io::stdout().flush().ok();
+                }
                 tokio::time::sleep(reconnect_delay).await;
                 reconnect_delay = (reconnect_delay * 2).min(Duration::from_secs(30));
                 continue;
@@ -1001,7 +1054,9 @@ async fn cmd_ptt(
         let recv_handle = tokio::spawn(async move {
             while !quit_rx.load(Ordering::Acquire) {
                 match cs_rx.recv_samples().await {
-                    Ok(samples) => { let _ = pb_rx.send(samples); }
+                    Ok(samples) => {
+                        let _ = pb_rx.send(samples);
+                    }
                     Err(e) => {
                         tracing::debug!(?e, "recv_samples error — signaling disconnect");
                         let _ = disc_tx.send(()).await;
@@ -1025,11 +1080,15 @@ async fn cmd_ptt(
             std::thread::spawn(move || {
                 let mut capture: Option<(AudioCapture, std::sync::mpsc::Receiver<Vec<i16>>)> = None;
                 loop {
-                    if quit_thr.load(Ordering::Acquire) { break; }
+                    if quit_thr.load(Ordering::Acquire) {
+                        break;
+                    }
                     if ptt_thr.load(Ordering::Acquire) {
                         if capture.is_none() {
                             match AudioCapture::start(stream_cfg, Some(in_device_cap.as_str())) {
-                                Ok((cap, rx)) => { capture = Some((cap, rx)); }
+                                Ok((cap, rx)) => {
+                                    capture = Some((cap, rx));
+                                }
                                 Err(e) => {
                                     tracing::warn!(?e, "audio capture start failed");
                                     std::thread::sleep(Duration::from_millis(100));
@@ -1039,7 +1098,9 @@ async fn cmd_ptt(
                         }
                         if let Some((_, ref rx)) = capture {
                             match rx.try_recv() {
-                                Ok(samples) => { let _ = sample_bridge_tx.try_send(samples); }
+                                Ok(samples) => {
+                                    let _ = sample_bridge_tx.try_send(samples);
+                                }
                                 Err(std::sync::mpsc::TryRecvError::Empty) => {
                                     std::thread::sleep(Duration::from_millis(5));
                                 }
@@ -1057,7 +1118,9 @@ async fn cmd_ptt(
         }
         let send_handle = tokio::spawn(async move {
             loop {
-                if quit_tx.load(Ordering::Acquire) { break; }
+                if quit_tx.load(Ordering::Acquire) {
+                    break;
+                }
                 match sample_bridge_rx.try_recv() {
                     Ok(samples) => {
                         if let Err(e) = cs_tx.send_samples(&samples).await {
@@ -1080,7 +1143,8 @@ async fn cmd_ptt(
             tone_tx.clone(),
             config.sample_rate,
             disc_rx,
-        ).await;
+        )
+        .await;
 
         // Limpiar tasks y sesión.
         recv_handle.abort();
@@ -1147,7 +1211,10 @@ async fn ptt_ui_loop(
 
             let ptt = ptt_on.load(Ordering::Acquire);
             let peer_ptt = cs.session().is_peer_ptt_active();
-            let snap = cs.session().metrics().snapshot(cs.session().jitter_buffer().fill_percent());
+            let snap = cs
+                .session()
+                .metrics()
+                .snapshot(cs.session().jitter_buffer().fill_percent());
             let sid = cs.session().session_id();
 
             // Limpiar y redibujar.
@@ -1198,10 +1265,24 @@ async fn ptt_ui_loop(
                             ptt_on.store(!was_on, Ordering::Release);
                             if !was_on {
                                 let _ = cs.session().ptt_press().await;
-                                play_tone(gravital_talk_transport::generate_pcm_tone(880.0, 100, sample_rate), &tone_tx);
+                                play_tone(
+                                    gravital_talk_transport::generate_pcm_tone(
+                                        880.0,
+                                        100,
+                                        sample_rate,
+                                    ),
+                                    &tone_tx,
+                                );
                             } else {
                                 let _ = cs.session().ptt_release().await;
-                                play_tone(gravital_talk_transport::generate_pcm_tone(440.0, 80, sample_rate), &tone_tx);
+                                play_tone(
+                                    gravital_talk_transport::generate_pcm_tone(
+                                        440.0,
+                                        80,
+                                        sample_rate,
+                                    ),
+                                    &tone_tx,
+                                );
                             }
                         }
                         // Tecla 'T' como alternativa
@@ -1210,10 +1291,24 @@ async fn ptt_ui_loop(
                             ptt_on.store(!was_on, Ordering::Release);
                             if !was_on {
                                 let _ = cs.session().ptt_press().await;
-                                play_tone(gravital_talk_transport::generate_pcm_tone(880.0, 100, sample_rate), &tone_tx);
+                                play_tone(
+                                    gravital_talk_transport::generate_pcm_tone(
+                                        880.0,
+                                        100,
+                                        sample_rate,
+                                    ),
+                                    &tone_tx,
+                                );
                             } else {
                                 let _ = cs.session().ptt_release().await;
-                                play_tone(gravital_talk_transport::generate_pcm_tone(440.0, 80, sample_rate), &tone_tx);
+                                play_tone(
+                                    gravital_talk_transport::generate_pcm_tone(
+                                        440.0,
+                                        80,
+                                        sample_rate,
+                                    ),
+                                    &tone_tx,
+                                );
                             }
                         }
                         _ => {}
