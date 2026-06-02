@@ -30,7 +30,11 @@ pub async fn run(socket: Arc<UdpSocket>, router: Arc<Router>) -> anyhow::Result<
         let view = match PacketView::decode(data) {
             Ok(v) => v,
             Err(_) => {
-                router.metrics().dropped.with_label_values(&["malformed"]).inc();
+                router
+                    .metrics()
+                    .dropped
+                    .with_label_values(&["malformed"])
+                    .inc();
                 continue;
             }
         };
@@ -48,13 +52,8 @@ pub async fn run(socket: Arc<UdpSocket>, router: Arc<Router>) -> anyhow::Result<
                     FloorDecision::Granted { others } => {
                         tracing::debug!(session_id, ?from, "floor granted");
                         // Enviar FLOOR_GRANT al solicitante.
-                        send_floor_msg(
-                            &socket,
-                            MessageType::FloorGrant,
-                            session_id,
-                            from,
-                            &router,
-                        ).await;
+                        send_floor_msg(&socket, MessageType::FloorGrant, session_id, from, &router)
+                            .await;
                         // Notificar a los demás con FLOOR_TAKEN.
                         for other in others {
                             send_floor_msg_to(
@@ -63,7 +62,8 @@ pub async fn run(socket: Arc<UdpSocket>, router: Arc<Router>) -> anyhow::Result<
                                 session_id,
                                 other,
                                 &router,
-                            ).await;
+                            )
+                            .await;
                         }
                     }
                     FloorDecision::Denied => {
@@ -79,21 +79,18 @@ pub async fn run(socket: Arc<UdpSocket>, router: Arc<Router>) -> anyhow::Result<
                 continue; // No reenviar FloorRequest a otros peers.
             }
             Ok(MessageType::FloorRelease) => {
-                match router.floor_release(session_id, from) {
-                    FloorDecision::Released { others } => {
-                        tracing::debug!(session_id, ?from, "floor released");
-                        // Notificar a los demás que el floor quedó libre.
-                        for other in others {
-                            send_floor_msg_to(
-                                &socket,
-                                MessageType::FloorRelease,
-                                session_id,
-                                other,
-                                &router,
-                            ).await;
-                        }
+                if let FloorDecision::Released { others } = router.floor_release(session_id, from) {
+                    tracing::debug!(session_id, ?from, "floor released");
+                    for other in others {
+                        send_floor_msg_to(
+                            &socket,
+                            MessageType::FloorRelease,
+                            session_id,
+                            other,
+                            &router,
+                        )
+                        .await;
                     }
-                    _ => {}
                 }
                 continue; // No reenviar FloorRelease; el relay ya lo procesó.
             }
@@ -180,12 +177,20 @@ async fn forward_to(
             }
             Err(e) => {
                 tracing::warn!(?addr, ?e, "failed to forward to UDP peer");
-                router.metrics().dropped.with_label_values(&["send_error"]).inc();
+                router
+                    .metrics()
+                    .dropped
+                    .with_label_values(&["send_error"])
+                    .inc();
             }
         },
         SessionEndpoint::WebSocket(tx) => {
             if tx.send(data.clone()).is_err() {
-                router.metrics().dropped.with_label_values(&["ws_disconnected"]).inc();
+                router
+                    .metrics()
+                    .dropped
+                    .with_label_values(&["ws_disconnected"])
+                    .inc();
             } else {
                 router.metrics().packets_out.inc();
                 router.metrics().bytes_out.inc_by(data.len() as u64);

@@ -63,7 +63,11 @@ async fn handle_connection(
                 let session_id = match PacketView::decode(&bytes) {
                     Ok(view) => view.header().session_id,
                     Err(_) => {
-                        router.metrics().dropped.with_label_values(&["malformed"]).inc();
+                        router
+                            .metrics()
+                            .dropped
+                            .with_label_values(&["malformed"])
+                            .inc();
                         continue;
                     }
                 };
@@ -103,7 +107,11 @@ async fn forward(udp: &Arc<UdpSocket>, target: SessionEndpoint, data: Bytes, rou
         },
         SessionEndpoint::WebSocket(peer_tx) => {
             if peer_tx.send(data.clone()).is_err() {
-                router.metrics().dropped.with_label_values(&["ws_disconnected"]).inc();
+                router
+                    .metrics()
+                    .dropped
+                    .with_label_values(&["ws_disconnected"])
+                    .inc();
             } else {
                 router.metrics().packets_out.inc();
                 router.metrics().bytes_out.inc_by(data.len() as u64);

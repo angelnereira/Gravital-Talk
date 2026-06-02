@@ -108,13 +108,16 @@ fn parse_announcement(data: &[u8], from: SocketAddr) -> Option<PeerInfo> {
     let session_id: u32 = parts.next()?.parse().ok()?;
     let name = parts.next().unwrap_or("unknown").trim().to_string();
     let addr = SocketAddr::new(from.ip(), port);
-    Some(PeerInfo { addr, session_id, name })
+    Some(PeerInfo {
+        addr,
+        session_id,
+        name,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::{IpAddr, Ipv4Addr};
 
     fn from(ip: &str, port: u16) -> SocketAddr {
         SocketAddr::new(ip.parse().unwrap(), port)
@@ -130,8 +133,7 @@ mod tests {
 
     #[test]
     fn parse_announcement_with_spaces_in_name() {
-        let info =
-            parse_announcement(b"GT1 9000 99 Bob Room A", from("10.0.0.1", 1234)).unwrap();
+        let info = parse_announcement(b"GT1 9000 99 Bob Room A", from("10.0.0.1", 1234)).unwrap();
         assert_eq!(info.name, "Bob Room A");
         assert_eq!(info.session_id, 99);
     }
@@ -164,9 +166,8 @@ mod tests {
         // por permisos. Sólo verifica que el error no hace panic.
         let result = discover_lan(Duration::from_millis(50));
         // Puede ser Ok([]) o Err("address already in use"), ambos aceptables.
-        match result {
-            Ok(peers) => assert!(peers.is_empty()),
-            Err(_) => {}
+        if let Ok(peers) = result {
+            assert!(peers.is_empty());
         }
     }
 }

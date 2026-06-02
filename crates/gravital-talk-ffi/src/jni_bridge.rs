@@ -19,9 +19,9 @@ use std::ffi::{c_char, CStr, CString};
 use crate::{
     gs_discover_public_addr, gs_session_accept, gs_session_accept_any, gs_session_close,
     gs_session_connect, gs_session_create, gs_session_destroy, gs_session_id,
-    gs_session_is_peer_ptt_active, gs_session_local_port, gs_session_metrics,
-    gs_session_ptt_press, gs_session_ptt_release, gs_session_recv_audio, gs_session_send_audio,
-    GsConfig, GsMetrics, GsSessionHandle, GsStatus,
+    gs_session_is_peer_ptt_active, gs_session_local_port, gs_session_metrics, gs_session_ptt_press,
+    gs_session_ptt_release, gs_session_recv_audio, gs_session_send_audio, GsConfig, GsMetrics,
+    GsSessionHandle, GsStatus,
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -70,8 +70,7 @@ pub extern "system" fn Java_com_gravitaltalk_GravitalTalkJni_nativeCreate(
         Err(_) => return 0,
     };
     let mut handle: *mut GsSessionHandle = std::ptr::null_mut();
-    let status =
-        unsafe { gs_session_create(&cfg, bind.as_ptr(), bind_port as u16, &mut handle) };
+    let status = unsafe { gs_session_create(&cfg, bind.as_ptr(), bind_port as u16, &mut handle) };
     if status == GsStatus::GS_OK {
         handle as jlong
     } else {
@@ -113,9 +112,8 @@ pub extern "system" fn Java_com_gravitaltalk_GravitalTalkJni_nativeConnect(
         Ok(s) => s,
         Err(_) => return status_jint(GsStatus::GS_ERR_INVALID_ARGUMENT),
     };
-    let st = unsafe {
-        gs_session_connect(handle as *mut GsSessionHandle, c_host.as_ptr(), port as u16)
-    };
+    let st =
+        unsafe { gs_session_connect(handle as *mut GsSessionHandle, c_host.as_ptr(), port as u16) };
     status_jint(st)
 }
 
@@ -142,7 +140,11 @@ pub extern "system" fn Java_com_gravitaltalk_GravitalTalkJni_nativeAccept(
         Err(_) => return status_jint(GsStatus::GS_ERR_INVALID_ARGUMENT),
     };
     let st = unsafe {
-        gs_session_accept(handle as *mut GsSessionHandle, c_host.as_ptr(), peer_port as u16)
+        gs_session_accept(
+            handle as *mut GsSessionHandle,
+            c_host.as_ptr(),
+            peer_port as u16,
+        )
     };
     status_jint(st)
 }
@@ -184,8 +186,9 @@ pub extern "system" fn Java_com_gravitaltalk_GravitalTalkJni_nativeRecvAudio(
     }
     let mut buf = vec![0u8; 4096];
     let mut len = buf.len();
-    let st =
-        unsafe { gs_session_recv_audio(handle as *mut GsSessionHandle, buf.as_mut_ptr(), &mut len) };
+    let st = unsafe {
+        gs_session_recv_audio(handle as *mut GsSessionHandle, buf.as_mut_ptr(), &mut len)
+    };
     if st != GsStatus::GS_OK {
         return std::ptr::null_mut();
     }
@@ -242,8 +245,11 @@ pub extern "system" fn Java_com_gravitaltalk_GravitalTalkJni_nativeGetMetrics(
     _class: JClass,
     handle: jlong,
 ) -> jfloatArray {
-    let empty =
-        || env.new_float_array(0).map(|a: JFloatArray| a.into_raw()).unwrap_or(std::ptr::null_mut());
+    let empty = || {
+        env.new_float_array(0)
+            .map(|a: JFloatArray| a.into_raw())
+            .unwrap_or(std::ptr::null_mut())
+    };
     if handle == 0 {
         return empty();
     }
@@ -273,7 +279,11 @@ pub extern "system" fn Java_com_gravitaltalk_GravitalTalkJni_nativeGetSessionId(
     }
     let mut id: u32 = 0;
     let st = unsafe { gs_session_id(handle as *mut GsSessionHandle, &mut id) };
-    if st == GsStatus::GS_OK { id as jint } else { 0 }
+    if st == GsStatus::GS_OK {
+        id as jint
+    } else {
+        0
+    }
 }
 
 /// `GravitalTalkJni.nativeClose(handle: Long): Int`
@@ -303,7 +313,11 @@ pub extern "system" fn Java_com_gravitaltalk_GravitalTalkJni_nativeGetLocalPort(
     }
     let mut port: u16 = 0;
     let st = unsafe { gs_session_local_port(handle as *mut GsSessionHandle, &mut port) };
-    if st == GsStatus::GS_OK { port as jint } else { 0 }
+    if st == GsStatus::GS_OK {
+        port as jint
+    } else {
+        0
+    }
 }
 
 /// `GravitalTalkJni.nativeDiscoverPublicAddr(bindPort: Int): String?`
@@ -317,9 +331,7 @@ pub extern "system" fn Java_com_gravitaltalk_GravitalTalkJni_nativeDiscoverPubli
     bind_port: jint,
 ) -> jstring {
     let mut buf: [c_char; 64] = [0; 64];
-    let st = unsafe {
-        gs_discover_public_addr(bind_port as u16, buf.as_mut_ptr(), buf.len())
-    };
+    let st = unsafe { gs_discover_public_addr(bind_port as u16, buf.as_mut_ptr(), buf.len()) };
     if st != GsStatus::GS_OK {
         return std::ptr::null_mut();
     }

@@ -155,10 +155,7 @@ impl MessageType {
     pub const fn is_auth(self) -> bool {
         matches!(
             self,
-            Self::AuthChallenge
-                | Self::AuthResponse
-                | Self::AuthAccepted
-                | Self::AuthRejected
+            Self::AuthChallenge | Self::AuthResponse | Self::AuthAccepted | Self::AuthRejected
         )
     }
 }
@@ -521,7 +518,10 @@ impl AuthResponseMsg {
         let mut signature = [0u8; 64];
         public_key.copy_from_slice(&buf[0..32]);
         signature.copy_from_slice(&buf[32..96]);
-        Ok(Self { public_key, signature })
+        Ok(Self {
+            public_key,
+            signature,
+        })
     }
 }
 
@@ -590,9 +590,8 @@ mod tests {
     #[test]
     fn message_type_roundtrip_canonical() {
         for code in [
-            0x01u8, 0x02, 0x03, 0x04, 0x10, 0x11, 0x12, 0x20, 0x21, 0x30, 0x31, 0x32, 0x33,
-            0x40, 0x41, 0x42, 0x43, 0x44, 0x50, 0x51, 0x52, 0x53,
-            0xFE, 0xFF,
+            0x01u8, 0x02, 0x03, 0x04, 0x10, 0x11, 0x12, 0x20, 0x21, 0x30, 0x31, 0x32, 0x33, 0x40,
+            0x41, 0x42, 0x43, 0x44, 0x50, 0x51, 0x52, 0x53, 0xFE, 0xFF,
         ] {
             let m = MessageType::from_code(code).unwrap();
             assert_eq!(m.code(), code, "roundtrip failed for 0x{code:02X}");
@@ -634,7 +633,9 @@ mod tests {
 
     #[test]
     fn auth_challenge_roundtrip() {
-        let msg = AuthChallengeMsg { nonce: [0xABu8; 32] };
+        let msg = AuthChallengeMsg {
+            nonce: [0xABu8; 32],
+        };
         let mut buf = [0u8; AuthChallengeMsg::SIZE];
         msg.encode(&mut buf).unwrap();
         assert_eq!(AuthChallengeMsg::decode(&buf).unwrap(), msg);
@@ -737,7 +738,11 @@ mod tests {
 
     #[test]
     fn fec_header_roundtrip() {
-        let h = FecHeader { seq_base: 100, window: 4, data_len: 320 };
+        let h = FecHeader {
+            seq_base: 100,
+            window: 4,
+            data_len: 320,
+        };
         let mut buf = [0u8; FecHeader::SIZE];
         h.encode(&mut buf).unwrap();
         assert_eq!(FecHeader::decode(&buf).unwrap(), h);
@@ -746,14 +751,22 @@ mod tests {
     #[test]
     fn fec_header_rejects_zero_window() {
         let mut buf = [0u8; FecHeader::SIZE];
-        FecHeader { seq_base: 0, window: 4, data_len: 0 }.encode(&mut buf).unwrap();
+        FecHeader {
+            seq_base: 0,
+            window: 4,
+            data_len: 0,
+        }
+        .encode(&mut buf)
+        .unwrap();
         buf[4] = 0; // window = 0
         assert!(FecHeader::decode(&buf).is_err());
     }
 
     #[test]
     fn control_bitrate_roundtrip() {
-        let msg = ControlBitrateMsg { requested_bitrate: 32_000 };
+        let msg = ControlBitrateMsg {
+            requested_bitrate: 32_000,
+        };
         let mut buf = [0u8; ControlBitrateMsg::SIZE];
         msg.encode(&mut buf).unwrap();
         assert_eq!(ControlBitrateMsg::decode(&buf).unwrap(), msg);

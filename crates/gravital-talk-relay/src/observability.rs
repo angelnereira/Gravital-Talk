@@ -88,7 +88,9 @@ async fn handle(
         Response::builder()
             .status(StatusCode::NOT_FOUND)
             .header("content-type", "application/json")
-            .body(Full::new(Bytes::from_static(b"{\"error\":\"not found\"}\n")))
+            .body(Full::new(Bytes::from_static(
+                b"{\"error\":\"not found\"}\n",
+            )))
             .unwrap()
     };
 

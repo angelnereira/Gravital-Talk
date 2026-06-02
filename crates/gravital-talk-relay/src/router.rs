@@ -113,7 +113,10 @@ impl Router {
     /// - `Dropped` — rechazado (sesión llena, session_id=0, max_sessions).
     pub fn route(&self, session_id: u32, from: SessionEndpoint) -> RouteDecision {
         if session_id == 0 {
-            self.metrics.dropped.with_label_values(&["zero_session"]).inc();
+            self.metrics
+                .dropped
+                .with_label_values(&["zero_session"])
+                .inc();
             return RouteDecision::Dropped;
         }
 
@@ -139,12 +142,15 @@ impl Router {
 
             // Peer nuevo — ¿hay espacio?
             if entry.peers.len() >= self.max_peers_per_session {
-                self.metrics.dropped.with_label_values(&["session_full"]).inc();
+                self.metrics
+                    .dropped
+                    .with_label_values(&["session_full"])
+                    .inc();
                 return RouteDecision::Dropped;
             }
 
             // Registrar el peer y devolver los peers ya existentes para broadcast.
-            let existing: Vec<SessionEndpoint> = entry.peers.iter().cloned().collect();
+            let existing: Vec<SessionEndpoint> = entry.peers.to_vec();
             entry.peers.push(from);
             return if existing.is_empty() {
                 RouteDecision::Registered
@@ -155,7 +161,10 @@ impl Router {
 
         // Sesión nueva.
         if self.routes.len() >= self.max_sessions {
-            self.metrics.dropped.with_label_values(&["max_sessions"]).inc();
+            self.metrics
+                .dropped
+                .with_label_values(&["max_sessions"])
+                .inc();
             return RouteDecision::Dropped;
         }
         let mut entry = RouteEntry::new();
@@ -178,7 +187,9 @@ impl Router {
             });
             let keep = !entry.peers.is_empty()
                 && now.saturating_duration_since(entry.last_activity) < max_age;
-            if !keep { removed += 1; }
+            if !keep {
+                removed += 1;
+            }
             keep
         });
         if removed > 0 {
@@ -192,7 +203,10 @@ impl Router {
     }
 
     pub fn peer_count(&self, session_id: u32) -> usize {
-        self.routes.get(&session_id).map(|e| e.peers.len()).unwrap_or(0)
+        self.routes
+            .get(&session_id)
+            .map(|e| e.peers.len())
+            .unwrap_or(0)
     }
 
     // ── Floor Arbitration ────────────────────────────────────────────────────
@@ -205,7 +219,10 @@ impl Router {
         let Some(mut entry) = self.routes.get_mut(&session_id) else {
             return FloorDecision::Unknown;
         };
-        let is_known = entry.peers.iter().any(|p| p.matches(&SessionEndpoint::Udp(from)));
+        let is_known = entry
+            .peers
+            .iter()
+            .any(|p| p.matches(&SessionEndpoint::Udp(from)));
         if !is_known {
             return FloorDecision::Unknown;
         }
@@ -319,9 +336,7 @@ pub enum FloorDecision {
     /// Floor denegado (otra persona ya lo tiene).
     Denied,
     /// El floor fue liberado. Notificar a todos los peers.
-    Released {
-        others: Vec<SessionEndpoint>,
-    },
+    Released { others: Vec<SessionEndpoint> },
     /// Sesión desconocida o peer no registrado.
     Unknown,
 }
@@ -341,7 +356,10 @@ mod tests {
     #[test]
     fn first_packet_registers() {
         let r = router();
-        assert!(matches!(r.route(1, ep("127.0.0.1:1000")), RouteDecision::Registered));
+        assert!(matches!(
+            r.route(1, ep("127.0.0.1:1000")),
+            RouteDecision::Registered
+        ));
         assert_eq!(r.active_sessions(), 1);
         assert_eq!(r.peer_count(1), 1);
     }
@@ -378,7 +396,10 @@ mod tests {
                 assert_eq!(targets.len(), 2);
                 let ports: Vec<u16> = targets
                     .iter()
-                    .map(|t| match t { SessionEndpoint::Udp(a) => a.port(), _ => 0 })
+                    .map(|t| match t {
+                        SessionEndpoint::Udp(a) => a.port(),
+                        _ => 0,
+                    })
                     .collect();
                 assert!(ports.contains(&2000));
                 assert!(ports.contains(&3000));
@@ -400,7 +421,10 @@ mod tests {
     #[test]
     fn zero_session_id_dropped() {
         let r = router();
-        assert!(matches!(r.route(0, ep("127.0.0.1:1000")), RouteDecision::Dropped));
+        assert!(matches!(
+            r.route(0, ep("127.0.0.1:1000")),
+            RouteDecision::Dropped
+        ));
     }
 
     #[test]
@@ -408,7 +432,10 @@ mod tests {
         let r = Router::new(2, 50, RelayMetrics::new());
         r.route(1, ep("127.0.0.1:1000"));
         r.route(2, ep("127.0.0.1:2000"));
-        assert!(matches!(r.route(3, ep("127.0.0.1:3000")), RouteDecision::Dropped));
+        assert!(matches!(
+            r.route(3, ep("127.0.0.1:3000")),
+            RouteDecision::Dropped
+        ));
     }
 
     #[test]
