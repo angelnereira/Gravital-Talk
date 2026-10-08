@@ -19,8 +19,11 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 
 pub mod config;
+#[cfg(feature = "grpc")]
+pub mod grpc;
 pub mod metrics;
 pub mod observability;
+pub mod rate_limit;
 pub mod rooms;
 pub mod router;
 pub mod udp;
@@ -28,4 +31,5 @@ pub mod ws;
 
 pub use config::RelayConfig;
 pub use metrics::RelayMetrics;
+pub use rate_limit::RateLimiter;
 pub use router::{Router, SessionEndpoint};

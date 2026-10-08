@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 
 import '../models/connection.dart';
 import '../models/session.dart';
+import 'audio_pump.dart';
 import 'native_bridge.dart';
 
 /// Contrato común de ambos motores (nativo real / demo).
@@ -29,6 +30,9 @@ abstract class SessionEngine {
   Future<void> pttRelease();
   Future<bool> peerPttActive();
 
+  /// Informa al pipeline de audio si PTT está activo (envío de micrófono).
+  Future<void> setAudioPtt(bool on);
+
   Future<SessionMetrics> metrics();
   Future<SessionState> state();
   Future<int> localPort();
@@ -47,6 +51,8 @@ class FfiSessionEngine implements SessionEngine {
 
   final NativeBridge _bridge;
   NativeSession? _session;
+  AudioPump? _pump;
+  AppSettings _settings = const AppSettings();
 
   static FfiSessionEngine? tryCreate() {
     if (kIsWeb) return null;
@@ -76,6 +82,8 @@ class FfiSessionEngine implements SessionEngine {
   @override
   Future<void> createSession(AppSettings settings,
       {int bindPort = 0}) async {
+    _settings = settings;
+    await _stopPump();
     _session?.destroy();
     _session = _bridge.createSession(
       sampleRate: settings.sampleRate,
@@ -89,6 +97,28 @@ class FfiSessionEngine implements SessionEngine {
     );
   }
 
+  Future<void> _startPump() async {
+    final session = _session;
+    if (session == null) return;
+    await _stopPump();
+    try {
+      _pump = await AudioPump.start(
+        handleAddress: session.address,
+        sampleRate: _settings.sampleRate,
+        channels: _settings.channels,
+        frameDurationMs: _settings.frameDurationMs,
+      );
+    } catch (_) {
+      _pump = null; // audio simulatorio no crítico para la señalización
+    }
+  }
+
+  Future<void> _stopPump() async {
+    final pump = _pump;
+    _pump = null;
+    await pump?.stop();
+  }
+
   @override
   Future<void> setSessionId(int id) async => _alive.setSessionId(id);
 
@@ -96,18 +126,21 @@ class FfiSessionEngine implements SessionEngine {
   Future<void> connect(String host, int port) async {
     final res = await _handshake(_alive.address, host, port, server: false);
     _throwOnError(res);
+    await _startPump();
   }
 
   @override
   Future<void> accept(String host, int port) async {
     final res = await _handshake(_alive.address, host, port, server: true);
     _throwOnError(res);
+    await _startPump();
   }
 
   @override
   Future<void> acceptAny() async {
     final res = await _acceptAnyIsolate(_alive.address);
     _throwOnError(res);
+    await _startPump();
   }
 
   void _throwOnError(({int status, String? error}) res) {
@@ -118,10 +151,19 @@ class FfiSessionEngine implements SessionEngine {
   }
 
   @override
-  Future<void> pttPress() async => _alive.pttPress();
+  Future<void> pttPress() async {
+    _alive.pttPress();
+    _pump?.setPtt(true);
+  }
 
   @override
-  Future<void> pttRelease() async => _alive.pttRelease();
+  Future<void> pttRelease() async {
+    _alive.pttRelease();
+    _pump?.setPtt(false);
+  }
+
+  @override
+  Future<void> setAudioPtt(bool on) async => _pump?.setPtt(on);
 
   @override
   Future<bool> peerPttActive() async => _alive.peerPttActive();
@@ -139,10 +181,11 @@ class FfiSessionEngine implements SessionEngine {
   Future<int> sessionId() async => _alive.sessionId();
 
   @override
-  double get micLevel => 0; // La captura real llega con el pipeline de audio.
+  double get micLevel => _pump?.micLevel ?? 0; // Nivel real del micrófono (RMS).
 
   @override
   Future<void> close() async {
+    await _stopPump();
     try {
       _alive.close();
     } on NativeException {
@@ -152,6 +195,7 @@ class FfiSessionEngine implements SessionEngine {
 
   @override
   void dispose() {
+    unawaited(_stopPump());
     _session?.destroy();
     _session = null;
   }
@@ -236,6 +280,9 @@ class DemoSessionEngine implements SessionEngine {
 
   @override
   Future<void> pttRelease() async => _ptt = false;
+
+  @override
+  Future<void> setAudioPtt(bool on) async => _ptt = on;
 
   @override
   Future<bool> peerPttActive() async {

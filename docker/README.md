@@ -80,6 +80,21 @@ Variables de entorno por servicio (ver `compose.yaml`):
 | `DURATION` | 25/10 | Segundos de transmisión headless |
 | `DELAY_MS`, `JITTER_MS`, `LOSS_PERCENT` | 30 / 5 / 1 | Simulación netem (perfil `perf`) |
 | `FUZZ_SECONDS` | `60` | Presupuesto por fuzz target |
+| `GS_RATE_LIMIT` | `0` | Paquetes/seg por IP (0 = ilimitado, anti-DoS) |
+| `CARGO_FEATURES` | — | Features de build (p. ej. `--features grpc`) |
+
+## gRPC (plano de control)
+
+```bash
+# Compilar el relay con el plano de control gRPC (tonic) y arrancarlo
+CARGO_FEATURES="--features grpc" docker compose build relay
+docker compose up -d relay
+# El relay expone ServerControl + PairingService en :50051
+```
+
+El contrato está en `proto/gravital/v1/` y la evaluación en
+`docs/grpc-evaluation.md`. Sin la feature, `--grpc-bind` no existe y el
+puerto 50051 queda cerrado.
 
 ## Consejos
 

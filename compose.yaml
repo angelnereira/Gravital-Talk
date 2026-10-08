@@ -20,13 +20,20 @@ services:
       context: .
       dockerfile: docker/Dockerfile
       target: relay
+      args:
+        # p. ej.: CARGO_FEATURES="--features grpc" docker compose build relay
+        CARGO_FEATURES: ${CARGO_FEATURES:-}
     image: gravital-talk/relay:local
     ports:
       - "9000:9000/udp"
       - "9090:9090/tcp"
       - "9100:9100/tcp"
+      # Plano de control gRPC (solo si se compila con CARGO_FEATURES=--features grpc)
+      - "50051:50051"
     environment:
       GS_LOG: ${GS_LOG:-info}
+      # Paquetes/segundo por IP (0 = ilimitado). Protección DoS.
+      GS_RATE_LIMIT: ${GS_RATE_LIMIT:-0}
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9100/healthz"]
       interval: 5s

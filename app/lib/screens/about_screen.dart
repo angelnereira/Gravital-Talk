@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../core/constants.dart';
 import '../services/session_controller.dart';
@@ -87,15 +88,17 @@ class AboutScreen extends StatelessWidget {
                   leading: const Icon(Icons.code),
                   title: const Text('Repositorio'),
                   subtitle: const Text('github.com/angelnereira/gravital-talk'),
-                  onTap: () => _snack(context,
-                      'https://github.com/angelnereira/gravital-talk'),
+                  onTap: () => _open(
+                      context, 'https://github.com/angelnereira/gravital-talk'),
                 ),
                 ListTile(
                   contentPadding: EdgeInsets.zero,
                   leading: const Icon(Icons.description_outlined),
                   title: const Text('Especificación del protocolo'),
                   subtitle: const Text('docs/protocol-spec.md'),
-                  onTap: () => _snack(context, 'docs/protocol-spec.md'),
+                  onTap: () => _open(
+                      context,
+                      'https://github.com/angelnereira/gravital-talk/blob/main/docs/protocol-spec.md'),
                 ),
                 ListTile(
                   contentPadding: EdgeInsets.zero,
@@ -149,6 +152,14 @@ class AboutScreen extends StatelessWidget {
         ),
       ],
     );
+  }
+
+  Future<void> _open(BuildContext context, String url) async {
+    final uri = Uri.parse(url);
+    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!ok && context.mounted) {
+      _snack(context, url);
+    }
   }
 
   void _snack(BuildContext context, String msg) {

@@ -35,6 +35,31 @@ hyper-util        = { version = "0.1", features = ["tokio"] }
 http-body-util    = "0.1"
 prometheus        = { version = "0.13", default-features = false }
 dashmap           = "6.1"
+# Plano de control gRPC (opcional; ver docs/grpc-evaluation.md)
+tonic            = { version = "0.12", optional = true }
+prost            = { version = "0.13", optional = true }
+prost-types      = { version = "0.13", optional = true }
+tokio-stream     = { version = "0.1", features = ["net"], optional = true }
+async-stream     = { version = "0.3", optional = true }
+
+[dev-dependencies]
+tonic = { version = "0.12" }
+
+[build-dependencies]
+tonic-build      = { version = "0.12", features = ["prost"], optional = true }
+protoc-bin-vendored = { version = "3", optional = true }
+
+[features]
+default = []
+grpc    = [
+    "dep:tonic",
+    "dep:prost",
+    "dep:prost-types",
+    "dep:tokio-stream",
+    "dep:async-stream",
+    "dep:tonic-build",
+    "dep:protoc-bin-vendored",
+]
 
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

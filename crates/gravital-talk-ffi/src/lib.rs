@@ -373,21 +373,54 @@ pub unsafe extern "C" fn gs_session_recv_audio(
     buf: *mut u8,
     len_inout: *mut usize,
 ) -> GsStatus {
+    unsafe { recv_audio_impl(handle, buf, len_inout, None) }
+}
+
+/// Igual que `gs_session_recv_audio` pero con timeout en milisegundos.
+///
+/// Devuelve `GS_ERR_TIMEOUT` si no llegó ningún frame en `timeout_ms`.
+/// Con `timeout_ms = 0` es no bloqueante (solo saca lo ya disponible).
+/// Pensada para loops de audio en isolates que deben poder parar.
+#[no_mangle]
+pub unsafe extern "C" fn gs_session_recv_audio_timeout(
+    handle: *mut GsSessionHandle,
+    buf: *mut u8,
+    len_inout: *mut usize,
+    timeout_ms: u32,
+) -> GsStatus {
+    unsafe { recv_audio_impl(handle, buf, len_inout, Some(timeout_ms)) }
+}
+
+unsafe fn recv_audio_impl(
+    handle: *mut GsSessionHandle,
+    buf: *mut u8,
+    len_inout: *mut usize,
+    timeout_ms: Option<u32>,
+) -> GsStatus {
     if handle.is_null() || buf.is_null() || len_inout.is_null() {
         return GsStatus::GS_ERR_NULL_POINTER;
     }
     let inner = unsafe { &*(handle as *mut SessionInner) };
     let cap = unsafe { *len_inout };
     let session = inner.session.clone();
-    let frame = match inner
-        .runtime
-        .block_on(async move { session.recv_audio().await })
-    {
-        Ok(f) => f,
-        Err(e) => {
+
+    let recv = async move {
+        match timeout_ms {
+            Some(ms) => {
+                let dur = std::time::Duration::from_millis(u64::from(ms));
+                tokio::time::timeout(dur, session.recv_audio()).await
+            }
+            None => Ok(session.recv_audio().await),
+        }
+    };
+
+    let frame = match inner.runtime.block_on(recv) {
+        Ok(Ok(f)) => f,
+        Ok(Err(e)) => {
             set_last_error(format!("recv_audio: {e}"));
             return GsStatus::GS_ERR_IO;
         }
+        Err(_) => return GsStatus::GS_ERR_TIMEOUT,
     };
     let n = frame.payload.len();
     if n > cap {

@@ -82,6 +82,19 @@ impl RouteEntry {
     }
 }
 
+/// Evento publicado por el router (para `WatchRoom` / observabilidad).
+#[derive(Debug, Clone)]
+pub enum RoomEventMsg {
+    /// Un peer nuevo se registró en la sesión.
+    PeerJoined { session_id: u32 },
+    /// Un peer se fue (evicción de sesión inactiva).
+    PeerLeft { session_id: u32 },
+    /// El floor fue concedido (alguien empieza a transmitir).
+    FloorGranted { session_id: u32 },
+    /// El floor fue liberado.
+    FloorReleased { session_id: u32 },
+}
+
 #[derive(Debug)]
 pub struct Router {
     routes: DashMap<u32, RouteEntry>,
@@ -89,17 +102,31 @@ pub struct Router {
     max_sessions: usize,
     max_peers_per_session: usize,
     metrics: RelayMetrics,
+    /// Canal de eventos para suscriptores (WatchRoom gRPC, dashboards).
+    event_tx: tokio::sync::broadcast::Sender<RoomEventMsg>,
 }
 
 impl Router {
     pub fn new(max_sessions: usize, max_peers_per_session: usize, metrics: RelayMetrics) -> Self {
+        let (event_tx, _) = tokio::sync::broadcast::channel(256);
         Self {
             routes: DashMap::new(),
             rooms: DashMap::new(),
             max_sessions,
             max_peers_per_session,
             metrics,
+            event_tx,
         }
+    }
+
+    /// Suscriptor al stream de eventos de sesión.
+    pub fn subscribe_events(&self) -> tokio::sync::broadcast::Receiver<RoomEventMsg> {
+        self.event_tx.subscribe()
+    }
+
+    /// Publica un evento (no-op si no hay suscriptores).
+    fn publish(&self, event: RoomEventMsg) {
+        let _ = self.event_tx.send(event);
     }
 
     pub const fn metrics(&self) -> &RelayMetrics {
@@ -152,6 +179,7 @@ impl Router {
             // Registrar el peer y devolver los peers ya existentes para broadcast.
             let existing: Vec<SessionEndpoint> = entry.peers.to_vec();
             entry.peers.push(from);
+            self.publish(RoomEventMsg::PeerJoined { session_id });
             return if existing.is_empty() {
                 RouteDecision::Registered
             } else {
@@ -171,6 +199,7 @@ impl Router {
         entry.peers.push(from);
         self.routes.insert(session_id, entry);
         self.metrics.active_sessions.set(self.routes.len() as i64);
+        self.publish(RoomEventMsg::PeerJoined { session_id });
         RouteDecision::Registered
     }
 
@@ -244,6 +273,7 @@ impl Router {
 
         entry.floor_holder = Some(from);
         entry.floor_granted_at = Some(Instant::now());
+        self.publish(RoomEventMsg::FloorGranted { session_id });
 
         let others: Vec<SessionEndpoint> = entry
             .peers
@@ -266,6 +296,7 @@ impl Router {
         }
         entry.floor_holder = None;
         entry.floor_granted_at = None;
+        self.publish(RoomEventMsg::FloorReleased { session_id });
 
         let others: Vec<SessionEndpoint> = entry
             .peers
@@ -312,6 +343,29 @@ impl Router {
                 (r.key().clone(), sid, peers)
             })
             .collect()
+    }
+
+    /// Código de sala al que pertenece un `session_id` (si existe).
+    pub fn room_code_for(&self, session_id: u32) -> Option<String> {
+        self.rooms
+            .iter()
+            .find(|r| *r.value() == session_id)
+            .map(|r| r.key().clone())
+    }
+
+    /// Límite de sesiones simultáneas configurado.
+    pub const fn max_sessions(&self) -> usize {
+        self.max_sessions
+    }
+
+    /// Límite de peers por sesión configurado.
+    pub const fn max_peers_per_session(&self) -> usize {
+        self.max_peers_per_session
+    }
+
+    /// Total de peers registrados en todas las sesiones.
+    pub fn total_peers(&self) -> usize {
+        self.routes.iter().map(|r| r.peers.len()).sum()
     }
 }
 

@@ -5,8 +5,6 @@ package gravital.v1;
 option go_package = "gravital.dev/gravital/v1;gravitalv1";
 option java_package = "dev.gravitaltalk.v1";
 
-import "google/protobuf/empty.proto";
-
 // ─────────────────────────────────────────────────────────────────────────
 // Señalización P2P y pairing — candidato gRPC (o JSON sobre WS).
 //
@@ -56,9 +54,10 @@ message PairingResult {
 // ─────────────────────────────────────────────────────────────────────────
 
 service PairingService {
-  // El host publica su oferta (p.ej. en el relay para anclaje NAT).
-  rpc PublishOffer(PairingOffer) returns (google.protobuf.Empty);
+  /// El host publica su oferta (p.ej. en el relay para anclaje NAT).
+  /// Devuelve la oferta canónica aceptada (o error en caso de rechazo).
+  rpc PublishOffer(PairingOffer) returns (PairingOffer);
 
-  // El peer recupera la oferta por URI o ID y confirma.
+  /// El peer recupera la oferta por URI o ID y confirma.
   rpc ResolveOffer(PairingOffer) returns (PairingOffer);
 }

@@ -111,17 +111,7 @@ class SessionScreen extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 16),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: LinearProgressIndicator(
-                    value: c.micLevel,
-                    minHeight: 8,
-                    backgroundColor: scheme.surfaceContainerHighest,
-                    color: c.pttActive
-                        ? GravitalColors.pttActive
-                        : scheme.primary,
-                  ),
-                ),
+                LevelMeter(level: c.micLevel, transmitting: c.pttActive),
                 const SizedBox(height: 6),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,

@@ -46,6 +46,7 @@ use crate::congestion::CongestionController;
 use crate::error::TransportError;
 use crate::fec::{FecDecoder, FecEncoder, FecParity};
 use crate::jitter_buffer::{Frame, JitterBuffer};
+use crate::replay::ReplayWindow;
 use crate::traits::Transport;
 
 /// Rol de la sesión en el handshake.
@@ -129,6 +130,8 @@ pub struct Session {
     /// `session_id` fijado de antemano para el handshake (modo relay/sala).
     /// `0` = el servidor elige uno aleatorio (P2P directo).
     preset_session_id: AtomicU32,
+    /// Ventana anti-replay de secuencias de paquete (activa con claves).
+    replay: Mutex<ReplayWindow>,
     /// Señal de cancelación: se activa en `close()` para interrumpir loops bloqueantes.
     closed: AtomicBool,
 }
@@ -169,6 +172,7 @@ impl Session {
             peer_ptt_active: AtomicBool::new(false),
             local_ssrc: AtomicU32::new(0),
             preset_session_id: AtomicU32::new(0),
+            replay: Mutex::new(ReplayWindow::new()),
             closed: AtomicBool::new(false),
         }
     }
@@ -1168,6 +1172,18 @@ impl Session {
         view: PacketView<'_>,
         raw_buf: &[u8],
     ) -> Result<(), TransportError> {
+        // Anti-replay: una vez establecidas las claves, cada secuencia sólo se
+        // acepta una vez (ventana deslizante). Protege contra reinyección de
+        // datagramas capturados y paquetes duplicados.
+        if self.decrypt_key.lock().await.is_some() {
+            let seq = view.header().sequence;
+            if !self.replay.lock().await.check_and_mark(seq) {
+                self.metrics.counters.record_replay_drop();
+                tracing::trace!(seq, "dropping replayed/stale packet");
+                return Ok(());
+            }
+        }
+
         let mt = view.header().msg_type;
         match MessageType::from_code(mt) {
             Ok(MessageType::AudioFrame) => {

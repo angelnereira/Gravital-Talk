@@ -93,6 +93,10 @@ typedef _RecvAudioC = Int32 Function(
     Pointer<Void>, Pointer<Uint8>, Pointer<UintPtr>);
 typedef _RecvAudioD = int Function(
     Pointer<Void>, Pointer<Uint8>, Pointer<UintPtr>);
+typedef _RecvAudioTimeoutC = Int32 Function(
+    Pointer<Void>, Pointer<Uint8>, Pointer<UintPtr>, Uint32);
+typedef _RecvAudioTimeoutD = int Function(
+    Pointer<Void>, Pointer<Uint8>, Pointer<UintPtr>, int);
 typedef _HandleC = Int32 Function(Pointer<Void>);
 typedef _HandleD = int Function(Pointer<Void>);
 typedef _StateC = Int32 Function(Pointer<Void>, Pointer<Uint8>);
@@ -136,6 +140,8 @@ class NativeBridge {
             .lookupFunction<_SendAudioC, _SendAudioD>('gs_session_send_audio'),
         _recvAudio = lib
             .lookupFunction<_RecvAudioC, _RecvAudioD>('gs_session_recv_audio'),
+        _recvAudioTimeout = lib.lookupFunction<_RecvAudioTimeoutC, _RecvAudioTimeoutD>(
+            'gs_session_recv_audio_timeout'),
         _sessionClose = lib
             .lookupFunction<_HandleC, _HandleD>('gs_session_close'),
         _sessionState = lib
@@ -172,6 +178,7 @@ class NativeBridge {
   final _AcceptAnyD _sessionAcceptAny;
   final _SendAudioD _sendAudio;
   final _RecvAudioD _recvAudio;
+  final _RecvAudioTimeoutD _recvAudioTimeout;
   final _HandleD _sessionClose;
   final _StateD _sessionState;
   final _SessionIdD _sessionId;
@@ -317,6 +324,13 @@ class NativeBridge {
 class NativeSession {
   NativeSession._(this._bridge, this._handle);
 
+  /// Reconstruye la vista de una sesión desde su dirección de handle.
+  ///
+  /// Permite que otro isolate (p. ej. el de audio) use la misma sesión:
+  /// los `Pointer` no cruzan isolates, pero la dirección numérica sí.
+  factory NativeSession.at(NativeBridge bridge, int address) =>
+      NativeSession._(bridge, Pointer<Void>.fromAddress(address));
+
   final NativeBridge _bridge;
   final Pointer<Void> _handle;
 
@@ -386,6 +400,29 @@ class NativeSession {
       len.value = maxBytes;
       final st = _bridge._recvAudio(_handle, buf, len);
       if (st != GsStatus.ok) return null;
+      return Uint8List.fromList(buf.asTypedList(len.value));
+    } finally {
+      calloc.free(buf);
+      calloc.free(len);
+    }
+  }
+
+  /// Igual que [recvAudio] pero con timeout (ms).
+  ///
+  /// Devuelve `null` si no hay frame en el plazo (`GS_ERR_TIMEOUT`); lanza
+  /// [NativeException] para otros errores. Con `timeoutMs = 0` no bloquea.
+  Uint8List? recvAudioTimeout({int maxBytes = 8192, int timeoutMs = 250}) {
+    _ensureAlive();
+    final buf = calloc<Uint8>(maxBytes);
+    final len = calloc<UintPtr>();
+    try {
+      len.value = maxBytes;
+      final st = _bridge._recvAudioTimeout(_handle, buf, len, timeoutMs);
+      if (st == GsStatus.timeout) return null;
+      if (st != GsStatus.ok) {
+        throw NativeException(
+            st, _bridge.lastError() ?? GsStatus.describe(st));
+      }
       return Uint8List.fromList(buf.asTypedList(len.value));
     } finally {
       calloc.free(buf);

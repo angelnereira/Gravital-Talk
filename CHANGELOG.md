@@ -2,11 +2,38 @@
 
 Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y el proyecto usa [SemVer](https://semver.org/lang/es/).
 
-## [Unreleased] — 0.3.0-alpha.1
+## [0.3.0-alpha.1] — 2026-10-08
 
 Modo servidor (sala) real + Rust 1.99 + app Flutter + contratos + Docker.
 
 ### Added
+
+**Anti-replay (seguridad de paquetes)**
+- `crates/gravital-talk-transport/src/replay.rs`: ventana deslizante RFC 6479-style (4096 secuencias, wrap-around u32, primer paquete arbitrario).
+- `Session::dispatch_packet` descarta duplicados y paquetes fuera de ventana una vez establecidas las claves AEAD; contador `replayed_dropped` en métricas.
+- Tests: 7 unitarios de la ventana + integración `replay_session` (reinyección byte a byte del datagrama → descartada sin error AEAD).
+
+**Rate limiting del relay (anti-DoS)**
+- `crates/gravital-talk-relay/src/rate_limit.rs`: limitador fixed-window (1 s) por IP, con poda por umbral.
+- Aplicado en los loops UDP y WebSocket; métrica `dropped{reason="rate_limited"}`.
+- Config: `rate_limit_per_sec` (TOML) y `--rate-limit`/`GS_RATE_LIMIT` (CLI/env). `0` = ilimitado (default).
+
+**Plano de control gRPC (feature `grpc`)**
+- `crates/gravital-talk-relay/src/grpc.rs`: `ServerControl` (Info, Health, CreateRoom, GetRoom, ListRooms, DeleteRoom, WatchRoom por stream) + `PairingService`.
+- Eventos de sala en `Router` (PeerJoined/Left, FloorGranted/Released) vía broadcast; `WatchRoom` filtrado por sesión.
+- `build.rs` con `tonic-build` + `protoc-bin-vendored` (sin protoc del sistema); server en `--grpc-bind`/50051.
+- Test `grpc_control`: cliente tonic real contra el servidor en proceso.
+- Docker: `--build-arg CARGO_FEATURES="--features grpc"`.
+
+**FFI**
+- `gs_session_recv_audio_timeout()`: recepción con timeout (no bloqueante con 0 ms) para loops de audio parables.
+
+**App Flutter: audio real y UI moderna**
+- `AudioPump`: captura PCM16 con `record`, playback con `flutter_sound` (PCM16 stream), recv con timeout en isolate, VU meter por RMS real, fallback senoidal sin hardware.
+- Componentes modernos (shortlist FlutterGems/FlutterLibrary): `flutter_animate`, `animate_do` (pulso PTT), `toastification`, `settings_ui` (pantalla de ajustes), `percent_indicator` (level meter), `mobile_scanner` (QR de sala), `introduction_screen` (onboarding primer arranque), `url_launcher` (enlaces).
+
+**Toolchain**
+- Versión del workspace alineada a `0.3.0-alpha.1` (Cargo.toml, SDKs, Helm); MSRV `1.99` + `rust-toolchain.toml`; Dockerfile `rust:1.99-slim`.
 
 **Modo servidor/sala — handshake enrutado por relay**
 - `Session::set_preset_session_id(id)`: permite fijar el `session_id` antes del handshake. Sin esto, `ClientHello` viaja con id 0 y el relay lo descartaba, haciendo imposible el modo sala (terminal central).
@@ -325,5 +352,5 @@ Release inicial alpha. Establece la base arquitectónica del protocolo y una imp
 - El audio I/O de hardware (mic/speaker) no se incluye; se suministran señales de prueba (seno) y lectura/escritura de WAV con `hound`.
 - El protocolo es `draft` — pueden introducirse cambios incompatibles hasta `0.1.0` final.
 
-[Unreleased]: https://github.com/angelnereira/gravital-talk/compare/v0.1.0-alpha.1...HEAD
+[0.3.0-alpha.1]: https://github.com/angelnereira/gravital-talk/releases/tag/v0.3.0-alpha.1
 [0.1.0-alpha.1]: https://github.com/angelnereira/gravital-talk/releases/tag/v0.1.0-alpha.1

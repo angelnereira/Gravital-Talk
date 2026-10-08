@@ -7,7 +7,8 @@ use std::time::Duration;
 use anyhow::Result;
 use clap::Parser;
 use gravital_talk_relay::{
-    config::RelayConfig, metrics::RelayMetrics, observability, router::Router, udp, ws,
+    config::RelayConfig, metrics::RelayMetrics, observability, rate_limit::RateLimiter,
+    router::Router, udp, ws,
 };
 use tokio::net::{TcpListener, UdpSocket};
 use tracing_subscriber::EnvFilter;
@@ -30,6 +31,14 @@ struct Args {
     /// Nivel de log.
     #[arg(long, env = "GS_LOG", default_value = "info")]
     log: String,
+
+    /// Paquetes por segundo permitidos por IP (0 = ilimitado).
+    #[arg(long, env = "GS_RATE_LIMIT", default_value_t = 0)]
+    rate_limit: u64,
+
+    /// Habilitar plano de control gRPC (feature `grpc`). Ej. 0.0.0.0:50051.
+    #[arg(long)]
+    grpc_bind: Option<std::net::SocketAddr>,
 }
 
 #[tokio::main]
@@ -51,6 +60,12 @@ async fn main() -> Result<()> {
     if let Some(a) = args.observability_bind {
         cfg.observability_bind = a;
     }
+    if args.rate_limit > 0 {
+        cfg.rate_limit_per_sec = args.rate_limit;
+    }
+    if let Some(bind) = args.grpc_bind {
+        cfg.grpc_bind = Some(bind);
+    }
 
     tracing::info!(?cfg, "starting gs-relay");
 
@@ -60,6 +75,8 @@ async fn main() -> Result<()> {
         cfg.max_peers_per_session,
         metrics,
     ));
+    let rate_limit =
+        (cfg.rate_limit_per_sec > 0).then(|| Arc::new(RateLimiter::new(cfg.rate_limit_per_sec)));
 
     let udp_socket = Arc::new(UdpSocket::bind(cfg.udp_bind).await?);
     let ws_listener = TcpListener::bind(cfg.ws_bind).await?;
@@ -79,9 +96,30 @@ async fn main() -> Result<()> {
         }
     });
 
-    let udp_task = tokio::spawn(udp::run(udp_socket.clone(), router.clone()));
-    let ws_task = tokio::spawn(ws::run(ws_listener, udp_socket.clone(), router.clone()));
+    let udp_task = tokio::spawn(udp::run(
+        udp_socket.clone(),
+        router.clone(),
+        rate_limit.clone(),
+    ));
+    let ws_task = tokio::spawn(ws::run(
+        ws_listener,
+        udp_socket.clone(),
+        router.clone(),
+        rate_limit,
+    ));
     let obs_task = tokio::spawn(observability::run(obs_listener, router.clone()));
+
+    // Plano de control gRPC (feature `grpc`).
+    #[cfg(feature = "grpc")]
+    if let Some(bind) = cfg.grpc_bind {
+        let router_grpc = router.clone();
+        tokio::spawn(async move {
+            if let Err(e) = gravital_talk_relay::grpc::serve(bind, router_grpc).await {
+                tracing::error!(?e, "gRPC control plane error");
+            }
+        });
+        tracing::info!(?bind, "gRPC control plane listening");
+    }
 
     // Esperar Ctrl-C o que algún task termine con error.
     tokio::select! {

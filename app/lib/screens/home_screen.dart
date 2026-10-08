@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
 
 import '../models/connection.dart';
@@ -61,7 +62,10 @@ class _HomeScreenState extends State<HomeScreen> {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
         children: [
-          _Hero(controller: c),
+          _Hero(controller: c)
+              .animate()
+              .fadeIn(duration: 350.ms)
+              .slideY(begin: 0.08, end: 0),
           const SizedBox(height: 16),
           if (c.isLive) ...[
             FilledButton.icon(
@@ -81,7 +85,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 'Terminal central: crea o únete a una sala vía relay con código',
             onTap: () => Navigator.push(context,
                 MaterialPageRoute(builder: (_) => const ServerSetupScreen())),
-          ),
+          )
+              .animate(delay: 120.ms)
+              .fadeIn(duration: 300.ms)
+              .slideX(begin: -0.05, end: 0),
           const SizedBox(height: 10),
           ModeCard(
             icon: Icons.device_hub_outlined,
@@ -90,7 +97,10 @@ class _HomeScreenState extends State<HomeScreen> {
             subtitle: 'Conexión directa entre dos dispositivos, sin relay',
             onTap: () => Navigator.push(context,
                 MaterialPageRoute(builder: (_) => const P2pSetupScreen())),
-          ),
+          )
+              .animate(delay: 220.ms)
+              .fadeIn(duration: 300.ms)
+              .slideX(begin: -0.05, end: 0),
           const SizedBox(height: 16),
           SectionCard(
             title: 'Última conexión',

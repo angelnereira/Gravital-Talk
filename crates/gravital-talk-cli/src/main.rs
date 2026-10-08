@@ -767,8 +767,22 @@ async fn cmd_relay(
         }
     });
 
-    let udp_task = tokio::spawn(udp::run(udp_socket.clone(), router.clone()));
-    let ws_task = tokio::spawn(ws::run(ws_listener, udp_socket.clone(), router.clone()));
+    let gs_rate_limit = (cfg.rate_limit_per_sec > 0).then(|| {
+        std::sync::Arc::new(gravital_talk_relay::RateLimiter::new(
+            cfg.rate_limit_per_sec,
+        ))
+    });
+    let udp_task = tokio::spawn(udp::run(
+        udp_socket.clone(),
+        router.clone(),
+        gs_rate_limit.clone(),
+    ));
+    let ws_task = tokio::spawn(ws::run(
+        ws_listener,
+        udp_socket.clone(),
+        router.clone(),
+        gs_rate_limit,
+    ));
     let obs_task = tokio::spawn(observability::run(obs_listener, router.clone()));
 
     tokio::select! {

@@ -1,4 +1,6 @@
+import 'package:animate_do/animate_do.dart';
 import 'package:flutter/material.dart';
+import 'package:percent_indicator/linear_percent_indicator.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../models/session.dart';
@@ -376,7 +378,7 @@ class EventLogView extends StatelessWidget {
   }
 }
 
-/// Botón PTT grande con estados.
+/// Botón PTT grande con estados (pulso animado al transmitir).
 class PttButton extends StatelessWidget {
   const PttButton({
     super.key,
@@ -397,7 +399,7 @@ class PttButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final base = pressed ? GravitalColors.pttActive : scheme.primary;
-    return GestureDetector(
+    final button = GestureDetector(
       onTapDown: enabled ? (_) => onDown() : null,
       onTapUp: enabled ? (_) => onUp() : null,
       onTapCancel: enabled ? onUp : null,
@@ -442,6 +444,39 @@ class PttButton extends StatelessWidget {
           ],
         ),
       ),
+    );
+
+    // Pulso continuo mientras se transmite (animate_do).
+    return Pulse(
+      animate: pressed,
+      infinite: true,
+      duration: const Duration(milliseconds: 900),
+      from: 1.0,
+      to: 1.04,
+      child: button,
+    );
+  }
+}
+
+/// Barra de nivel de micrófono animada (percent_indicator).
+class LevelMeter extends StatelessWidget {
+  const LevelMeter({super.key, required this.level, this.transmitting = false});
+
+  final double level;
+  final bool transmitting;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return LinearPercentIndicator(
+      percent: level.clamp(0.0, 1.0),
+      animation: true,
+      animationDuration: 120,
+      lineHeight: 8,
+      barRadius: const Radius.circular(8),
+      backgroundColor: scheme.surfaceContainerHighest,
+      progressColor:
+          transmitting ? GravitalColors.pttActive : scheme.primary,
     );
   }
 }

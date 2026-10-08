@@ -163,6 +163,18 @@ GsStatus gs_session_send_audio(GsSessionHandle *handle, const uint8_t *data, uin
 GsStatus gs_session_recv_audio(GsSessionHandle *handle, uint8_t *buf, uintptr_t *len_inout);
 
 /*
+ Igual que `gs_session_recv_audio` pero con timeout en milisegundos.
+
+ Devuelve `GS_ERR_TIMEOUT` si no llegó ningún frame en `timeout_ms`.
+ Con `timeout_ms = 0` es no bloqueante (solo saca lo ya disponible).
+ Pensada para loops de audio en isolates que deben poder parar.
+ */
+GsStatus gs_session_recv_audio_timeout(GsSessionHandle *handle,
+                                       uint8_t *buf,
+                                       uintptr_t *len_inout,
+                                       uint32_t timeout_ms);
+
+/*
  Cierra la sesión enviando `CLOSE`. El handle queda en estado `Closed`.
  */
 GsStatus gs_session_close(GsSessionHandle *handle);

@@ -134,8 +134,11 @@ El transporte primario es UDP con DSCP EF. El handshake establece claves con **X
 | `gravital-talk-relay` | ✅ funcional | UDP + WebSocket, /metrics Prometheus, /healthz |
 | `gravital-talk-io` | ✅ funcional | cpal (ALSA/CoreAudio/WASAPI/AAudio) |
 | `gravital-talk-cli` | ✅ funcional | send, receive, ptt (interactivo y headless), relay, devices, bench, info, doctor |
-| App Flutter multiplataforma | ✅ scaffold | `app/`: inicio, servidor (sala+QR), P2P, sesión PTT, ajustes; motor FFI real + demo |
+| App Flutter multiplataforma | ✅ funcional | `app/`: home, servidor (sala+QR escáner), P2P, sesión PTT, ajustes (settings_ui); audio real (record+PCM stream), motor FFI + demo |
 | App Android | ✅ funcional | emparejamiento QR, PTT, wake lock, reconexión automática |
+| Anti-replay | ✅ funcional | Ventana deslizante por sesión (RFC 6479-style) + test de reinyección de datagramas |
+| Rate limiting (relay) | ✅ funcional | Fixed-window por IP en UDP y WebSocket (`--rate-limit`/`GS_RATE_LIMIT`) |
+| gRPC (plano de control) | ✅ servidor | Feature `grpc`: `ServerControl` + `PairingService` + `WatchRoom` stream; test con cliente tonic |
 | STUN / NAT traversal | ✅ funcional | RFC 5389, stun.l.google.com, fallback P2P → relay |
 | PLC (Packet Loss Concealment) | ✅ funcional | CodecSession: hasta 4 frames de silencio por hueco |
 | Auto-reconexión CLI | ✅ funcional | gs ptt: backoff 2 s→30 s, reconexión por cambio de red |
@@ -674,7 +677,7 @@ docker run -p 9000:9000/udp -p 9090:9090 -p 9100:9100 \
 
 # Kubernetes
 helm install gravital-talk-relay ./infra/helm/gravital-talk-relay \
-  --set image.tag=0.1.0-alpha.1
+  --set image.tag=0.3.0-alpha.1
 ```
 
 ---
@@ -687,8 +690,8 @@ helm install gravital-talk-relay ./infra/helm/gravital-talk-relay \
 | **0.2.0-alpha.1** | ✅ | Codec Opus, audio I/O cpal, CLI con `--device` |
 | **0.2.0-alpha.2** | ✅ | Negociación codec, resampler, relay productivo, Terraform/Helm |
 | **0.2.0-alpha.3** | ✅ | **App Android** (PairingActivity, QR, CameraX), **STUN** RFC 5389, **PLC**, auto-reconexión CLI, tonos PTT, CI auto-build `outputs/` |
-| **0.3.0-alpha.1** | 🔄 en curso | **Modo sala/servidor real** (handshake enrutado, CLI y FFI), **app Flutter** multiplataforma, **contratos gRPC** (`proto/`), **Docker** (e2e multi-contenedor, bench, perf con netem, fuzz) |
-| **0.3** | 🔲 | Noise Protocol (forward secrecy), rate limiting, relay cluster Redis |
+| **0.3.0-alpha.1** | 🔄 en curso | **Modo sala/servidor real**, **anti-replay**, **rate limiting**, **gRPC (servidor)**, **app Flutter** con audio real, **contratos** (`proto/`), **Docker** (e2e, bench, perf netem, fuzz) |
+| **0.3** | 🔲 | Noise Protocol (forward secrecy), auth de sala, TLS/WSS, relay cluster Redis |
 | **0.4** | 🔲 | SDKs Swift + Node.js, publicación crates.io / PyPI / npm |
 | **1.0** | 🔲 | Protocolo estable, auditoría de seguridad, SemVer |
 

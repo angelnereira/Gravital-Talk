@@ -9,6 +9,7 @@ pub struct Counters {
     bytes_sent: AtomicU64,
     bytes_received: AtomicU64,
     integrity_errors: AtomicU64,
+    replayed_dropped: AtomicU64,
 }
 
 impl Counters {
@@ -20,6 +21,7 @@ impl Counters {
             bytes_sent: AtomicU64::new(0),
             bytes_received: AtomicU64::new(0),
             integrity_errors: AtomicU64::new(0),
+            replayed_dropped: AtomicU64::new(0),
         }
     }
 
@@ -38,6 +40,12 @@ impl Counters {
     #[inline]
     pub fn record_integrity_error(&self) {
         self.integrity_errors.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Paquete descartado por la ventana anti-replay.
+    #[inline]
+    pub fn record_replay_drop(&self) {
+        self.replayed_dropped.fetch_add(1, Ordering::Relaxed);
     }
 
     #[inline]
@@ -68,6 +76,12 @@ impl Counters {
     #[must_use]
     pub fn integrity_errors(&self) -> u64 {
         self.integrity_errors.load(Ordering::Relaxed)
+    }
+
+    #[inline]
+    #[must_use]
+    pub fn replayed_dropped(&self) -> u64 {
+        self.replayed_dropped.load(Ordering::Relaxed)
     }
 }
 

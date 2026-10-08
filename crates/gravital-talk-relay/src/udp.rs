@@ -13,9 +13,14 @@ use gravital_talk_core::message::MessageType;
 use gravital_talk_core::packet::{PacketBuilder, PacketView};
 use tokio::net::UdpSocket;
 
+use crate::rate_limit::RateLimiter;
 use crate::router::{FloorDecision, RouteDecision, Router, SessionEndpoint};
 
-pub async fn run(socket: Arc<UdpSocket>, router: Arc<Router>) -> anyhow::Result<()> {
+pub async fn run(
+    socket: Arc<UdpSocket>,
+    router: Arc<Router>,
+    rate_limit: Option<Arc<RateLimiter>>,
+) -> anyhow::Result<()> {
     let mut buf = vec![0u8; 1500];
     let local = socket.local_addr()?;
     tracing::info!(?local, "UDP relay listening");
@@ -26,6 +31,18 @@ pub async fn run(socket: Arc<UdpSocket>, router: Arc<Router>) -> anyhow::Result<
 
         router.metrics().packets_in.inc();
         router.metrics().bytes_in.inc_by(n as u64);
+
+        // DoS: presupuesto de paquetes por IP.
+        if let Some(rl) = &rate_limit {
+            if !rl.allow(from.ip()) {
+                router
+                    .metrics()
+                    .dropped
+                    .with_label_values(&["rate_limited"])
+                    .inc();
+                continue;
+            }
+        }
 
         let view = match PacketView::decode(data) {
             Ok(v) => v,

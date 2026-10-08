@@ -25,6 +25,17 @@ pub struct RelayConfig {
     /// Máximo de peers por sesión/grupo. Default: 50.
     #[serde(default = "default_max_peers")]
     pub max_peers_per_session: usize,
+    /// Límite de paquetes por segundo y por IP (0 = ilimitado). Protege
+    /// contra inundación (DoS) en UDP y WebSocket.
+    #[serde(default = "default_rate_limit")]
+    pub rate_limit_per_sec: u64,
+    /// Bind del plano de control gRPC (feature `grpc`). `None` = desactivado.
+    #[serde(default)]
+    pub grpc_bind: Option<SocketAddr>,
+}
+
+const fn default_rate_limit() -> u64 {
+    0 // off por defecto; se activa explícitamente en producción
 }
 
 fn default_udp() -> SocketAddr {
@@ -55,6 +66,8 @@ impl Default for RelayConfig {
             session_ttl_secs: default_ttl(),
             max_sessions: default_max_sessions(),
             max_peers_per_session: default_max_peers(),
+            rate_limit_per_sec: default_rate_limit(),
+            grpc_bind: None,
         }
     }
 }

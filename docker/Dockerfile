@@ -14,6 +14,10 @@
 # ── Stage 1: compilación ─────────────────────────────────────────────
 FROM rust:1.99-slim-bookworm AS builder
 
+# Features opcionales de cargo (p. ej. `--features grpc` para el plano de
+# control gRPC): docker build --build-arg CARGO_FEATURES="--features grpc" .
+ARG CARGO_FEATURES=""
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
         pkg-config libopus-dev libasound2-dev \
     && rm -rf /var/lib/apt/lists/*
@@ -22,11 +26,12 @@ WORKDIR /build
 
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+COPY proto ./proto
 
 # Cache montado: registros y target sobreviven entre builds.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/target \
-    cargo build --release \
+    cargo build --release ${CARGO_FEATURES} \
         -p gravital-talk-cli      --bin gs \
         -p gravital-talk-relay    --bin gs-relay \
     && mkdir -p /out \

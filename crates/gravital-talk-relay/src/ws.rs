@@ -9,12 +9,14 @@ use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 
+use crate::rate_limit::RateLimiter;
 use crate::router::{RouteDecision, Router, SessionEndpoint};
 
 pub async fn run(
     listener: TcpListener,
     udp_socket: Arc<UdpSocket>,
     router: Arc<Router>,
+    rate_limit: Option<Arc<RateLimiter>>,
 ) -> anyhow::Result<()> {
     let local = listener.local_addr()?;
     tracing::info!(?local, "WebSocket relay listening");
@@ -23,8 +25,11 @@ pub async fn run(
         let (stream, peer_addr) = listener.accept().await?;
         let router = router.clone();
         let udp_socket = udp_socket.clone();
+        let rate_limit = rate_limit.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(stream, peer_addr, udp_socket, router).await {
+            if let Err(e) =
+                handle_connection(stream, peer_addr, udp_socket, router, rate_limit).await
+            {
                 tracing::warn!(?peer_addr, ?e, "ws connection error");
             }
         });
@@ -36,6 +41,7 @@ async fn handle_connection(
     peer_addr: std::net::SocketAddr,
     udp_socket: Arc<UdpSocket>,
     router: Arc<Router>,
+    rate_limit: Option<Arc<RateLimiter>>,
 ) -> anyhow::Result<()> {
     let ws = tokio_tungstenite::accept_async(stream).await?;
     router.metrics().ws_connections.inc();
@@ -56,6 +62,18 @@ async fn handle_connection(
     while let Some(msg) = ws_stream.next().await {
         match msg? {
             Message::Binary(data) => {
+                // DoS: presupuesto de paquetes por IP.
+                if let Some(rl) = &rate_limit {
+                    if !rl.allow(peer_addr.ip()) {
+                        router
+                            .metrics()
+                            .dropped
+                            .with_label_values(&["rate_limited"])
+                            .inc();
+                        continue;
+                    }
+                }
+
                 router.metrics().packets_in.inc();
                 router.metrics().bytes_in.inc_by(data.len() as u64);
                 let bytes = Bytes::from(data.to_vec());

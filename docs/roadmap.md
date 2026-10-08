@@ -30,11 +30,13 @@ se rompen).
 - [x] `app/` (android, ios, linux, macos, windows, web).
 - [x] Screens: inicio, configuración servidor (crear/unirse sala + QR),
       configuración P2P (host/join), sesión en vivo (PTT + métricas),
-      ajustes (audio/códec/tema/diagnóstico), acerca de.
+      ajustes (settings_ui) y acerca de.
 - [x] Motor FFI real (`dart:ffi` → `libgravital_talk_ffi.so`) con fallback
-      demo (UI funcional sin librería nativa); handshake bloqueante en isolate.
-- [ ] Audio pipeline real (mic → PCM → `gs_session_send_audio`) — plugin
-      `record` (PCM16) + playback; hoy el VU meter es demo.
+      demo; handshakes en isolate.
+- [x] **Audio real**: `AudioPump` (record PCM16 → FFI → flutter_sound),
+      recv con timeout, VU por RMS, fallback senoidal sin hardware.
+- [x] UI moderna: flutter_animate, animate_do, toastification,
+      percent_indicator, mobile_scanner (QR), introduction_screen.
 - [ ] Empaquetado nativo por plataforma (cargo-ndk → jniLibs, podspec iOS).
 
 ### Contratos (gRPC candidato) ✅ hecho
@@ -51,18 +53,23 @@ se rompen).
 
 - [ ] **Noise Protocol** (NK/XX) sustituyendo el handshake custom
       (mantener transcript binding y auth tags; no romper wire v1).
-- [ ] **Anti-replay**: ventana autenticada por sesión (estado en core).
-- [ ] **Rate limiting** en relay (token bucket por peer/sala, en Rust).
+- [x] **Anti-replay**: ventana autenticada por sesión (`transport::replay`,
+      RFC 6479-style) + contador `replayed_dropped` + test de reinyección.
+- [x] **Rate limiting** en relay (fixed-window por IP, UDP+WS,
+      `--rate-limit`/`GS_RATE_LIMIT`, métrica `dropped{rate_limited}`).
 - [ ] **Auth en relay**: token de sala opcional, metadatos en `Room`.
 - [ ] TLS/WSS para el bridge WebSocket; HTTPS para observabilidad.
-- [ ] Pruebas de seguridad: `make docker-fuzz`, estrés, fuzz en CI.
+- [x] Pruebas de seguridad base: `make docker-fuzz`, estrés, replay test.
+      (pendiente: fuzz en CI y anti-replay Noise-native).
 
 ## Hito 0.3.1 — Plano de control gRPC
 
-- [ ] `tonic` en relay con feature `grpc` (server en `:50051`).
-- [ ] `tonic-build` en CI valida que los protos compilan.
+- [x] `tonic` en relay con feature `grpc` (`ServerControl` + `PairingService`).
+- [x] `tonic-build` + `protoc-bin-vendored` en `build.rs` (sin protoc del sistema).
+- [x] `WatchRoom` streaming (eventos de sala vía broadcast del `Router`).
+- [x] Test de integración `grpc_control` con cliente tonic real.
 - [ ] Clientes: Dart (`grpc-dart`) con fallback REST; CLI con feature `grpc`.
-- [ ] `WatchRoom` streaming (eventos de sala) + dashboard.
+- [ ] `grpc-web`/connect para Flutter Web + dashboard de salas.
 
 ## Hito 0.4.0 — Distribución
 

@@ -1,5 +1,8 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:provider/provider.dart';
+import 'package:toastification/toastification.dart';
 
 import '../core/constants.dart';
 import '../models/connection.dart';
@@ -128,10 +131,13 @@ class _ServerSetupScreenState extends State<ServerSetupScreen> {
                     label: 'Código de sala',
                     controller: _roomCode,
                     hint: 'GRVT-2847',
-                    suffix: IconButton(
-                      icon: const Icon(Icons.qr_code_scanner),
-                      onPressed: () => _showQrHint(context),
-                    ),
+                    suffix: _canScanQr
+                        ? IconButton(
+                            icon: const Icon(Icons.qr_code_scanner),
+                            tooltip: 'Escanear QR',
+                            onPressed: () => _scanQr(context),
+                          )
+                        : null,
                   ),
                 if (hosting)
                   _HostNote(scheme: scheme),
@@ -180,8 +186,14 @@ class _ServerSetupScreenState extends State<ServerSetupScreen> {
                     _persist(c);
                     final msg = await c.testRelay();
                     if (!context.mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text(msg)));
+                    toastification.show(
+                      context: context,
+                      type: msg.contains('OK')
+                          ? ToastificationType.success
+                          : ToastificationType.warning,
+                      title: Text(msg),
+                      autoCloseDuration: const Duration(seconds: 3),
+                    );
                   },
             child: const Text('Probar relay (healthz)'),
           ),
@@ -190,12 +202,54 @@ class _ServerSetupScreenState extends State<ServerSetupScreen> {
     );
   }
 
-  void _showQrHint(BuildContext context) {
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-      content: Text('Escáner QR nativo: en el roadmap de la app (mobile_scanner).'),
-      duration: Duration(seconds: 2),
-    ));
+  /// Escáner de QR real (mobile_scanner) que rellena el código de sala.
+  Future<void> _scanQr(BuildContext ctx) async {
+    final code = await showModalBottomSheet<String>(
+      context: ctx,
+      isScrollControlled: true,
+      builder: (sheetCtx) => SizedBox(
+        height: 420,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Text('Escanea el QR de la sala',
+                  style: Theme.of(sheetCtx).textTheme.titleMedium),
+            ),
+            Expanded(
+              child: MobileScanner(
+                controller: MobileScannerController(
+                  formats: const [BarcodeFormat.qrCode],
+                ),
+                onDetect: (capture) {
+                  final raw =
+                      capture.barcodes.isEmpty ? null : capture.barcodes.first.rawValue;
+                  if (raw != null && raw.trim().isNotEmpty) {
+                    Navigator.of(sheetCtx).pop(raw.trim());
+                  }
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!ctx.mounted || code == null) return;
+    setState(() => _roomCode.text = code.toUpperCase());
+    toastification.show(
+      context: ctx,
+      type: ToastificationType.success,
+      title: const Text('Sala escaneada'),
+      description: Text(code),
+      autoCloseDuration: const Duration(seconds: 2),
+    );
   }
+
+  bool get _canScanQr =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS ||
+          defaultTargetPlatform == TargetPlatform.macOS);
 }
 
 class _HostNote extends StatelessWidget {

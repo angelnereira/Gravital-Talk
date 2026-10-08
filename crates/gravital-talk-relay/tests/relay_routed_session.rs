@@ -39,7 +39,7 @@ async fn routed_handshake_and_audio_through_relay() {
     let relay_socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
     let relay_addr = relay_socket.local_addr().unwrap();
     let router = Arc::new(Router::new(16, 8, RelayMetrics::new()));
-    let relay_task = tokio::spawn(udp::run(relay_socket, router.clone()));
+    let relay_task = tokio::spawn(udp::run(relay_socket, router.clone(), None));
 
     // 2. Dos sesiones con el session_id de la sala pre-fijado.
     let server = bind_session().await;

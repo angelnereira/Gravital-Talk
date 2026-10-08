@@ -13,6 +13,7 @@ pub mod discovery;
 pub mod error;
 pub mod fec;
 pub mod jitter_buffer;
+pub mod replay;
 pub mod session;
 pub mod stun;
 pub mod tone;

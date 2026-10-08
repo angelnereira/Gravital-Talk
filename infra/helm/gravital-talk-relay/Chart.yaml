@@ -2,8 +2,8 @@ apiVersion: v2
 name: gravital-talk-relay
 description: Gravital Talk — relay productivo (UDP audio + WebSocket + Prometheus metrics)
 type: application
-version: 0.1.0
-appVersion: "0.2.0-alpha.1"
+version: 0.3.0
+appVersion: "0.3.0-alpha.1"
 keywords:
   - audio
   - voip

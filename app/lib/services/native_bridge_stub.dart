@@ -47,6 +47,10 @@ class NativeBridge {
 class NativeSession {
   NativeSession._stub();
 
+  /// Stub del factory para plataformas sin FFI.
+  factory NativeSession.at(NativeBridge bridge, int address) =>
+      NativeSession._stub();
+
   int get address => 0;
 
   void connect(String host, int port) => _unavailable();
@@ -55,6 +59,8 @@ class NativeSession {
   void setSessionId(int id) => _unavailable();
   void sendAudio(List<int> data) => _unavailable();
   List<int>? recvAudio({int maxBytes = 8192}) => _unavailable();
+  List<int>? recvAudioTimeout({int maxBytes = 8192, int timeoutMs = 250}) =>
+      _unavailable();
   void close() => _unavailable();
   SessionState state() => _unavailable();
   int sessionId() => _unavailable();
