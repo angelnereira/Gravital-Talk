@@ -47,6 +47,7 @@ class SettingsStore {
       observabilityPort:
           p.getInt(PrefKeys.serverObsPort) ?? DefaultPorts.observability,
       roomCode: p.getString(PrefKeys.lastRoomCode) ?? '',
+      token: p.getString(PrefKeys.serverToken) ?? '',
     );
   }
 
@@ -56,6 +57,7 @@ class SettingsStore {
     await p.setInt(PrefKeys.serverUdpPort, s.udpPort);
     await p.setInt(PrefKeys.serverObsPort, s.observabilityPort);
     await p.setString(PrefKeys.lastRoomCode, s.roomCode);
+    await p.setString(PrefKeys.serverToken, s.token);
   }
 
   Future<P2pProfile> loadP2pProfile() async {

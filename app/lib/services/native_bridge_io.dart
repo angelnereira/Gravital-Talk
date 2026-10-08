@@ -105,6 +105,10 @@ typedef _SessionIdC = Int32 Function(Pointer<Void>, Pointer<Uint32>);
 typedef _SessionIdD = int Function(Pointer<Void>, Pointer<Uint32>);
 typedef _SetSessionIdC = Int32 Function(Pointer<Void>, Uint32);
 typedef _SetSessionIdD = int Function(Pointer<Void>, int);
+typedef _SetRoomTokenC = Int32 Function(Pointer<Void>, Pointer<Utf8>);
+typedef _SetRoomTokenD = int Function(Pointer<Void>, Pointer<Utf8>);
+typedef _SetHandshakeModeC = Int32 Function(Pointer<Void>, Uint8);
+typedef _SetHandshakeModeD = int Function(Pointer<Void>, int);
 typedef _MetricsC = Int32 Function(Pointer<Void>, Pointer<GsMetricsNative>);
 typedef _MetricsD = int Function(Pointer<Void>, Pointer<GsMetricsNative>);
 typedef _LocalPortC = Int32 Function(Pointer<Void>, Pointer<Uint16>);
@@ -150,6 +154,10 @@ class NativeBridge {
             .lookupFunction<_SessionIdC, _SessionIdD>('gs_session_id'),
         _setSessionId = lib.lookupFunction<_SetSessionIdC, _SetSessionIdD>(
             'gs_session_set_session_id'),
+        _setRoomToken = lib.lookupFunction<_SetRoomTokenC, _SetRoomTokenD>(
+            'gs_session_set_room_token'),
+        _setHandshakeMode = lib.lookupFunction<_SetHandshakeModeC, _SetHandshakeModeD>(
+            'gs_session_set_handshake_mode'),
         _sessionMetrics = lib
             .lookupFunction<_MetricsC, _MetricsD>('gs_session_metrics'),
         _sessionLocalPort = lib
@@ -183,6 +191,8 @@ class NativeBridge {
   final _StateD _sessionState;
   final _SessionIdD _sessionId;
   final _SetSessionIdD _setSessionId;
+  final _SetRoomTokenD _setRoomToken;
+  final _SetHandshakeModeD _setHandshakeMode;
   final _MetricsD _sessionMetrics;
   final _LocalPortD _sessionLocalPort;
   final _HandleD _pttPress;
@@ -377,6 +387,23 @@ class NativeSession {
   void setSessionId(int id) {
     _ensureAlive();
     _bridge._check(_bridge._setSessionId(_handle, id));
+  }
+
+  /// Fija el token de sala (PSK de Noise). `null` lo desactiva.
+  void setRoomToken(String? token) {
+    _ensureAlive();
+    final ptr = token == null ? nullptr : token.toNativeUtf8();
+    try {
+      _bridge._check(_bridge._setRoomToken(_handle, ptr));
+    } finally {
+      if (ptr != nullptr) calloc.free(ptr);
+    }
+  }
+
+  /// Modo de handshake: 0 = Auto, 1 = Noise, 2 = Legacy.
+  void setHandshakeMode(int mode) {
+    _ensureAlive();
+    _bridge._check(_bridge._setHandshakeMode(_handle, mode));
   }
 
   /// Envía un frame PCM.

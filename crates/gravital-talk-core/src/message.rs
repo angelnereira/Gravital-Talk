@@ -25,6 +25,10 @@ pub enum MessageType {
     HandshakeSessionConfirm,
     /// Paso 4: servidor → cliente (auth_tag como prueba de posesión de decrypt_key).
     HandshakeKeyExchange,
+    /// Handshake Noise (v2): mensaje 1 del iniciador (contiene `NoiseHello1`).
+    HandshakeNoiseHello1,
+    /// Handshake Noise (v2): mensaje 2 del respondedor (contiene `NoiseHello2`).
+    HandshakeNoiseHello2,
     AudioFrame,
     AudioFragment,
     /// Paquete de paridad FEC (XOR de un grupo de AudioFrames).
@@ -69,6 +73,8 @@ impl MessageType {
             Self::HandshakeServerHello => 0x02,
             Self::HandshakeSessionConfirm => 0x03,
             Self::HandshakeKeyExchange => 0x04,
+            Self::HandshakeNoiseHello1 => 0x05,
+            Self::HandshakeNoiseHello2 => 0x06,
             Self::AudioFrame => 0x10,
             Self::AudioFragment => 0x11,
             Self::AudioFec => 0x12,
@@ -100,6 +106,8 @@ impl MessageType {
             0x02 => Self::HandshakeServerHello,
             0x03 => Self::HandshakeSessionConfirm,
             0x04 => Self::HandshakeKeyExchange,
+            0x05 => Self::HandshakeNoiseHello1,
+            0x06 => Self::HandshakeNoiseHello2,
             0x10 => Self::AudioFrame,
             0x11 => Self::AudioFragment,
             0x12 => Self::AudioFec,
@@ -134,6 +142,8 @@ impl MessageType {
                 | Self::HandshakeServerHello
                 | Self::HandshakeSessionConfirm
                 | Self::HandshakeKeyExchange
+                | Self::HandshakeNoiseHello1
+                | Self::HandshakeNoiseHello2
         )
     }
 
@@ -372,6 +382,135 @@ impl SessionConfirm {
         Ok(Self {
             session_id: u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]),
             server_auth_tag,
+        })
+    }
+}
+
+// ─── Payloads: Handshake Noise v2 (0x05 / 0x06) ─────────────────────────────
+//
+// El payload del paquete ES el mensaje Noise (no un struct propio); el
+// payload interno de la mensajería Noise transporta estas estructuras.
+//
+// NoiseHello1 (48 B):
+//   protocol_version  [1]
+//   codec_preferred   [1]
+//   sample_rate       [4] BE
+//   channels          [1]
+//   frame_duration_ms [1]
+//   max_bitrate       [4] BE
+//   capability_flags  [4] BE
+//   client_nonce      [32]
+
+/// Datos de aplicación del primer mensaje Noise (cliente → servidor).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoiseHello1 {
+    pub protocol_version: u8,
+    pub codec_preferred: u8,
+    pub sample_rate: u32,
+    pub channels: u8,
+    pub frame_duration_ms: u8,
+    pub max_bitrate: u32,
+    pub capability_flags: u32,
+    pub client_nonce: [u8; 32],
+}
+
+impl NoiseHello1 {
+    pub const SIZE: usize = 48;
+
+    pub fn encode(&self, buf: &mut [u8]) -> Result<(), Error> {
+        if buf.len() < Self::SIZE {
+            return Err(Error::BufferTooSmall);
+        }
+        buf[0] = self.protocol_version;
+        buf[1] = self.codec_preferred;
+        buf[2..6].copy_from_slice(&self.sample_rate.to_be_bytes());
+        buf[6] = self.channels;
+        buf[7] = self.frame_duration_ms;
+        buf[8..12].copy_from_slice(&self.max_bitrate.to_be_bytes());
+        buf[12..16].copy_from_slice(&self.capability_flags.to_be_bytes());
+        buf[16..48].copy_from_slice(&self.client_nonce);
+        Ok(())
+    }
+
+    pub fn decode(buf: &[u8]) -> Result<Self, Error> {
+        if buf.len() < Self::SIZE {
+            return Err(Error::MalformedPayload);
+        }
+        let mut client_nonce = [0u8; 32];
+        client_nonce.copy_from_slice(&buf[16..48]);
+        Ok(Self {
+            protocol_version: buf[0],
+            codec_preferred: buf[1],
+            sample_rate: u32::from_be_bytes([buf[2], buf[3], buf[4], buf[5]]),
+            channels: buf[6],
+            frame_duration_ms: buf[7],
+            max_bitrate: u32::from_be_bytes([buf[8], buf[9], buf[10], buf[11]]),
+            capability_flags: u32::from_be_bytes([buf[12], buf[13], buf[14], buf[15]]),
+            client_nonce,
+        })
+    }
+}
+
+// NoiseHello2 (52 B):
+//   session_id        [4] BE
+//   protocol_version  [1]
+//   codec_accepted    [1]
+//   sample_rate       [4] BE
+//   channels          [1]
+//   frame_duration_ms [1]
+//   max_bitrate       [4] BE
+//   capability_flags  [4] BE
+//   server_nonce      [32]
+
+/// Datos de aplicación del segundo mensaje Noise (servidor → cliente).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoiseHello2 {
+    pub session_id: u32,
+    pub protocol_version: u8,
+    pub codec_accepted: u8,
+    pub sample_rate: u32,
+    pub channels: u8,
+    pub frame_duration_ms: u8,
+    pub max_bitrate: u32,
+    pub capability_flags: u32,
+    pub server_nonce: [u8; 32],
+}
+
+impl NoiseHello2 {
+    pub const SIZE: usize = 52;
+
+    pub fn encode(&self, buf: &mut [u8]) -> Result<(), Error> {
+        if buf.len() < Self::SIZE {
+            return Err(Error::BufferTooSmall);
+        }
+        buf[0..4].copy_from_slice(&self.session_id.to_be_bytes());
+        buf[4] = self.protocol_version;
+        buf[5] = self.codec_accepted;
+        buf[6..10].copy_from_slice(&self.sample_rate.to_be_bytes());
+        buf[10] = self.channels;
+        buf[11] = self.frame_duration_ms;
+        buf[12..16].copy_from_slice(&self.max_bitrate.to_be_bytes());
+        buf[16..20].copy_from_slice(&self.capability_flags.to_be_bytes());
+        buf[20..52].copy_from_slice(&self.server_nonce);
+        Ok(())
+    }
+
+    pub fn decode(buf: &[u8]) -> Result<Self, Error> {
+        if buf.len() < Self::SIZE {
+            return Err(Error::MalformedPayload);
+        }
+        let mut server_nonce = [0u8; 32];
+        server_nonce.copy_from_slice(&buf[20..52]);
+        Ok(Self {
+            session_id: u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]),
+            protocol_version: buf[4],
+            codec_accepted: buf[5],
+            sample_rate: u32::from_be_bytes([buf[6], buf[7], buf[8], buf[9]]),
+            channels: buf[10],
+            frame_duration_ms: buf[11],
+            max_bitrate: u32::from_be_bytes([buf[12], buf[13], buf[14], buf[15]]),
+            capability_flags: u32::from_be_bytes([buf[16], buf[17], buf[18], buf[19]]),
+            server_nonce,
         })
     }
 }
@@ -654,7 +793,7 @@ mod tests {
 
     #[test]
     fn message_type_unknown_rejected() {
-        assert!(MessageType::from_code(0x05).is_err());
+        assert!(MessageType::from_code(0x07).is_err());
         assert!(MessageType::from_code(0x80).is_err());
         assert!(MessageType::from_code(0xAA).is_err());
     }

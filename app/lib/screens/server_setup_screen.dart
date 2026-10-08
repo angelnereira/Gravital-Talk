@@ -23,6 +23,7 @@ class _ServerSetupScreenState extends State<ServerSetupScreen> {
   late final TextEditingController _udpPort;
   late final TextEditingController _obsPort;
   late final TextEditingController _roomCode;
+  late final TextEditingController _token;
   ConnectionRole _role = ConnectionRole.host;
 
   @override
@@ -33,6 +34,7 @@ class _ServerSetupScreenState extends State<ServerSetupScreen> {
     _udpPort = TextEditingController(text: '${s.udpPort}');
     _obsPort = TextEditingController(text: '${s.observabilityPort}');
     _roomCode = TextEditingController(text: s.roomCode);
+    _token = TextEditingController(text: s.token);
   }
 
   @override
@@ -41,6 +43,7 @@ class _ServerSetupScreenState extends State<ServerSetupScreen> {
     _udpPort.dispose();
     _obsPort.dispose();
     _roomCode.dispose();
+    _token.dispose();
     super.dispose();
   }
 
@@ -51,6 +54,7 @@ class _ServerSetupScreenState extends State<ServerSetupScreen> {
       observabilityPort:
           int.tryParse(_obsPort.text) ?? DefaultPorts.observability,
       roomCode: _roomCode.text.trim().toUpperCase(),
+      token: _token.text.trim(),
     ));
   }
 
@@ -141,6 +145,13 @@ class _ServerSetupScreenState extends State<ServerSetupScreen> {
                   ),
                 if (hosting)
                   _HostNote(scheme: scheme),
+                LabeledField(
+                  label: 'Token de sala (opcional)',
+                  controller: _token,
+                  hint:
+                      'Secreto compartido: exige handshake Noise (PSK) en todos los peers',
+                  obscure: true,
+                ),
               ],
             ),
           ),

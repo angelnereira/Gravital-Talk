@@ -22,6 +22,9 @@ abstract class SessionEngine {
   /// Fija el `session_id` de sala antes del handshake.
   Future<void> setSessionId(int id);
 
+  /// Fija el token de sala (PSK de Noise). `null` lo desactiva.
+  Future<void> setRoomToken(String? token);
+
   Future<void> connect(String host, int port);
   Future<void> accept(String host, int port);
   Future<void> acceptAny();
@@ -121,6 +124,9 @@ class FfiSessionEngine implements SessionEngine {
 
   @override
   Future<void> setSessionId(int id) async => _alive.setSessionId(id);
+
+  @override
+  Future<void> setRoomToken(String? token) async => _alive.setRoomToken(token);
 
   @override
   Future<void> connect(String host, int port) async {
@@ -253,6 +259,11 @@ class DemoSessionEngine implements SessionEngine {
 
   @override
   Future<void> setSessionId(int id) async => _sessionId = id;
+
+  @override
+  Future<void> setRoomToken(String? token) async {
+    // El motor demo no implementa PSK; se ignora.
+  }
 
   Future<void> _beginHandshake() async {
     _state = SessionState.handshaking;

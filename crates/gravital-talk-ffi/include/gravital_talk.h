@@ -200,6 +200,22 @@ GsStatus gs_session_id(GsSessionHandle *handle, uint32_t *out_id);
 GsStatus gs_session_set_session_id(GsSessionHandle *handle, uint32_t session_id);
 
 /*
+ Fija el token de sala (PSK de Noise).
+
+ Con token, el handshake usa `Noise_NNpsk0` y no hay downgrade: peers sin
+ el token no pueden conectar. `NULL` o `""` desactiva el token.
+ Debe llamarse **antes** de `gs_session_connect` / `gs_session_accept`.
+ */
+GsStatus gs_session_set_room_token(GsSessionHandle *handle, const char *token);
+
+/*
+ Modo de handshake: `0` = Auto (Noise con fallback), `1` = Noise, `2` = Legacy.
+
+ Debe llamarse **antes** de `gs_session_connect` / `gs_session_accept`.
+ */
+GsStatus gs_session_set_handshake_mode(GsSessionHandle *handle, uint8_t mode);
+
+/*
  Rellena `out` con un snapshot atómico de métricas.
  */
 GsStatus gs_session_metrics(GsSessionHandle *handle, GsMetrics *out);

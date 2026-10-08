@@ -229,6 +229,10 @@ enum Command {
         /// Codec: pcm u opus.
         #[arg(long, default_value = "opus")]
         codec: CodecArg,
+        /// Token de sala (PSK de Noise). Debe coincidir en todos los peers.
+        /// Con token, el handshake exige Noise (sin downgrade).
+        #[arg(long)]
+        room_token: Option<String>,
         /// Sin hardware de audio: fuente senoidal interna y sin playback.
         /// Pensado para contenedores, CI y pruebas de carga.
         #[arg(long)]
@@ -381,6 +385,7 @@ async fn dispatch(cmd: Command) -> Result<()> {
             device,
             out_device,
             codec,
+            room_token,
             no_audio,
             headless,
             duration,
@@ -397,6 +402,7 @@ async fn dispatch(cmd: Command) -> Result<()> {
                 device,
                 out_device.unwrap_or_else(|| "default".to_string()),
                 codec,
+                room_token,
                 no_audio,
                 headless,
                 duration,
@@ -924,6 +930,7 @@ async fn cmd_ptt(
     in_device: String,
     out_device: String,
     codec_arg: CodecArg,
+    room_token: Option<String>,
     no_audio: bool,
     headless: bool,
     duration_s: u64,
@@ -1059,6 +1066,12 @@ async fn cmd_ptt(
         // Modo sala: fijar el session_id compartido antes del handshake.
         if let Some(sid) = preset_sid {
             cs.session().set_preset_session_id(sid);
+        }
+
+        // Token de sala (PSK de Noise), si se configuró.
+        if let Some(ref token) = room_token {
+            cs.session().set_room_token(Some(token.clone()));
+            tracing::info!("token de sala configurado: handshake Noise obligatorio");
         }
 
         // Handshake (mostrar estado en pantalla antes de entrar al UI loop).

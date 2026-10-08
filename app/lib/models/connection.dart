@@ -97,6 +97,7 @@ class ServerProfile {
     this.udpPort = 9000,
     this.observabilityPort = 9100,
     this.roomCode = '',
+    this.token = '',
   });
 
   final String host;
@@ -104,17 +105,22 @@ class ServerProfile {
   final int observabilityPort;
   final String roomCode;
 
+  /// Token de sala (PSK de Noise). Vacío = sala abierta.
+  final String token;
+
   ServerProfile copyWith({
     String? host,
     int? udpPort,
     int? observabilityPort,
     String? roomCode,
+    String? token,
   }) {
     return ServerProfile(
       host: host ?? this.host,
       udpPort: udpPort ?? this.udpPort,
       observabilityPort: observabilityPort ?? this.observabilityPort,
       roomCode: roomCode ?? this.roomCode,
+      token: token ?? this.token,
     );
   }
 }

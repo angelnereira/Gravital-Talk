@@ -33,6 +33,7 @@ class PrefKeys {
   static const serverUdpPort = 'server.udpPort';
   static const serverObsPort = 'server.obsPort';
   static const lastRoomCode = 'server.lastRoomCode';
+  static const serverToken = 'server.token';
   static const p2pHost = 'p2p.host';
   static const p2pPort = 'p2p.port';
   static const p2pLocalPort = 'p2p.localPort';

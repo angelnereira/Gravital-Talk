@@ -105,6 +105,9 @@ class SessionController extends ChangeNotifier {
     }
     return _guard(() async {
       await _engine.createSession(_settings);
+      if (profile.token.isNotEmpty) {
+        await _engine.setRoomToken(profile.token);
+      }
       final sid = Random().nextInt(0x7FFFFFFF) + 1;
 
       var code = roomCode;
@@ -152,6 +155,9 @@ class SessionController extends ChangeNotifier {
           'Sala ${room.code} → session_id=${room.sessionId} (peers: ${room.peerCount ?? '?'})');
 
       await _engine.createSession(_settings);
+      if (profile.token.isNotEmpty) {
+        await _engine.setRoomToken(profile.token);
+      }
       _engine.setSessionId(room.sessionId);
       _mode = ConnectionMode.server;
       _role = ConnectionRole.join;

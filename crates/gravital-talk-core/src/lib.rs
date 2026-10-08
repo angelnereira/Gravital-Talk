@@ -43,8 +43,8 @@ pub use header::{Flags, PacketHeader};
 pub use identity::{AuthChallengePayload, AuthResponsePayload, Identity, IdentityPublic};
 pub use message::{
     AuthChallengeMsg, AuthResponseMsg, ClientHello, ControlBitrateMsg, ErrorCode, FecHeader,
-    HandshakeAccept, HandshakeConfirm, HandshakeInit, KeyExchangeMsg, MessageType, ServerHello,
-    SessionConfirm,
+    HandshakeAccept, HandshakeConfirm, HandshakeInit, KeyExchangeMsg, MessageType, NoiseHello1,
+    NoiseHello2, ServerHello, SessionConfirm,
 };
 pub use packet::{Packet, PacketView};
 pub use session::{

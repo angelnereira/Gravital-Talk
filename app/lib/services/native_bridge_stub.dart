@@ -57,6 +57,8 @@ class NativeSession {
   void accept(String host, int port) => _unavailable();
   void acceptAny() => _unavailable();
   void setSessionId(int id) => _unavailable();
+  void setRoomToken(String? token) => _unavailable();
+  void setHandshakeMode(int mode) => _unavailable();
   void sendAudio(List<int> data) => _unavailable();
   List<int>? recvAudio({int maxBytes = 8192}) => _unavailable();
   List<int>? recvAudioTimeout({int maxBytes = 8192, int timeoutMs = 250}) =>

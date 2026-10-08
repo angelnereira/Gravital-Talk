@@ -14,9 +14,12 @@ name = "gravital_talk_transport"
 path = "src/lib.rs"
 
 [features]
-default = []
+default = ["noise"]
+noise   = ["dep:snow"]
 
 [dependencies]
+snow = { version = "0.9", optional = true }
+
 gravital-talk-core    = { workspace = true, default-features = false, features = ["alloc", "std"] }
 gravital-talk-metrics = { workspace = true }
 tokio             = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync", "macros", "io-util"] }

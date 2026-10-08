@@ -22,8 +22,8 @@ use std::ptr;
 use std::sync::Arc;
 
 use gravital_talk::{
-    discover_public_addr, Config as RustConfig, LatencyClass, MetricsSnapshot, Session,
-    SessionRole, SessionState, TransportError, UdpConfig, UdpTransport,
+    discover_public_addr, Config as RustConfig, HandshakeMode, LatencyClass, MetricsSnapshot,
+    Session, SessionRole, SessionState, TransportError, UdpConfig, UdpTransport,
 };
 
 thread_local! {
@@ -122,6 +122,7 @@ impl From<&GsConfig> for RustConfig {
             capability_flags: c.capability_flags,
             jitter_buffer_ms: c.jitter_buffer_ms,
             mtu: c.mtu as usize,
+            handshake_mode: HandshakeMode::Auto,
         }
     }
 }
@@ -489,6 +490,53 @@ pub unsafe extern "C" fn gs_session_set_session_id(
     }
     let inner = unsafe { &*(handle as *mut SessionInner) };
     inner.session.set_preset_session_id(session_id);
+    GsStatus::GS_OK
+}
+
+/// Fija el token de sala (PSK de Noise).
+///
+/// Con token, el handshake usa `Noise_NNpsk0` y no hay downgrade: peers sin
+/// el token no pueden conectar. `NULL` o `""` desactiva el token.
+/// Debe llamarse **antes** de `gs_session_connect` / `gs_session_accept`.
+#[no_mangle]
+pub unsafe extern "C" fn gs_session_set_room_token(
+    handle: *mut GsSessionHandle,
+    token: *const c_char,
+) -> GsStatus {
+    if handle.is_null() {
+        return GsStatus::GS_ERR_NULL_POINTER;
+    }
+    let token = if token.is_null() {
+        None
+    } else {
+        match unsafe { CStr::from_ptr(token) }.to_str() {
+            Ok(s) => Some(s.to_string()),
+            Err(_) => return GsStatus::GS_ERR_INVALID_ARGUMENT,
+        }
+    };
+    let inner = unsafe { &*(handle as *mut SessionInner) };
+    inner.session.set_room_token(token);
+    GsStatus::GS_OK
+}
+
+/// Modo de handshake: `0` = Auto (Noise con fallback), `1` = Noise, `2` = Legacy.
+///
+/// Debe llamarse **antes** de `gs_session_connect` / `gs_session_accept`.
+#[no_mangle]
+pub unsafe extern "C" fn gs_session_set_handshake_mode(
+    handle: *mut GsSessionHandle,
+    mode: u8,
+) -> GsStatus {
+    if handle.is_null() {
+        return GsStatus::GS_ERR_NULL_POINTER;
+    }
+    let mode = match mode {
+        1 => HandshakeMode::Noise,
+        2 => HandshakeMode::Legacy,
+        _ => HandshakeMode::Auto,
+    };
+    let inner = unsafe { &*(handle as *mut SessionInner) };
+    inner.session.set_handshake_mode(mode);
     GsStatus::GS_OK
 }
 

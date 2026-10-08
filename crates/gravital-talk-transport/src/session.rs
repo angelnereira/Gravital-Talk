@@ -31,7 +31,8 @@ use gravital_talk_core::crypto::{
 };
 use gravital_talk_core::header::{Flags, PacketHeader};
 use gravital_talk_core::message::{
-    ClientHello, ControlBitrateMsg, KeyExchangeMsg, MessageType, ServerHello, SessionConfirm,
+    ClientHello, ControlBitrateMsg, KeyExchangeMsg, MessageType, NoiseHello1, NoiseHello2,
+    ServerHello, SessionConfirm,
 };
 use gravital_talk_core::packet::{PacketBuilder, PacketView};
 use gravital_talk_core::session::{SessionEvent, SessionState, SessionStateMachine};
@@ -46,8 +47,36 @@ use crate::congestion::CongestionController;
 use crate::error::TransportError;
 use crate::fec::{FecDecoder, FecEncoder, FecParity};
 use crate::jitter_buffer::{Frame, JitterBuffer};
+#[cfg(feature = "noise")]
+use crate::noise::NoiseHandshake;
 use crate::replay::ReplayWindow;
 use crate::traits::Transport;
+
+/// Timeout del intento Noise antes de caer al handshake legacy (modo `Auto`).
+const NOISE_FALLBACK_MS: u64 = 1500;
+
+/// Primer mensaje de handshake recibido por el servidor.
+enum FirstHandshake {
+    /// Mensaje 1 de Noise (bytes crudos).
+    Noise(Vec<u8>),
+    /// `ClientHello` legacy.
+    Legacy(ClientHello),
+}
+
+/// Modo de handshake de la sesión.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HandshakeMode {
+    /// Intenta Noise y cae a legacy si el peer no responde (default).
+    ///
+    /// Con `room_token` configurado **no hay downgrade**: el token exige
+    /// Noise (PSK) para autenticar la sala.
+    #[default]
+    Auto,
+    /// Solo Noise (falla contra peers legacy).
+    Noise,
+    /// Solo handshake legacy X25519 (compatibilidad).
+    Legacy,
+}
 
 /// Rol de la sesión en el handshake.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +104,8 @@ pub struct Config {
     pub jitter_buffer_ms: u16,
     /// MTU efectivo en bytes.
     pub mtu: usize,
+    /// Modo de handshake (Noise / legacy / auto).
+    pub handshake_mode: HandshakeMode,
 }
 
 impl Default for Config {
@@ -89,6 +120,7 @@ impl Default for Config {
             capability_flags: 0,
             jitter_buffer_ms: DEFAULT_JITTER_BUFFER_MS,
             mtu: DEFAULT_MTU,
+            handshake_mode: HandshakeMode::Auto,
         }
     }
 }
@@ -130,6 +162,10 @@ pub struct Session {
     /// `session_id` fijado de antemano para el handshake (modo relay/sala).
     /// `0` = el servidor elige uno aleatorio (P2P directo).
     preset_session_id: AtomicU32,
+    /// Token de sala (PSK de Noise). `None` = sala abierta.
+    room_token: std::sync::Mutex<Option<Vec<u8>>>,
+    /// Modo de handshake efectivo (1 = Legacy, 2 = Noise, otro = Auto).
+    handshake_mode: AtomicU8,
     /// Ventana anti-replay de secuencias de paquete (activa con claves).
     replay: Mutex<ReplayWindow>,
     /// Señal de cancelación: se activa en `close()` para interrumpir loops bloqueantes.
@@ -150,6 +186,11 @@ impl Session {
     pub fn new(transport: Arc<dyn Transport>, config: Config) -> Self {
         let jitter_depth = jitter_slots(config.jitter_buffer_ms, config.frame_duration_ms);
         let max_br = config.max_bitrate;
+        let handshake_mode_byte = match config.handshake_mode {
+            HandshakeMode::Legacy => 1,
+            HandshakeMode::Noise => 2,
+            HandshakeMode::Auto => 0,
+        };
         Self {
             transport,
             state: Mutex::new(SessionStateMachine::new()),
@@ -172,9 +213,31 @@ impl Session {
             peer_ptt_active: AtomicBool::new(false),
             local_ssrc: AtomicU32::new(0),
             preset_session_id: AtomicU32::new(0),
+            room_token: std::sync::Mutex::new(None),
+            handshake_mode: AtomicU8::new(handshake_mode_byte),
             replay: Mutex::new(ReplayWindow::new()),
             closed: AtomicBool::new(false),
         }
+    }
+
+    /// Modo de handshake efectivo.
+    #[must_use]
+    pub fn handshake_mode(&self) -> HandshakeMode {
+        match self.handshake_mode.load(Ordering::Acquire) {
+            1 => HandshakeMode::Legacy,
+            2 => HandshakeMode::Noise,
+            _ => HandshakeMode::Auto,
+        }
+    }
+
+    /// Cambia el modo de handshake (debe llamarse antes de `handshake`).
+    pub fn set_handshake_mode(&self, mode: HandshakeMode) {
+        let byte = match mode {
+            HandshakeMode::Legacy => 1,
+            HandshakeMode::Noise => 2,
+            HandshakeMode::Auto => 0,
+        };
+        self.handshake_mode.store(byte, Ordering::Release);
     }
 
     /// Fija el `session_id` que se usará en el handshake.
@@ -195,6 +258,38 @@ impl Session {
     #[must_use]
     pub fn preset_session_id(&self) -> u32 {
         self.preset_session_id.load(Ordering::Acquire)
+    }
+
+    /// Fija el token de sala (PSK de Noise).
+    ///
+    /// Cuando hay token, el handshake usa `Noise_NNpsk0` y **no** hay
+    /// downgrade a legacy: sin el token correcto la conexión falla.
+    pub fn set_room_token(&self, token: Option<String>) {
+        let bytes = token.filter(|t| !t.is_empty()).map(String::into_bytes);
+        let mut guard = self.room_token.lock().unwrap_or_else(|p| p.into_inner());
+        *guard = bytes;
+    }
+
+    /// `true` si hay token de sala configurado.
+    #[must_use]
+    pub fn has_room_token(&self) -> bool {
+        self.room_token
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .is_some()
+    }
+
+    /// PSK derivada del token de sala (SHA-256), si hay token.
+    #[must_use]
+    pub fn room_psk(&self) -> Option<[u8; 32]> {
+        use sha2::Digest as _;
+        let guard = self.room_token.lock().unwrap_or_else(|p| p.into_inner());
+        guard.as_ref().map(|token| {
+            let digest = Sha256::digest(token);
+            let mut key = [0u8; 32];
+            key.copy_from_slice(&digest);
+            key
+        })
     }
 
     /// Resuelve el `session_id` a usar: el pre-fijado o uno aleatorio.
@@ -329,8 +424,8 @@ impl Session {
         }
 
         let deadline = Duration::from_millis(HANDSHAKE_TIMEOUT_MS);
-        let result = match role {
-            SessionRole::Client => timeout(deadline, self.handshake_client(peer)).await,
+        let result: Result<Result<(), TransportError>, tokio::time::error::Elapsed> = match role {
+            SessionRole::Client => Ok(self.run_client_handshake(peer, deadline).await),
             SessionRole::Server => timeout(deadline, self.handshake_server(peer)).await,
         };
 
@@ -358,6 +453,54 @@ impl Session {
                     .await
                     .transition(SessionEvent::HandshakeTimeout);
                 Err(TransportError::Timeout)
+            }
+        }
+    }
+
+    /// Decide el handshake de cliente según `handshake_mode`.
+    ///
+    /// En `Auto` se intenta Noise primero y, si el peer no responde (peer
+    /// legacy), se cae al handshake v1 — **salvo** que haya token de sala,
+    /// que exige Noise para autenticar.
+    async fn run_client_handshake(
+        &self,
+        peer: SocketAddr,
+        deadline: Duration,
+    ) -> Result<(), TransportError> {
+        let expired = |_| TransportError::Timeout;
+
+        match self.handshake_mode() {
+            HandshakeMode::Legacy => timeout(deadline, self.handshake_client(peer))
+                .await
+                .map_err(expired)?,
+            HandshakeMode::Noise => timeout(deadline, self.handshake_noise_client(peer))
+                .await
+                .map_err(expired)?,
+            HandshakeMode::Auto => {
+                let token_set = self.has_room_token();
+                let noise_res = timeout(
+                    Duration::from_millis(NOISE_FALLBACK_MS),
+                    self.handshake_noise_client(peer),
+                )
+                .await;
+
+                match noise_res {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(TransportError::Timeout)) if !token_set => {
+                        tracing::debug!("peer sin Noise: fallback a handshake v1");
+                        timeout(deadline, self.handshake_client(peer))
+                            .await
+                            .map_err(expired)?
+                    }
+                    Ok(Err(e)) => Err(e),
+                    Err(_) if !token_set => {
+                        tracing::debug!("Noise sin respuesta: fallback a handshake v1");
+                        timeout(deadline, self.handshake_client(peer))
+                            .await
+                            .map_err(expired)?
+                    }
+                    Err(_) => Err(TransportError::Timeout),
+                }
             }
         }
     }
@@ -602,45 +745,40 @@ impl Session {
     // ── Handshake servidor ──────────────────────────────────────────────────
 
     async fn handshake_server(&self, peer: SocketAddr) -> Result<(), TransportError> {
-        let mut buf = vec![0u8; self.config.mtu];
-
         // Modo relay/sala: registrarse ante el relay antes de esperar el
-        // ClientHello. El relay aprende la dirección del servidor con el primer
-        // paquete que recibe; sin este registro, el ClientHello del cliente no
-        // tendría destino al que reenviarse.
+        // primer mensaje. El relay aprende la dirección del servidor con el
+        // primer paquete que recibe; sin este registro, el ClientHello del
+        // cliente no tendría destino al que reenviarse.
         let preset_sid = self.preset_session_id();
         if preset_sid != 0 {
             self.send_control(MessageType::Heartbeat, preset_sid, &[], peer)
                 .await?;
         }
 
-        // 1. Esperar ClientHello del peer esperado.
-        let client_hello: ClientHello = loop {
-            let (n, from) = self.transport.recv(&mut buf).await?;
-            if from != peer {
-                tracing::debug!(?from, expected = ?peer, "dropping datagram from wrong peer");
-                continue;
+        let allow_noise = cfg!(feature = "noise")
+            && matches!(
+                self.handshake_mode(),
+                HandshakeMode::Auto | HandshakeMode::Noise
+            );
+        let allow_legacy = !matches!(self.handshake_mode(), HandshakeMode::Noise);
+        let (first, from) = self
+            .wait_first_handshake_packet(Some(peer), allow_noise, allow_legacy)
+            .await?;
+        match first {
+            FirstHandshake::Noise(msg1) => {
+                self.handshake_noise_server_after_hello1(from, msg1).await
             }
-            let view = match PacketView::decode(&buf[..n]) {
-                Ok(v) => v,
-                Err(e) => {
-                    tracing::debug!(?e, "dropping malformed packet during handshake");
-                    continue;
-                }
-            };
-            if view.header().msg_type != MessageType::HandshakeClientHello.code() {
-                tracing::debug!(
-                    msg_type = view.header().msg_type,
-                    "dropping non-ClientHello packet"
-                );
-                continue;
-            }
-            match ClientHello::decode(view.payload()) {
-                Ok(h) => break h,
-                Err(e) => return Err(TransportError::Protocol(e)),
-            }
-        };
+            FirstHandshake::Legacy(hello) => self.handshake_server_after_hello(from, hello).await,
+        }
+    }
 
+    /// Cuerpo del handshake servidor legacy (tras recibir el `ClientHello`).
+    async fn handshake_server_after_hello(
+        &self,
+        peer: SocketAddr,
+        client_hello: ClientHello,
+    ) -> Result<(), TransportError> {
+        let mut buf = vec![0u8; self.config.mtu];
         // Negociación de versión: el cliente propone su máxima versión soportada.
         // Hacemos downgrade si el cliente pide más de lo que tenemos, o
         // rechazamos si no hay rango compatible.
@@ -791,16 +929,17 @@ impl Session {
         Ok(())
     }
 
-    // ── Handshake servidor abierto (acepta cualquier cliente) ───────────────
-
-    /// Igual que `handshake_server` pero acepta el primer `ClientHello` válido
-    /// de cualquier dirección. Fija `self.peer` cuando lo encuentra.
-    async fn handshake_server_any(&self) -> Result<(), TransportError> {
+    /// Espera el primer mensaje de handshake válido (Noise o `ClientHello`).
+    ///
+    /// `expect_peer = None` acepta cualquier origen (modo QR/abierto).
+    async fn wait_first_handshake_packet(
+        &self,
+        expect_peer: Option<SocketAddr>,
+        allow_noise: bool,
+        allow_legacy: bool,
+    ) -> Result<(FirstHandshake, SocketAddr), TransportError> {
         let mut buf = vec![0u8; self.config.mtu];
-
-        // 1. Esperar ClientHello de cualquier peer.
-        // Cada recv tiene un timeout de 500 ms para poder chequear `closed`.
-        let (client_hello, peer): (ClientHello, SocketAddr) = loop {
+        loop {
             if self.closed.load(Ordering::Acquire) {
                 return Err(TransportError::PeerClosed("session closed"));
             }
@@ -808,46 +947,184 @@ impl Session {
             let (n, from) = match recv_res {
                 Ok(Ok(r)) => r,
                 Ok(Err(e)) => return Err(e),
-                Err(_) => continue, // timeout de 500ms, volver a chequear closed
+                Err(_) => continue,
             };
+            if let Some(expected) = expect_peer {
+                if from != expected {
+                    tracing::debug!(?from, ?expected, "dropping datagram from wrong peer");
+                    continue;
+                }
+            }
             let view = match PacketView::decode(&buf[..n]) {
                 Ok(v) => v,
                 Err(_) => continue,
             };
-            if view.header().msg_type != MessageType::HandshakeClientHello.code() {
-                continue;
+            let msg_type = view.header().msg_type;
+            if allow_noise && msg_type == MessageType::HandshakeNoiseHello1.code() {
+                return Ok((FirstHandshake::Noise(view.payload().to_vec()), from));
             }
-            match ClientHello::decode(view.payload()) {
-                Ok(h) => break (h, from),
-                Err(_) => continue,
+            if allow_legacy && msg_type == MessageType::HandshakeClientHello.code() {
+                if let Ok(h) = ClientHello::decode(view.payload()) {
+                    return Ok((FirstHandshake::Legacy(h), from));
+                }
+            }
+        }
+    }
+
+    /// Handshake Noise como cliente (feature `noise`).
+    #[cfg(feature = "noise")]
+    async fn handshake_noise_client(&self, peer: SocketAddr) -> Result<(), TransportError> {
+        let psk = self.room_psk();
+        let mut hs = NoiseHandshake::new_initiator(psk.as_ref())
+            .map_err(|_| TransportError::Handshake("noise initiator init failed"))?;
+
+        let client_nonce = random_nonce_32();
+        let hello1 = NoiseHello1 {
+            protocol_version: PROTOCOL_VERSION_MAX,
+            codec_preferred: self.config.codec_preferred,
+            sample_rate: self.config.sample_rate,
+            channels: self.config.channels,
+            frame_duration_ms: self.config.frame_duration_ms,
+            max_bitrate: self.config.max_bitrate,
+            capability_flags: self.config.capability_flags,
+            client_nonce,
+        };
+        let mut p1 = [0u8; NoiseHello1::SIZE];
+        hello1.encode(&mut p1).map_err(TransportError::Protocol)?;
+        let msg1 = hs
+            .write(&p1)
+            .map_err(|_| TransportError::Handshake("noise write msg1 failed"))?;
+
+        let preset_sid = self.preset_session_id();
+        let mut buf = vec![0u8; self.config.mtu];
+        let mut attempt: u32 = 0;
+        let hello2: NoiseHello2 = loop {
+            if self.closed.load(Ordering::Acquire) {
+                return Err(TransportError::PeerClosed("session closed"));
+            }
+            if attempt > 8 {
+                return Err(TransportError::Timeout);
+            }
+            self.send_control(MessageType::HandshakeNoiseHello1, preset_sid, &msg1, peer)
+                .await?;
+            let backoff = Duration::from_millis(HANDSHAKE_RETRY_BASE_MS << attempt.min(4));
+            match timeout(backoff, self.transport.recv(&mut buf)).await {
+                Ok(Ok((n, from))) if from == peer => {
+                    if let Ok(view) = PacketView::decode(&buf[..n]) {
+                        if view.header().msg_type == MessageType::HandshakeNoiseHello2.code() {
+                            let payload = hs
+                                .read(view.payload())
+                                .map_err(|_| TransportError::Handshake("noise msg2 invalid"))?;
+                            if let Ok(h) = NoiseHello2::decode(&payload) {
+                                break h;
+                            }
+                        }
+                    }
+                    attempt += 1;
+                }
+                Ok(Ok(_)) => attempt += 1,
+                Ok(Err(e)) => return Err(e),
+                Err(_) => attempt += 1,
             }
         };
 
-        // Fijar peer antes de proceder — desde aquí todo el tráfico va a esa dirección.
-        *self.peer.lock().await = Some(peer);
-
-        // El resto del handshake es idéntico a handshake_server pero usando el
-        // `peer` descubierto en lugar del parámetro estático.
-        let client_ver = client_hello.protocol_version;
-        if client_ver < PROTOCOL_VERSION_MIN {
+        if hello2.protocol_version < PROTOCOL_VERSION_MIN {
+            return Err(TransportError::Handshake("noise version too old"));
+        }
+        if !self
+            .config
+            .supported_codecs
+            .contains(&hello2.codec_accepted)
+        {
             return Err(TransportError::Handshake(
-                "version negotiation failed: client version too old",
+                "server selected unsupported codec",
             ));
         }
-        let negotiated_version = client_ver.min(PROTOCOL_VERSION_MAX);
+        let session_id = hello2.session_id;
+        if preset_sid != 0 && session_id != preset_sid {
+            return Err(TransportError::Handshake(
+                "server replied with a different session_id than preset",
+            ));
+        }
 
-        let server_secret = EphemeralSecret::random_from_rng(rand_core::OsRng);
-        let server_pubkey = PublicKey::from(&server_secret);
-        let server_nonce = random_nonce_32();
+        let hash = hs
+            .handshake_hash()
+            .map_err(|_| TransportError::Handshake("noise handshake incomplete"))?;
+        let transcript = build_transcript(&client_nonce, &hello2.server_nonce, session_id);
+        let (enc_key, dec_key) = derive_session_keys(&hash, &transcript);
+
+        self.session_id.store(session_id, Ordering::Release);
+        self.negotiated_codec
+            .store(hello2.codec_accepted, Ordering::Release);
+        let ssrc =
+            session_id ^ u32::from_be_bytes([enc_key[0], enc_key[1], enc_key[2], enc_key[3]]);
+        self.local_ssrc.store(ssrc, Ordering::Release);
+
+        // Confirmación mutua con auth tags derivados de las claves Noise.
+        let client_tag = derive_auth_tag(&enc_key, b"GS-client-fin-v2", &transcript);
+        let ke = KeyExchangeMsg {
+            session_id,
+            auth_tag: client_tag,
+        };
+        let mut ke_payload = [0u8; KeyExchangeMsg::SIZE];
+        ke.encode(&mut ke_payload)
+            .map_err(TransportError::Protocol)?;
+        self.send_control(
+            MessageType::HandshakeKeyExchange,
+            session_id,
+            &ke_payload,
+            peer,
+        )
+        .await?;
+
+        let confirm = self
+            .recv_session_confirm(peer, &mut buf, session_id)
+            .await?;
+        let expected = derive_auth_tag(&dec_key, b"GS-server-fin-v2", &transcript);
+        if !constant_time_eq(&confirm.server_auth_tag, &expected) {
+            return Err(TransportError::AuthenticationFailed(
+                "server auth tag mismatch (noise)",
+            ));
+        }
+        *self.encrypt_key.lock().await = Some(enc_key);
+        *self.decrypt_key.lock().await = Some(dec_key);
+        Ok(())
+    }
+
+    /// Stub cuando la feature `noise` no está compilada.
+    #[cfg(not(feature = "noise"))]
+    async fn handshake_noise_client(&self, _peer: SocketAddr) -> Result<(), TransportError> {
+        Err(TransportError::Handshake(
+            "compiled without `noise` feature",
+        ))
+    }
+
+    /// Handshake Noise como servidor (tras leer `NoiseHello1`).
+    #[cfg(feature = "noise")]
+    async fn handshake_noise_server_after_hello1(
+        &self,
+        peer: SocketAddr,
+        msg1: Vec<u8>,
+    ) -> Result<(), TransportError> {
+        let psk = self.room_psk();
+        let mut hs = NoiseHandshake::new_responder(psk.as_ref())
+            .map_err(|_| TransportError::Handshake("noise responder init failed"))?;
+        let payload1 = hs
+            .read(&msg1)
+            .map_err(|_| TransportError::Handshake("noise msg1 invalid"))?;
+        let hello1 = NoiseHello1::decode(&payload1).map_err(TransportError::Protocol)?;
+        if hello1.protocol_version < PROTOCOL_VERSION_MIN {
+            return Err(TransportError::Handshake("noise version too old"));
+        }
+
         let session_id = self.resolved_session_id();
         self.session_id.store(session_id, Ordering::Release);
-
         let chosen_codec = if self
             .config
             .supported_codecs
-            .contains(&client_hello.codec_preferred)
+            .contains(&hello1.codec_preferred)
         {
-            client_hello.codec_preferred
+            hello1.codec_preferred
         } else {
             *self
                 .config
@@ -857,36 +1134,25 @@ impl Session {
         };
         self.negotiated_codec.store(chosen_codec, Ordering::Release);
 
-        let server_hello = ServerHello {
-            ephemeral_public_key: *server_pubkey.as_bytes(),
-            server_nonce,
+        let server_nonce = random_nonce_32();
+        let hello2 = NoiseHello2 {
             session_id,
-            protocol_version: negotiated_version,
+            protocol_version: hello1.protocol_version.min(PROTOCOL_VERSION_MAX),
             codec_accepted: chosen_codec,
-            sample_rate: client_hello.sample_rate,
-            channels: client_hello.channels,
-            frame_duration_ms: client_hello.frame_duration_ms,
-            max_bitrate: client_hello.max_bitrate.min(self.config.max_bitrate),
-            capability_flags: client_hello.capability_flags & self.config.capability_flags,
+            sample_rate: hello1.sample_rate,
+            channels: hello1.channels,
+            frame_duration_ms: hello1.frame_duration_ms,
+            max_bitrate: hello1.max_bitrate.min(self.config.max_bitrate),
+            capability_flags: hello1.capability_flags & self.config.capability_flags,
+            server_nonce,
         };
-        let mut sh_payload = [0u8; ServerHello::SIZE];
-        server_hello
-            .encode(&mut sh_payload)
-            .map_err(TransportError::Protocol)?;
-        self.send_control(
-            MessageType::HandshakeServerHello,
-            session_id,
-            &sh_payload,
-            peer,
-        )
-        .await?;
+        let mut p2 = [0u8; NoiseHello2::SIZE];
+        hello2.encode(&mut p2).map_err(TransportError::Protocol)?;
+        let msg2 = hs
+            .write(&p2)
+            .map_err(|_| TransportError::Handshake("noise write msg2 failed"))?;
 
-        let client_pubkey = PublicKey::from(client_hello.ephemeral_public_key);
-        let shared = server_secret.diffie_hellman(&client_pubkey);
-        let transcript = build_transcript(&client_hello.client_nonce, &server_nonce, session_id);
-        let (client_enc, client_dec) = derive_session_keys(shared.as_bytes(), &transcript);
-        let (enc_key, dec_key) = (client_dec, client_enc);
-
+        let mut buf = vec![0u8; self.config.mtu];
         let ke_msg: KeyExchangeMsg = loop {
             if self.closed.load(Ordering::Acquire) {
                 return Err(TransportError::PeerClosed("session closed"));
@@ -904,14 +1170,10 @@ impl Session {
                 Ok(v) => v,
                 Err(_) => continue,
             };
-            if view.header().msg_type == MessageType::HandshakeClientHello.code() {
-                self.send_control(
-                    MessageType::HandshakeServerHello,
-                    session_id,
-                    &sh_payload,
-                    peer,
-                )
-                .await?;
+            if view.header().msg_type == MessageType::HandshakeNoiseHello1.code() {
+                // msg2 se perdió: reenviar el mismo (el estado Noise ya avanzó).
+                self.send_control(MessageType::HandshakeNoiseHello2, session_id, &msg2, peer)
+                    .await?;
                 continue;
             }
             if view.header().msg_type != MessageType::HandshakeKeyExchange.code() {
@@ -929,14 +1191,21 @@ impl Session {
             ));
         }
 
-        let expected_client_tag = derive_auth_tag(&dec_key, b"GS-client-fin-v1", &transcript);
+        let hash = hs
+            .handshake_hash()
+            .map_err(|_| TransportError::Handshake("noise handshake incomplete"))?;
+        let transcript = build_transcript(&hello1.client_nonce, &server_nonce, session_id);
+        let (client_enc, client_dec) = derive_session_keys(&hash, &transcript);
+        let (enc_key, dec_key) = (client_dec, client_enc);
+
+        let expected_client_tag = derive_auth_tag(&dec_key, b"GS-client-fin-v2", &transcript);
         if !constant_time_eq(&ke_msg.auth_tag, &expected_client_tag) {
             return Err(TransportError::AuthenticationFailed(
-                "client auth tag mismatch",
+                "client auth tag mismatch (noise)",
             ));
         }
 
-        let server_auth_tag = derive_auth_tag(&enc_key, b"GS-server-fin-v1", &transcript);
+        let server_auth_tag = derive_auth_tag(&enc_key, b"GS-server-fin-v2", &transcript);
         let confirm = SessionConfirm {
             session_id,
             server_auth_tag,
@@ -956,6 +1225,44 @@ impl Session {
         *self.encrypt_key.lock().await = Some(enc_key);
         *self.decrypt_key.lock().await = Some(dec_key);
         Ok(())
+    }
+
+    /// Stub cuando la feature `noise` no está compilada.
+    #[cfg(not(feature = "noise"))]
+    async fn handshake_noise_server_after_hello1(
+        &self,
+        _peer: SocketAddr,
+        _msg1: Vec<u8>,
+    ) -> Result<(), TransportError> {
+        Err(TransportError::Handshake(
+            "compiled without `noise` feature",
+        ))
+    }
+
+    // ── Handshake servidor abierto (acepta cualquier cliente) ───────────────
+
+    /// Igual que `handshake_server` pero acepta el primer mensaje válido
+    /// (Noise o `ClientHello`) de cualquier dirección. Fija `self.peer`.
+    async fn handshake_server_any(&self) -> Result<(), TransportError> {
+        let allow_noise = cfg!(feature = "noise")
+            && matches!(
+                self.handshake_mode(),
+                HandshakeMode::Auto | HandshakeMode::Noise
+            );
+        let allow_legacy = !matches!(self.handshake_mode(), HandshakeMode::Noise);
+        let (first, peer) = self
+            .wait_first_handshake_packet(None, allow_noise, allow_legacy)
+            .await?;
+
+        // Fijar peer antes de proceder — desde aquí todo el tráfico va a esa dirección.
+        *self.peer.lock().await = Some(peer);
+
+        match first {
+            FirstHandshake::Noise(msg1) => {
+                self.handshake_noise_server_after_hello1(peer, msg1).await
+            }
+            FirstHandshake::Legacy(hello) => self.handshake_server_after_hello(peer, hello).await,
+        }
     }
 
     // ── Audio send/recv ─────────────────────────────────────────────────────
