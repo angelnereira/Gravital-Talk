@@ -5,7 +5,9 @@
 //! flips, payloads malformados) sin requerir toolchain nightly.
 
 use gravital_talk_core::constants::{HEADER_SIZE, MAX_FRAGMENTS};
-use gravital_talk_core::fragment::{FragmentHeader, FragmentReassembler};
+use gravital_talk_core::fragment::FragmentHeader;
+#[cfg(feature = "alloc")]
+use gravital_talk_core::fragment::FragmentReassembler;
 use gravital_talk_core::header::{Flags, PacketHeader};
 use gravital_talk_core::packet::{PacketBuilder, PacketView};
 use proptest::prelude::*;
@@ -150,6 +152,7 @@ proptest! {
 
 // ── 5. FragmentReassembler — nunca hace panic con entradas arbitrarias ────────
 
+#[cfg(feature = "alloc")]
 proptest! {
     /// El reassembler no debe hacer panic al recibir secuencias arbitrarias de
     /// fragmentos, incluyendo índices inválidos o duplicados.

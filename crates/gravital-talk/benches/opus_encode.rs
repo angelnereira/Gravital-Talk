@@ -10,7 +10,7 @@ fn bench_pcm_encode(c: &mut Criterion) {
     let frame_ms = 10u8;
     let (mut enc, _dec) =
         build_codec_pair(CodecId::Pcm, sample_rate, channels, frame_ms).expect("build pcm pair");
-    let samples: Vec<i16> = (0..480).map(|i| (i as i16 * 100) % i16::MAX).collect();
+    let samples: Vec<i16> = (0..480).map(|i| (i as i16).wrapping_mul(100)).collect();
     let mut out = vec![0u8; 4096];
 
     c.bench_function("pcm_encode_480samples", |b| {
@@ -26,7 +26,7 @@ fn bench_pcm_decode(c: &mut Criterion) {
     let frame_ms = 10u8;
     let (mut enc, mut dec) =
         build_codec_pair(CodecId::Pcm, sample_rate, channels, frame_ms).expect("build pcm pair");
-    let samples: Vec<i16> = (0..480).map(|i| (i as i16 * 100) % i16::MAX).collect();
+    let samples: Vec<i16> = (0..480).map(|i| (i as i16).wrapping_mul(100)).collect();
     let mut encoded = vec![0u8; 4096];
     let n = enc.encode(&samples, &mut encoded).unwrap();
     let encoded = &encoded[..n];

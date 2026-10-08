@@ -1,0 +1,89 @@
+# Hoja de ruta Gravital Talk
+
+Versiones objetivo con criterios de salida por hito. La serie `0.x` mantiene
+compatibilidad del wire protocol v1 (los cambios de contrato se negocian, no
+se rompen).
+
+## Visión por versiones
+
+| Versión | Tema | Qué entrega | Criterios de salida |
+|---|---|---|---|
+| 0.2.0-alpha.3 | Actual (hecho) | P₂P + STUN + Android + CLI | README/CHANGELOG 2026-05-10 |
+| 0.3.0-alpha.1 | **Modo servidor real + Flutter + Contratos** | Sala enrutada por relay (session_id compartido), app multiplataforma, protos gRPC | Ver hitos abajo |
+| 0.3.0 | Seguridad de producción | Noise Protocol, anti-replay, rate limiting, relay con TLS, auditoría interna | Tests de seguridad en CI |
+| 0.3.1 | Plano de control gRPC | tonic + ServerControl, clientes Dart/Go | Interop REST↔gRPC en CI |
+| 0.4.0 | Distribución | publicar crates.io / PyPI / npm, SDK Swift, SDK Node, landing | Publicaciones verificadas |
+| 1.0.0 | Estable | Congelar wire protocol v1.x, SemVer, auditoría externa, fuzz permanente | - |
+
+## Hito 0.3.0-alpha.1 — en curso
+
+### Modo servidor (sala) ✅ hecho
+- [x] `Session::set_preset_session_id` — handshake con `session_id` compartido.
+- [x] Relay enruta el handshake (el servidor se registra con Heartbeat).
+- [x] Test e2e `relay_routed_session` (handshake + audio cifrado vía relay).
+- [x] CLI `gs ptt --relay --room [--listen]` resuelve y pre-fija la sala.
+- [x] CLI headless: `--no-audio --headless --duration` (contenedores/CI) con
+      resumen de frames y métricas (rtt/jitter/loss/MOS).
+- [x] FFI `gs_session_set_session_id` (ABI C v1, compatible hacia atrás).
+
+### App Flutter multiplataforma ✅ hecho (scaffold completo)
+- [x] `app/` (android, ios, linux, macos, windows, web).
+- [x] Screens: inicio, configuración servidor (crear/unirse sala + QR),
+      configuración P2P (host/join), sesión en vivo (PTT + métricas),
+      ajustes (audio/códec/tema/diagnóstico), acerca de.
+- [x] Motor FFI real (`dart:ffi` → `libgravital_talk_ffi.so`) con fallback
+      demo (UI funcional sin librería nativa); handshake bloqueante en isolate.
+- [ ] Audio pipeline real (mic → PCM → `gs_session_send_audio`) — plugin
+      `record` (PCM16) + playback; hoy el VU meter es demo.
+- [ ] Empaquetado nativo por plataforma (cargo-ndk → jniLibs, podspec iOS).
+
+### Contratos (gRPC candidato) ✅ hecho
+- [x] `proto/gravital/v1/server_control.proto`, `pairing.proto`.
+- [x] Evaluación `docs/grpc-evaluation.md` (control sí, media no).
+
+### Docker ✅ hecho
+- [x] `docker/Dockerfile` (relay + cli), `Dockerfile.dev` (tests/bench),
+      `Dockerfile.fuzz` (cargo-fuzz nightly).
+- [x] `compose.yaml` perfiles: e2e, test, bench, perf (netem), security, obs.
+- [x] `make docker-*` targets + scripts de salas compartidas.
+
+## Hito 0.3.0 — Seguridad de producción
+
+- [ ] **Noise Protocol** (NK/XX) sustituyendo el handshake custom
+      (mantener transcript binding y auth tags; no romper wire v1).
+- [ ] **Anti-replay**: ventana autenticada por sesión (estado en core).
+- [ ] **Rate limiting** en relay (token bucket por peer/sala, en Rust).
+- [ ] **Auth en relay**: token de sala opcional, metadatos en `Room`.
+- [ ] TLS/WSS para el bridge WebSocket; HTTPS para observabilidad.
+- [ ] Pruebas de seguridad: `make docker-fuzz`, estrés, fuzz en CI.
+
+## Hito 0.3.1 — Plano de control gRPC
+
+- [ ] `tonic` en relay con feature `grpc` (server en `:50051`).
+- [ ] `tonic-build` en CI valida que los protos compilan.
+- [ ] Clientes: Dart (`grpc-dart`) con fallback REST; CLI con feature `grpc`.
+- [ ] `WatchRoom` streaming (eventos de sala) + dashboard.
+
+## Hito 0.4.0 — Distribución
+
+- [ ] Publicar `gravital-talk*` en crates.io (requiere fijar versión
+      del workspace: hoy `Cargo.toml` dice 0.1.0-alpha.1 vs docs 0.2.0-alpha.3).
+- [ ] PyPI (`maturin`), npm (`wasm-pack`).
+- [ ] SDK Swift (Kotlin Multiplatform o FFI iOS) y Node.js (N-API).
+- [ ] Landing `gravitaltalk.dev` + docs hosted.
+
+## Hito 1.0.0 — Estable
+
+- [ ] Congelar wire protocol v1; `PROTOCOL_VERSION_MAX` bloqueado.
+- [ ] Auditoría de seguridad externa.
+- [ ] Fuzzing + benchmarks como gates de CI permanentes.
+- [ ] Baseline de rendimiento publicado (criterion + docker bench).
+
+## Deuda técnica conocida (fuera de hitos)
+
+- Versión del workspace desalineada (`Cargo.toml` 0.1.0-alpha.1).
+- `outputs/windows` y `outputs/macos` sin artefactos (CI pendiente).
+- iOS sin SDK/App (roadmap 0.4).
+- Docs mencionan `io-uring`/`tokio-uring` sin implementación (a futuro).
+- SIMD CRC (`simd-crc`) existe pero no es el camino por default.
+- Fuzz targets no corren en CI (migrar a `make docker-fuzz`).

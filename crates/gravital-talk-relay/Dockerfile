@@ -2,7 +2,7 @@
 # Imagen multi-stage para minimizar tamaño final.
 
 # ---------- Stage 1: build ----------
-FROM rust:1.78-slim-bookworm AS builder
+FROM rust:1.99-slim-bookworm AS builder
 WORKDIR /build
 
 # Cache de dependencias: copiar manifests primero.

@@ -11,7 +11,7 @@ fn r_to_mos(r: f32) -> f32 {
     } else if r > 100.0 {
         4.5
     } else {
-        1.0 + 0.035 * r + r * (r - 60.0) * (100.0 - r) * 7.0e-6
+        (r * (r - 60.0) * (100.0 - r)).mul_add(7.0e-6, 0.035f32.mul_add(r, 1.0))
     }
 }
 
@@ -24,18 +24,18 @@ pub fn estimate_mos(rtt_ms: f32, loss_percent: f32, jitter_ms: f32) -> f32 {
     // Penalización por latencia (Id en G.107). One-way delay ≈ RTT/2.
     let one_way = rtt_ms / 2.0;
     if one_way > 160.0 {
-        r -= 0.024 * one_way + 0.11 * (one_way - 177.3);
+        r -= 0.11f32.mul_add(one_way - 177.3, 0.024 * one_way);
     } else {
-        r -= 0.024 * one_way;
+        r = 0.024f32.mul_add(-one_way, r);
     }
 
     // Penalización por pérdida (Ie-eff simplificado).
     // Opus es robusto: caída de ~0.5 MOS por 5% pérdida.
-    r -= loss_percent * 2.5;
+    r = loss_percent.mul_add(-2.5, r);
 
     // Penalización por jitter (no está en G.107; aproximamos).
     if jitter_ms > 30.0 {
-        r -= (jitter_ms - 30.0) * 0.5;
+        r = (jitter_ms - 30.0).mul_add(-0.5, r);
     }
 
     r_to_mos(r).clamp(1.0, 5.0)

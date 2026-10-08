@@ -91,3 +91,39 @@ clean: ## Limpia artefactos de build
 .PHONY: doc
 doc: ## Genera la documentación rustdoc
 	$(CARGO) doc $(WORKSPACE_FLAGS) --no-deps --open
+
+# ── Docker ────────────────────────────────────────────────────────────────
+# Stack completo en `compose.yaml` (relay, e2e, tests, bench, perf, fuzz, obs).
+
+.PHONY: docker-build
+docker-build: ## Construye las imágenes (relay + cli)
+	docker compose build
+
+.PHONY: docker-e2e
+docker-e2e: ## E2E multi-contenedor: relay + host y join headless con verificación
+	docker compose --profile e2e up --build --abort-on-container-exit --exit-code-from room-join
+
+.PHONY: docker-test
+docker-test: ## Suite de tests completa en contenedor
+	docker compose --profile test run --rm tester
+
+.PHONY: docker-bench
+docker-bench: ## Benchmarks criterion en contenedor (resultados en target/criterion)
+	docker compose --profile bench run --rm bench
+
+.PHONY: docker-perf
+docker-perf: ## Rendimiento bajo red simulada (tc netem: delay/jitter/pérdida)
+	docker compose --profile perf up --build --abort-on-container-exit --exit-code-from netem-join
+
+.PHONY: docker-fuzz
+docker-fuzz: ## Smoke de fuzzing acotado (FUZZ_SECONDS=60 por target)
+	docker compose --profile security build fuzz
+	docker compose --profile security run --rm fuzz
+
+.PHONY: docker-obs
+docker-obs: ## Prometheus + Grafana contra el relay (relay:9100)
+	docker compose --profile observability up -d prometheus grafana
+
+.PHONY: docker-down
+docker-down: ## Detiene el stack y limpia volúmenes (room codes, caché)
+	docker compose --profile e2e --profile test --profile bench --profile perf --profile security --profile observability down -v

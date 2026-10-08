@@ -1,7 +1,7 @@
 //! Constantes del protocolo.
 
 /// Magic bytes `"GS"` en ASCII, big-endian.
-pub const MAGIC_BYTES: [u8; 2] = [b'G', b'S'];
+pub const MAGIC_BYTES: [u8; 2] = *b"GS";
 
 /// Versión del protocolo implementada.
 pub const PROTOCOL_VERSION: u8 = 0x01;

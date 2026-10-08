@@ -22,8 +22,8 @@ use std::ptr;
 use std::sync::Arc;
 
 use gravital_talk::{
-    Config as RustConfig, LatencyClass, MetricsSnapshot, Session, SessionRole, SessionState,
-    TransportError, UdpConfig, UdpTransport, discover_public_addr,
+    discover_public_addr, Config as RustConfig, LatencyClass, MetricsSnapshot, Session,
+    SessionRole, SessionState, TransportError, UdpConfig, UdpTransport,
 };
 
 thread_local! {
@@ -176,7 +176,7 @@ pub extern "C" fn gs_protocol_version() -> u32 {
 
 /// Versión del ABI C.
 #[no_mangle]
-pub extern "C" fn gs_abi_version() -> u32 {
+pub const extern "C" fn gs_abi_version() -> u32 {
     GS_ABI_VERSION
 }
 
@@ -440,6 +440,25 @@ pub unsafe extern "C" fn gs_session_id(handle: *mut GsSessionHandle, out_id: *mu
     GsStatus::GS_OK
 }
 
+/// Fija el `session_id` a usar durante el handshake.
+///
+/// Es lo que habilita el **modo servidor/relay por sala**: todas las partes
+/// comparten el mismo id para que el relay pueda enrutar los paquetes del
+/// handshake. Debe llamarse **antes** de `gs_session_connect` /
+/// `gs_session_accept`. Un valor `0` restaura el modo P2P (id aleatorio).
+#[no_mangle]
+pub unsafe extern "C" fn gs_session_set_session_id(
+    handle: *mut GsSessionHandle,
+    session_id: u32,
+) -> GsStatus {
+    if handle.is_null() {
+        return GsStatus::GS_ERR_NULL_POINTER;
+    }
+    let inner = unsafe { &*(handle as *mut SessionInner) };
+    inner.session.set_preset_session_id(session_id);
+    GsStatus::GS_OK
+}
+
 /// Rellena `out` con un snapshot atómico de métricas.
 #[no_mangle]
 pub unsafe extern "C" fn gs_session_metrics(
@@ -480,7 +499,10 @@ pub unsafe extern "C" fn gs_session_ptt_press(handle: *mut GsSessionHandle) -> G
     }
     let inner = unsafe { &*(handle as *mut SessionInner) };
     let session = inner.session.clone();
-    match inner.runtime.block_on(async move { session.ptt_press().await }) {
+    match inner
+        .runtime
+        .block_on(async move { session.ptt_press().await })
+    {
         Ok(()) => GsStatus::GS_OK,
         Err(e) => {
             set_last_error(format!("ptt_press: {e}"));
@@ -497,7 +519,10 @@ pub unsafe extern "C" fn gs_session_ptt_release(handle: *mut GsSessionHandle) ->
     }
     let inner = unsafe { &*(handle as *mut SessionInner) };
     let session = inner.session.clone();
-    match inner.runtime.block_on(async move { session.ptt_release().await }) {
+    match inner
+        .runtime
+        .block_on(async move { session.ptt_release().await })
+    {
         Ok(()) => GsStatus::GS_OK,
         Err(e) => {
             set_last_error(format!("ptt_release: {e}"));
@@ -513,12 +538,19 @@ pub unsafe extern "C" fn gs_session_is_peer_ptt_active(handle: *mut GsSessionHan
         return 0;
     }
     let inner = unsafe { &*(handle as *mut SessionInner) };
-    if inner.session.is_peer_ptt_active() { 1 } else { 0 }
+    if inner.session.is_peer_ptt_active() {
+        1
+    } else {
+        0
+    }
 }
 
 /// Devuelve el `local_ssrc` de la sesión.
 #[no_mangle]
-pub unsafe extern "C" fn gs_session_local_ssrc(handle: *mut GsSessionHandle, out_ssrc: *mut u32) -> GsStatus {
+pub unsafe extern "C" fn gs_session_local_ssrc(
+    handle: *mut GsSessionHandle,
+    out_ssrc: *mut u32,
+) -> GsStatus {
     if handle.is_null() || out_ssrc.is_null() {
         return GsStatus::GS_ERR_NULL_POINTER;
     }
@@ -588,7 +620,11 @@ pub unsafe extern "C" fn gs_discover_public_addr(
                 return GsStatus::GS_ERR_BUFFER_TOO_SMALL;
             }
             unsafe {
-                std::ptr::copy_nonoverlapping(bytes.as_ptr() as *const c_char, out_buf, bytes.len());
+                std::ptr::copy_nonoverlapping(
+                    bytes.as_ptr() as *const c_char,
+                    out_buf,
+                    bytes.len(),
+                );
                 *out_buf.add(bytes.len()) = 0;
             }
             GsStatus::GS_OK
@@ -614,7 +650,10 @@ pub unsafe extern "C" fn gs_session_accept_any(handle: *mut GsSessionHandle) -> 
     }
     let inner = unsafe { &*(handle as *mut SessionInner) };
     let session = inner.session.clone();
-    match inner.runtime.block_on(async move { session.handshake_open().await }) {
+    match inner
+        .runtime
+        .block_on(async move { session.handshake_open().await })
+    {
         Ok(()) => GsStatus::GS_OK,
         Err(TransportError::PeerClosed(_) | TransportError::Closed) => GsStatus::GS_ERR_CLOSED,
         Err(e) => {
@@ -626,7 +665,7 @@ pub unsafe extern "C" fn gs_session_accept_any(handle: *mut GsSessionHandle) -> 
 
 /// Retorna `GS_OK` — útil como smoke test de linkado.
 #[no_mangle]
-pub extern "C" fn gs_ping() -> c_int {
+pub const extern "C" fn gs_ping() -> c_int {
     0
 }
 

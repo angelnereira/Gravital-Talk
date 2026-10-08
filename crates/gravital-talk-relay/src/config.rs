@@ -36,13 +36,13 @@ fn default_ws() -> SocketAddr {
 fn default_obs() -> SocketAddr {
     "0.0.0.0:9100".parse().unwrap()
 }
-fn default_ttl() -> u64 {
+const fn default_ttl() -> u64 {
     300
 }
-fn default_max_sessions() -> usize {
+const fn default_max_sessions() -> usize {
     10_000
 }
-fn default_max_peers() -> usize {
+const fn default_max_peers() -> usize {
     50
 }
 

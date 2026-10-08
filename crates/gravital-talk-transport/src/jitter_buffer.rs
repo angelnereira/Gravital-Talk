@@ -33,7 +33,7 @@ struct Slot {
 }
 
 impl Slot {
-    fn empty() -> Self {
+    const fn empty() -> Self {
         Self {
             occupied: AtomicBool::new(false),
             sequence: AtomicU32::new(0),

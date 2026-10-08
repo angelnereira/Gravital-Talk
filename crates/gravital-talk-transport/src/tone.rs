@@ -73,7 +73,9 @@ mod tests {
         let bytes = pcm_to_bytes(&samples);
         assert_eq!(bytes.len(), samples.len() * 2);
         let decoded: Vec<i16> = bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| i16::from_le_bytes([c[0], c[1]]))
             .collect();
         assert_eq!(decoded, samples);
@@ -94,7 +96,7 @@ mod tests {
     fn tone_amplitude_in_range() {
         let samples = generate_pcm_tone(440.0, 10, 48_000);
         for s in samples {
-            assert!(s >= -20_001 && s <= 20_001);
+            assert!((-20_001..=20_001).contains(&s));
         }
     }
 }

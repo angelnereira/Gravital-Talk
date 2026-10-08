@@ -49,7 +49,7 @@ impl AudioPlayback {
             .expect("spawn pump thread");
 
         let err_fn = |e| tracing::error!(%e, "cpal output stream error");
-        let buf_for_cb = buffer.clone();
+        let buf_for_cb = buffer;
 
         let stream = match sample_format {
             SampleFormat::F32 => device.build_output_stream(
@@ -128,7 +128,6 @@ fn pull_u16(data: &mut [u16], buffer: &Mutex<VecDeque<i16>>) {
         Err(p) => p.into_inner(),
     };
     for slot in data.iter_mut() {
-        let s = guard.pop_front().unwrap_or(0);
-        *slot = (s as i32 + 0x8000) as u16;
+        *slot = (i32::from(guard.pop_front().unwrap_or(0)) + 0x8000) as u16;
     }
 }

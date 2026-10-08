@@ -129,7 +129,7 @@ impl SessionStateMachine {
 
     /// Aplica un evento. Si la transición es inválida, el estado no cambia
     /// y se devuelve `Err`.
-    pub fn transition(
+    pub const fn transition(
         &mut self,
         event: SessionEvent,
     ) -> Result<SessionState, StateTransitionError> {
@@ -193,14 +193,22 @@ impl SessionStateMachine {
 /// impl Session<phantom::Idle>   { pub fn connect(...) -> Session<phantom::Handshaking> {...} }
 /// ```
 pub mod phantom {
-    #[derive(Debug)] pub struct Idle;
-    #[derive(Debug)] pub struct Handshaking;
-    #[derive(Debug)] pub struct Active;
-    #[derive(Debug)] pub struct Paused;
-    #[derive(Debug)] pub struct Closing;
-    #[derive(Debug)] pub struct Closed;
-    #[derive(Debug)] pub struct Error;
-    #[derive(Debug)] pub struct Reconnecting;
+    #[derive(Debug)]
+    pub struct Idle;
+    #[derive(Debug)]
+    pub struct Handshaking;
+    #[derive(Debug)]
+    pub struct Active;
+    #[derive(Debug)]
+    pub struct Paused;
+    #[derive(Debug)]
+    pub struct Closing;
+    #[derive(Debug)]
+    pub struct Closed;
+    #[derive(Debug)]
+    pub struct Error;
+    #[derive(Debug)]
+    pub struct Reconnecting;
 }
 
 #[cfg(test)]

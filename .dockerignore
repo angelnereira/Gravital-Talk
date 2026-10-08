@@ -1,0 +1,14 @@
+# Excluye del contexto de build lo que no necesita el compilador Rust.
+.git
+.github
+target
+outputs
+android
+app
+sdks
+infra
+docs
+fuzz
+scripts
+*.md
+!crates/**/*.md

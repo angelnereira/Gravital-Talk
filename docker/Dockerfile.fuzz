@@ -1,0 +1,22 @@
+# syntax=docker/dockerfile:1.7
+# ─────────────────────────────────────────────────────────────────────
+# Gravital Talk — imagen de fuzzing (nightly + cargo-fuzz).
+#
+# El repositorio se monta en /src en tiempo de ejecución y se ejecuta
+# `docker/fuzz.sh` sobre los targets de `fuzz/`.
+
+FROM rust:1.99-slim-bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        pkg-config libopus-dev libasound2-dev clang \
+    && rm -rf /var/lib/apt/lists/* \
+    && rustup toolchain install nightly --profile minimal \
+    && cargo install cargo-fuzz --locked
+
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+RUN cargo fetch
+
+ENV FUZZ_SECONDS=60
+ENTRYPOINT ["bash", "/src/docker/scripts/fuzz.sh"]

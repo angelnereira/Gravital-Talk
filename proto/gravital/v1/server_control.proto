@@ -1,0 +1,145 @@
+syntax = "proto3";
+
+package gravital.v1;
+
+option go_package = "gravital.dev/gravital/v1;gravitalv1";
+option java_package = "dev.gravitaltalk.v1";
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+// ─────────────────────────────────────────────────────────────────────────
+// Plano de control del servidor (relay) — candidato gRPC.
+//
+// Hoy el relay expone esta superficie como HTTP REST plano en el puerto de
+// observabilidad (9100). Este contrato formaliza el servicio para:
+//   1. Reemplazar/quedar al lado del REST (tonic + tonic-web).
+//   2. Permitir clientes en cualquier lenguaje (CLI, Flutter, TS).
+//   3. Servir de base para el dashboard administrativo y el rate limiting.
+//
+// El plano de audio NO usa gRPC: sigue siendo UDP/WebSocket binario
+// (ver docs/grpc-evaluation.md).
+// ─────────────────────────────────────────────────────────────────────────
+
+// Estado y metadatos de una sala.
+message Room {
+  // Código legible comparte (XXXX-NNNN).
+  string code = 1;
+  // Id numérico de sesión: todos los peers de la sala lo comparten.
+  uint32 session_id = 2;
+  // Número de peers conectados.
+  int32 peer_count = 3;
+  // Timestamp de creación.
+  google.protobuf.Timestamp created_at = 4;
+}
+
+// Solicitud de creación de sala (host).
+message CreateRoomRequest {
+  // session_id que va a usar el host (debe ser > 0).
+  uint32 session_id = 1;
+  // Metadatos opcionales (nombre de sala, organización).
+  string display_name = 2;
+}
+
+message CreateRoomResponse {
+  Room room = 1;
+}
+
+// Resolución de un código legible a sala.
+message GetRoomRequest {
+  string code = 1;
+}
+
+message GetRoomResponse {
+  Room room = 1;
+}
+
+// Listado de salas activas.
+message ListRoomsRequest {}
+
+message ListRoomsResponse {
+  repeated Room rooms = 1;
+}
+
+message DeleteRoomRequest {
+  string code = 1;
+}
+
+message DeleteRoomResponse {
+  bool deleted = 1;
+}
+
+// Límites y capacidad del servidor.
+message ServerInfoRequest {}
+
+message ServerInfoResponse {
+  string version = 1;
+  uint32 protocol_version = 2;
+  int32 max_sessions = 3;
+  int32 max_peers_per_session = 4;
+  int64 active_sessions = 5;
+  int64 active_peers = 6;
+  string uptime_secs = 7;
+}
+
+// Snapshot de salud y métricas agregadas.
+message ServerHealthRequest {}
+
+message ServerHealthResponse {
+  string status = 1; // "ok" | "degraded"
+  uint64 packets_in = 2;
+  uint64 packets_out = 3;
+  uint64 bytes_in = 4;
+  uint64 bytes_out = 5;
+  uint64 dropped_invalid = 6;
+  int64 active_sessions = 7;
+}
+
+// Evento de sala para WatchRoom (streaming servidor).
+message RoomEvent {
+  enum EventType {
+    EVENT_UNSPECIFIED = 0;
+    PEER_JOINED = 1;
+    PEER_LEFT = 2;
+    FLOOR_GRANTED = 3;
+    FLOOR_RELEASED = 4;
+    ROOM_CLOSED = 5;
+  }
+  EventType type = 1;
+  string room_code = 2;
+  uint32 session_id = 3;
+  google.protobuf.Timestamp at = 4;
+  // Identificador del peer (SSRC o dirección) cuando aplica.
+  uint32 peer_ssrc = 5;
+}
+
+message WatchRoomRequest {
+  string room_code = 1;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Servicio de control del servidor.
+// ─────────────────────────────────────────────────────────────────────────
+
+service ServerControl {
+  // Información general del servidor (versión, límites, carga).
+  rpc GetServerInfo(ServerInfoRequest) returns (ServerInfoResponse);
+
+  // Health + métricas agregadas (equivalente a /healthz y /metrics).
+  rpc GetServerHealth(ServerHealthRequest) returns (ServerHealthResponse);
+
+  // Rerserva una sala nueva (host).
+  rpc CreateRoom(CreateRoomRequest) returns (CreateRoomResponse);
+
+  // Resuelve un código de sala.
+  rpc GetRoom(GetRoomRequest) returns (GetRoomResponse);
+
+  // Lista salas activas.
+  rpc ListRooms(ListRoomsRequest) returns (ListRoomsResponse);
+
+  // Elimina una sala (.eviction administrativa).
+  rpc DeleteRoom(DeleteRoomRequest) returns (DeleteRoomResponse);
+
+  // Stream de eventos de una sala (join/leave/floor).
+  rpc WatchRoom(WatchRoomRequest) returns (stream RoomEvent);
+}

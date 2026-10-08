@@ -34,10 +34,11 @@ pub use constants::{
 pub use crypto::{decrypt_in_place, encrypt_in_place, make_nonce, SessionKey, KEY_SIZE, TAG_SIZE};
 pub use error::Error;
 pub use floor::{
-    FloorController, FloorEvent, FloorPayload, FloorState, FloorTransitionError,
-    FLOOR_TIMEOUT_MS,
+    FloorController, FloorEvent, FloorPayload, FloorState, FloorTransitionError, FLOOR_TIMEOUT_MS,
 };
-pub use fragment::{FragmentHeader, FragmentReassembler};
+pub use fragment::FragmentHeader;
+#[cfg(feature = "alloc")]
+pub use fragment::FragmentReassembler;
 pub use header::{Flags, PacketHeader};
 pub use identity::{AuthChallengePayload, AuthResponsePayload, Identity, IdentityPublic};
 pub use message::{
@@ -46,7 +47,9 @@ pub use message::{
     SessionConfirm,
 };
 pub use packet::{Packet, PacketView};
-pub use session::{SessionEvent, SessionId, SessionState, SessionStateMachine, StateTransitionError};
+pub use session::{
+    SessionEvent, SessionId, SessionState, SessionStateMachine, StateTransitionError,
+};
 
 /// Resultado estándar del crate.
 pub type Result<T> = core::result::Result<T, Error>;

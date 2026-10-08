@@ -16,9 +16,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use gravital_talk::{
-    CodecId, CodecSession, Config, Session, SessionRole, Transport, UdpConfig, UdpTransport,
-};
+use gravital_talk::{CodecId, CodecSession, Config, Session, SessionRole, UdpConfig, UdpTransport};
 use gravital_talk_io::{AudioCapture, AudioPlayback, StreamConfig};
 use hound::{SampleFormat, WavSpec, WavWriter};
 use tracing_subscriber::EnvFilter;
@@ -43,11 +41,11 @@ enum CodecArg {
 }
 
 impl CodecArg {
-    fn to_codec_id(self) -> CodecId {
+    const fn to_codec_id(self) -> CodecId {
         match self {
-            CodecArg::Pcm => CodecId::Pcm,
+            Self::Pcm => CodecId::Pcm,
             #[cfg(feature = "opus")]
-            CodecArg::Opus => CodecId::Opus,
+            Self::Opus => CodecId::Opus,
         }
     }
 }
@@ -56,9 +54,9 @@ impl FromStr for CodecArg {
     type Err = String;
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
-            "pcm" => Ok(CodecArg::Pcm),
+            "pcm" => Ok(Self::Pcm),
             #[cfg(feature = "opus")]
-            "opus" => Ok(CodecArg::Opus),
+            "opus" => Ok(Self::Opus),
             other => Err(format!("unknown codec '{other}'")),
         }
     }
@@ -231,6 +229,17 @@ enum Command {
         /// Codec: pcm u opus.
         #[arg(long, default_value = "opus")]
         codec: CodecArg,
+        /// Sin hardware de audio: fuente senoidal interna y sin playback.
+        /// Pensado para contenedores, CI y pruebas de carga.
+        #[arg(long)]
+        no_audio: bool,
+        /// Sin UI de terminal: corre desacoplado (contenedores/CI), transmite
+        /// automáticamente y termina con `--duration` o SIGTERM.
+        #[arg(long)]
+        headless: bool,
+        /// Segundos a correr en modo headless (0 = indefinido).
+        #[arg(long, default_value_t = 0)]
+        duration: u64,
     },
 }
 
@@ -279,6 +288,9 @@ fn main() -> Result<()> {
     rt.block_on(async move { dispatch(cli.cmd).await })
 }
 
+// El futuro mantiene vivos `AudioCapture`/iteradores no-`Send` (cpal `Stream`)
+// a través de los `await`; `main` lo ejecuta con `block_on` y nunca lo spawnea.
+#[allow(clippy::future_not_send)]
 async fn dispatch(cmd: Command) -> Result<()> {
     match cmd {
         Command::Send {
@@ -342,7 +354,19 @@ async fn dispatch(cmd: Command) -> Result<()> {
             session_ttl,
             max_sessions,
             max_peers,
-        } => cmd_relay(config, bind, udp_port, ws_port, obs_port, session_ttl, max_sessions, max_peers).await,
+        } => {
+            cmd_relay(
+                config,
+                bind,
+                udp_port,
+                ws_port,
+                obs_port,
+                session_ttl,
+                max_sessions,
+                max_peers,
+            )
+            .await
+        }
         Command::Room { action } => cmd_room(action).await,
         Command::Discover { timeout } => cmd_discover(timeout).await,
         Command::Ptt {
@@ -357,6 +381,9 @@ async fn dispatch(cmd: Command) -> Result<()> {
             device,
             out_device,
             codec,
+            no_audio,
+            headless,
+            duration,
         } => {
             cmd_ptt(
                 relay,
@@ -370,12 +397,18 @@ async fn dispatch(cmd: Command) -> Result<()> {
                 device,
                 out_device.unwrap_or_else(|| "default".to_string()),
                 codec,
+                no_audio,
+                headless,
+                duration,
             )
             .await
         }
     }
 }
 
+// El futuro mantiene vivos `AudioCapture`/iteradores no-`Send` (cpal `Stream`)
+// a través de los `await`; `main` lo ejecuta con `block_on` y nunca lo spawnea.
+#[allow(clippy::future_not_send)]
 #[allow(clippy::too_many_arguments)]
 async fn cmd_send(
     host: String,
@@ -465,6 +498,9 @@ async fn cmd_send(
     Ok(())
 }
 
+// El futuro mantiene vivos `AudioCapture`/iteradores no-`Send` (cpal `Stream`)
+// a través de los `await`; `main` lo ejecuta con `block_on` y nunca lo spawnea.
+#[allow(clippy::future_not_send)]
 #[allow(clippy::too_many_arguments)]
 async fn cmd_receive(
     bind: String,
@@ -653,6 +689,7 @@ fn cmd_doctor() -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn cmd_relay(
     config_path: Option<PathBuf>,
     bind: String,
@@ -693,13 +730,22 @@ async fn cmd_relay(
     );
 
     let metrics = RelayMetrics::new();
-    let router = Arc::new(Router::new(cfg.max_sessions, cfg.max_peers_per_session, metrics));
+    let router = Arc::new(Router::new(
+        cfg.max_sessions,
+        cfg.max_peers_per_session,
+        metrics,
+    ));
 
-    let udp_socket = Arc::new(UdpSocket::bind(cfg.udp_bind).await
-        .with_context(|| format!("cannot bind UDP {}", cfg.udp_bind))?);
-    let ws_listener = TcpListener::bind(cfg.ws_bind).await
+    let udp_socket = Arc::new(
+        UdpSocket::bind(cfg.udp_bind)
+            .await
+            .with_context(|| format!("cannot bind UDP {}", cfg.udp_bind))?,
+    );
+    let ws_listener = TcpListener::bind(cfg.ws_bind)
+        .await
         .with_context(|| format!("cannot bind WS {}", cfg.ws_bind))?;
-    let obs_listener = TcpListener::bind(cfg.observability_bind).await
+    let obs_listener = TcpListener::bind(cfg.observability_bind)
+        .await
         .with_context(|| format!("cannot bind observability {}", cfg.observability_bind))?;
 
     println!(
@@ -745,12 +791,20 @@ async fn cmd_relay(
 
 async fn cmd_room(action: RoomAction) -> Result<()> {
     match action {
-        RoomAction::Create { relay, obs_port, session_id } => {
+        RoomAction::Create {
+            relay,
+            obs_port,
+            session_id,
+        } => {
             let body = format!(r#"{{"session_id":{session_id}}}"#);
             let resp = http_post(&relay, obs_port, "/api/rooms", &body).await?;
             println!("{resp}");
         }
-        RoomAction::Join { code, relay, obs_port } => {
+        RoomAction::Join {
+            code,
+            relay,
+            obs_port,
+        } => {
             let path = format!("/api/rooms/{code}");
             let resp = http_get(&relay, obs_port, &path).await?;
             println!("{resp}");
@@ -772,7 +826,10 @@ async fn cmd_discover(timeout_s: u64) -> Result<()> {
         Ok(peers) => {
             println!("Found {} peer(s):", peers.len());
             for p in peers {
-                println!("  {} — session_id={} — \"{}\"", p.addr, p.session_id, p.name);
+                println!(
+                    "  {} — session_id={} — \"{}\"",
+                    p.addr, p.session_id, p.name
+                );
             }
         }
         Err(e) => println!("Discovery error: {e}"),
@@ -782,11 +839,9 @@ async fn cmd_discover(timeout_s: u64) -> Result<()> {
 
 /// Minimal HTTP GET using tokio TcpStream.
 async fn http_get(host: &str, port: u16, path: &str) -> Result<String> {
-    let addr: SocketAddr = format!("{host}:{port}").parse()?;
+    let addr = lookup_host_any(host, port).await?;
     let mut stream = tokio::net::TcpStream::connect(addr).await?;
-    let req = format!(
-        "GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n"
-    );
+    let req = format!("GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n");
     stream.write_all(req.as_bytes()).await?;
     let mut buf = Vec::new();
     stream.read_to_end(&mut buf).await?;
@@ -795,7 +850,7 @@ async fn http_get(host: &str, port: u16, path: &str) -> Result<String> {
 
 /// Minimal HTTP POST using tokio TcpStream.
 async fn http_post(host: &str, port: u16, path: &str, body: &str) -> Result<String> {
-    let addr: SocketAddr = format!("{host}:{port}").parse()?;
+    let addr = lookup_host_any(host, port).await?;
     let mut stream = tokio::net::TcpStream::connect(addr).await?;
     let req = format!(
         "POST {path} HTTP/1.1\r\nHost: {host}:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -805,6 +860,15 @@ async fn http_post(host: &str, port: u16, path: &str, body: &str) -> Result<Stri
     let mut buf = Vec::new();
     stream.read_to_end(&mut buf).await?;
     extract_http_body(&buf)
+}
+
+/// Resuelve `host:port` a una dirección (acepta IPs y hostnames).
+async fn lookup_host_any(host: &str, port: u16) -> Result<SocketAddr> {
+    tokio::net::lookup_host((host, port))
+        .await
+        .with_context(|| format!("cannot resolve host {host}"))?
+        .next()
+        .with_context(|| format!("host {host} resolved to no addresses"))
 }
 
 /// Extracts the body from a raw HTTP/1.1 response (after the blank line).
@@ -818,8 +882,21 @@ fn extract_http_body(raw: &[u8]) -> Result<String> {
     }
 }
 
+/// Extrae un campo numérico `"key":123` de un JSON plano sin dependencias.
+fn json_u32_field(json: &str, key: &str) -> Option<u32> {
+    let needle = format!("\"{key}\"");
+    let start = json.find(&needle)? + needle.len();
+    let rest = json[start..].trim_start();
+    let rest = rest.strip_prefix(':')?.trim_start();
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
+}
+
 // ─── gs ptt ──────────────────────────────────────────────────────────────────
 
+// El futuro mantiene vivos `AudioCapture`/iteradores no-`Send` (cpal `Stream`)
+// a través de los `await`; `main` lo ejecuta con `block_on` y nunca lo spawnea.
+#[allow(clippy::future_not_send)]
 #[allow(clippy::too_many_arguments)]
 async fn cmd_ptt(
     relay: Option<String>,
@@ -833,25 +910,51 @@ async fn cmd_ptt(
     in_device: String,
     out_device: String,
     codec_arg: CodecArg,
+    no_audio: bool,
+    headless: bool,
+    duration_s: u64,
 ) -> Result<()> {
-    // ── Determinar peer y rol ───────────────────────────────────────────────
-    let (peer_addr, role, via_relay): (SocketAddr, SessionRole, bool) = match (&relay, &room, &peer_host) {
-        (Some(relay_host), Some(room_code), None) => {
-            // Modo relay: resolver room → session_id, luego conectar al relay UDP
-            let path = format!("/api/rooms/{room_code}");
-            let resp = http_get(relay_host, relay_obs_port, &path).await
-                .context("failed to resolve room code — is the relay running?")?;
-            tracing::info!(room = room_code, response = %resp, "room resolved");
-            let relay_udp: SocketAddr = format!("{relay_host}:{relay_port}").parse()?;
-            (relay_udp, SessionRole::Client, true)
-        }
-        (None, None, Some(host)) => {
-            let peer: SocketAddr = format!("{host}:{peer_port}").parse()?;
-            let role = if listen { SessionRole::Server } else { SessionRole::Client };
-            (peer, role, false)
-        }
-        _ => bail!("use either --relay + --room  OR  --peer [--listen]"),
-    };
+    // ── Determinar peer, rol y session_id prefijado ─────────────────────────
+    let (peer_addr, role, via_relay, preset_sid): (SocketAddr, SessionRole, bool, Option<u32>) =
+        match (&relay, &room, &peer_host) {
+            (Some(relay_host), Some(room_code), None) => {
+                // Modo servidor/relay: resolver room → session_id, luego conectar
+                // al relay UDP prefijando ese id para que el relay pueda enrutar
+                // el handshake (modo sala).
+                let path = format!("/api/rooms/{room_code}");
+                let resp = http_get(relay_host, relay_obs_port, &path)
+                    .await
+                    .context("failed to resolve room code — is the relay running?")?;
+                let session_id = json_u32_field(&resp, "session_id")
+                    .context("room response did not include a session_id")?;
+                tracing::info!(room = room_code, session_id, response = %resp, "room resolved");
+                let relay_udp = tokio::net::lookup_host(format!("{relay_host}:{relay_port}"))
+                    .await
+                    .context("cannot resolve relay host")?
+                    .next()
+                    .context("relay host resolved to no addresses")?;
+                let role = if listen {
+                    SessionRole::Server
+                } else {
+                    SessionRole::Client
+                };
+                (relay_udp, role, true, Some(session_id))
+            }
+            (None, None, Some(host)) => {
+                let peer = tokio::net::lookup_host(format!("{host}:{peer_port}"))
+                    .await
+                    .context("cannot resolve peer host")?
+                    .next()
+                    .context("peer host resolved to no addresses")?;
+                let role = if listen {
+                    SessionRole::Server
+                } else {
+                    SessionRole::Client
+                };
+                (peer, role, false, None)
+            }
+            _ => bail!("use either --relay + --room  OR  --peer [--listen]"),
+        };
 
     let bind_addr: SocketAddr = format!("0.0.0.0:{local_port}").parse()?;
     let codec_id = codec_arg.to_codec_id();
@@ -868,21 +971,48 @@ async fn cmd_ptt(
         channels: config.channels,
         frame_duration_ms: config.frame_duration_ms,
     };
-    let playback = AudioPlayback::start(stream_cfg, Some(&out_device))
-        .context("failed to open output device")?;
-    let tone_tx = playback.sender();
+    // En modo headless/no-audio no se abre hardware: fuente senoidal interna
+    // y el playback se descarta.
+    let playback: Option<AudioPlayback> = if no_audio || headless {
+        None
+    } else {
+        Some(
+            AudioPlayback::start(stream_cfg, Some(&out_device))
+                .context("failed to open output device")?,
+        )
+    };
+
+    // Sender de playback/tonos. Sin hardware se crea un canal sin receptor:
+    // los envíos fallan en silencio (play_tone ignora el error).
+    let tone_tx: std::sync::mpsc::Sender<Vec<i16>> = playback.as_ref().map_or_else(
+        || {
+            let (tx, _rx) = std::sync::mpsc::channel();
+            tx
+        },
+        |p| p.sender(),
+    );
+
+    // Contadores de frames para el resumen headless.
+    let tx_frames = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let rx_frames = Arc::new(std::sync::atomic::AtomicU64::new(0));
 
     // ── Flags compartidos (sobreviven reconexiones) ─────────────────────────
     let ptt_on = Arc::new(AtomicBool::new(false));
-    let quit = Arc::new(AtomicBool::new(false));  // salida definitiva
+    let quit = Arc::new(AtomicBool::new(false)); // salida definitiva
 
-    // ── Activar UI de terminal (una vez) ────────────────────────────────────
-    enable_raw_mode()?;
+    // ── UI de terminal (solo modo interactivo) ──────────────────────────────
+    if !headless {
+        enable_raw_mode()?;
+        execute!(std::io::stdout(), EnterAlternateScreen)?;
+    }
     let mut stdout = std::io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
 
     let mode_str = if via_relay {
-        format!("relay {} room {}", relay.as_deref().unwrap_or("?"), room.as_deref().unwrap_or("?"))
+        format!(
+            "relay {} room {}",
+            relay.as_deref().unwrap_or("?"),
+            room.as_deref().unwrap_or("?")
+        )
     } else {
         format!("direct → {peer_addr}")
     };
@@ -894,17 +1024,31 @@ async fn cmd_ptt(
         let (disc_tx, disc_rx) = tokio::sync::mpsc::channel::<()>(1);
 
         // Crear sesión fresca para cada intento de conexión.
-        let transport = match UdpTransport::bind(UdpConfig { bind_addr, ..Default::default() }).await {
+        let transport = match UdpTransport::bind(UdpConfig {
+            bind_addr,
+            ..Default::default()
+        })
+        .await
+        {
             Ok(t) => Arc::new(t),
-            Err(e) => { break Err(anyhow::anyhow!("cannot bind UDP: {e}")); }
+            Err(e) => {
+                break Err(anyhow::anyhow!("cannot bind UDP: {e}"));
+            }
         };
         let cs = match CodecSession::new(transport, config.clone(), codec_id) {
             Ok(s) => Arc::new(s),
-            Err(e) => { break Err(e.into()); }
+            Err(e) => {
+                break Err(e.into());
+            }
         };
 
+        // Modo sala: fijar el session_id compartido antes del handshake.
+        if let Some(sid) = preset_sid {
+            cs.session().set_preset_session_id(sid);
+        }
+
         // Handshake (mostrar estado en pantalla antes de entrar al UI loop).
-        {
+        if !headless {
             use std::io::Write;
             print!("\x1B[2J\x1B[H");
             println!("Conectando ({mode_str})...");
@@ -915,10 +1059,18 @@ async fn cmd_ptt(
             Ok(()) => {}
             Err(e) => {
                 tracing::warn!(?e, "handshake failed, will retry");
-                // Mostrar error brevemente en pantalla.
-                print!("\x1B[2J\x1B[H");
-                println!("Handshake fallido: {e}\nReconectando en {}s...", reconnect_delay.as_secs());
-                { use std::io::Write; std::io::stdout().flush().ok(); }
+                if !headless {
+                    // Mostrar error brevemente en pantalla.
+                    print!("\x1B[2J\x1B[H");
+                    println!(
+                        "Handshake fallido: {e}\nReconectando en {}s...",
+                        reconnect_delay.as_secs()
+                    );
+                    {
+                        use std::io::Write;
+                        std::io::stdout().flush().ok();
+                    }
+                }
                 tokio::time::sleep(reconnect_delay).await;
                 reconnect_delay = (reconnect_delay * 2).min(Duration::from_secs(30));
                 continue;
@@ -928,12 +1080,18 @@ async fn cmd_ptt(
 
         // ── Task de recepción + playback ─────────────────────────────────────
         let cs_rx = cs.clone();
-        let pb_rx = playback.sender();
+        let pb_tx = playback.as_ref().map(|p| p.sender());
         let quit_rx = quit.clone();
+        let rx_frames_task = rx_frames.clone();
         let recv_handle = tokio::spawn(async move {
             while !quit_rx.load(Ordering::Acquire) {
                 match cs_rx.recv_samples().await {
-                    Ok(samples) => { let _ = pb_rx.send(samples); }
+                    Ok(samples) => {
+                        rx_frames_task.fetch_add(1, Ordering::Relaxed);
+                        if let Some(tx) = &pb_tx {
+                            let _ = tx.send(samples);
+                        }
+                    }
                     Err(e) => {
                         tracing::debug!(?e, "recv_samples error — signaling disconnect");
                         let _ = disc_tx.send(()).await;
@@ -950,18 +1108,44 @@ async fn cmd_ptt(
         let ptt_tx = ptt_on.clone();
         let quit_tx = quit.clone();
         let in_device_cap = in_device.clone();
+        let tx_frames_task = tx_frames.clone();
         let (sample_bridge_tx, sample_bridge_rx) = std::sync::mpsc::sync_channel::<Vec<i16>>(4);
         {
             let ptt_thr = ptt_tx.clone();
             let quit_thr = quit_tx.clone();
             std::thread::spawn(move || {
+                if no_audio || headless {
+                    // Fuente senoidal interna (440 Hz): no requiere hardware.
+                    let mut sine = sine_frames_i16(
+                        stream_cfg.samples_per_frame(),
+                        stream_cfg.channels,
+                        stream_cfg.sample_rate,
+                    );
+                    while !quit_thr.load(Ordering::Acquire) {
+                        if ptt_thr.load(Ordering::Acquire) {
+                            if let Some(frame) = sine.next() {
+                                let _ = sample_bridge_tx.try_send(frame);
+                            }
+                            std::thread::sleep(Duration::from_millis(u64::from(
+                                stream_cfg.frame_duration_ms,
+                            )));
+                        } else {
+                            std::thread::sleep(Duration::from_millis(20));
+                        }
+                    }
+                    return;
+                }
                 let mut capture: Option<(AudioCapture, std::sync::mpsc::Receiver<Vec<i16>>)> = None;
                 loop {
-                    if quit_thr.load(Ordering::Acquire) { break; }
+                    if quit_thr.load(Ordering::Acquire) {
+                        break;
+                    }
                     if ptt_thr.load(Ordering::Acquire) {
                         if capture.is_none() {
                             match AudioCapture::start(stream_cfg, Some(in_device_cap.as_str())) {
-                                Ok((cap, rx)) => { capture = Some((cap, rx)); }
+                                Ok((cap, rx)) => {
+                                    capture = Some((cap, rx));
+                                }
                                 Err(e) => {
                                     tracing::warn!(?e, "audio capture start failed");
                                     std::thread::sleep(Duration::from_millis(100));
@@ -971,7 +1155,9 @@ async fn cmd_ptt(
                         }
                         if let Some((_, ref rx)) = capture {
                             match rx.try_recv() {
-                                Ok(samples) => { let _ = sample_bridge_tx.try_send(samples); }
+                                Ok(samples) => {
+                                    let _ = sample_bridge_tx.try_send(samples);
+                                }
                                 Err(std::sync::mpsc::TryRecvError::Empty) => {
                                     std::thread::sleep(Duration::from_millis(5));
                                 }
@@ -989,11 +1175,15 @@ async fn cmd_ptt(
         }
         let send_handle = tokio::spawn(async move {
             loop {
-                if quit_tx.load(Ordering::Acquire) { break; }
+                if quit_tx.load(Ordering::Acquire) {
+                    break;
+                }
                 match sample_bridge_rx.try_recv() {
                     Ok(samples) => {
                         if let Err(e) = cs_tx.send_samples(&samples).await {
                             tracing::debug!(?e, "send_samples error");
+                        } else {
+                            tx_frames_task.fetch_add(1, Ordering::Relaxed);
                         }
                     }
                     Err(std::sync::mpsc::TryRecvError::Empty) => {
@@ -1004,6 +1194,58 @@ async fn cmd_ptt(
             }
         });
 
+        // ── Modo headless: sin UI, PTT continuo, termina por --duration ──────
+        if headless {
+            ptt_on.store(true, Ordering::Release);
+            let _ = cs.session().ptt_press().await;
+            println!(
+                "gs ptt headless activo [{mode_str}] duración={}",
+                if duration_s == 0 {
+                    "∞".to_string()
+                } else {
+                    format!("{duration_s}s")
+                }
+            );
+            let deadline = if duration_s > 0 {
+                Some(Instant::now() + Duration::from_secs(duration_s))
+            } else {
+                None
+            };
+            loop {
+                if quit.load(Ordering::Acquire) {
+                    break;
+                }
+                if let Some(d) = deadline {
+                    if Instant::now() >= d {
+                        break;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            recv_handle.abort();
+            send_handle.abort();
+            ptt_on.store(false, Ordering::Release);
+            let _ = cs.session().ptt_release().await;
+            let _ = cs.close().await;
+            let sent = tx_frames.load(Ordering::Relaxed);
+            let received = rx_frames.load(Ordering::Relaxed);
+            let snap = cs
+                .session()
+                .metrics()
+                .snapshot(cs.session().jitter_buffer().fill_percent());
+            println!(
+                "gs ptt headless OK — frames enviados={sent} recibidos={received} \
+                 rtt={:.1}ms jitter={:.1}ms loss={:.1}% mos={:.2} pkts_rx={} bytes_rx={}",
+                snap.rtt_ms,
+                snap.jitter_ms,
+                snap.loss_percent,
+                snap.estimated_mos,
+                snap.packets_received,
+                snap.bytes_received,
+            );
+            break Ok(());
+        }
+
         // ── UI interactiva ───────────────────────────────────────────────────
         let ui_result = ptt_ui_loop(
             &cs,
@@ -1012,7 +1254,8 @@ async fn cmd_ptt(
             tone_tx.clone(),
             config.sample_rate,
             disc_rx,
-        ).await;
+        )
+        .await;
 
         // Limpiar tasks y sesión.
         recv_handle.abort();
@@ -1031,9 +1274,11 @@ async fn cmd_ptt(
         }
     };
 
-    // Restaurar terminal siempre.
-    let _ = disable_raw_mode();
-    let _ = execute!(std::io::stdout(), LeaveAlternateScreen);
+    // Restaurar terminal (solo si se activó la UI).
+    if !headless {
+        let _ = disable_raw_mode();
+        let _ = execute!(std::io::stdout(), LeaveAlternateScreen);
+    }
 
     result
 }
@@ -1079,7 +1324,10 @@ async fn ptt_ui_loop(
 
             let ptt = ptt_on.load(Ordering::Acquire);
             let peer_ptt = cs.session().is_peer_ptt_active();
-            let snap = cs.session().metrics().snapshot(cs.session().jitter_buffer().fill_percent());
+            let snap = cs
+                .session()
+                .metrics()
+                .snapshot(cs.session().jitter_buffer().fill_percent());
             let sid = cs.session().session_id();
 
             // Limpiar y redibujar.
@@ -1130,10 +1378,24 @@ async fn ptt_ui_loop(
                             ptt_on.store(!was_on, Ordering::Release);
                             if !was_on {
                                 let _ = cs.session().ptt_press().await;
-                                play_tone(gravital_talk_transport::generate_pcm_tone(880.0, 100, sample_rate), &tone_tx);
+                                play_tone(
+                                    gravital_talk_transport::generate_pcm_tone(
+                                        880.0,
+                                        100,
+                                        sample_rate,
+                                    ),
+                                    &tone_tx,
+                                );
                             } else {
                                 let _ = cs.session().ptt_release().await;
-                                play_tone(gravital_talk_transport::generate_pcm_tone(440.0, 80, sample_rate), &tone_tx);
+                                play_tone(
+                                    gravital_talk_transport::generate_pcm_tone(
+                                        440.0,
+                                        80,
+                                        sample_rate,
+                                    ),
+                                    &tone_tx,
+                                );
                             }
                         }
                         // Tecla 'T' como alternativa
@@ -1142,10 +1404,24 @@ async fn ptt_ui_loop(
                             ptt_on.store(!was_on, Ordering::Release);
                             if !was_on {
                                 let _ = cs.session().ptt_press().await;
-                                play_tone(gravital_talk_transport::generate_pcm_tone(880.0, 100, sample_rate), &tone_tx);
+                                play_tone(
+                                    gravital_talk_transport::generate_pcm_tone(
+                                        880.0,
+                                        100,
+                                        sample_rate,
+                                    ),
+                                    &tone_tx,
+                                );
                             } else {
                                 let _ = cs.session().ptt_release().await;
-                                play_tone(gravital_talk_transport::generate_pcm_tone(440.0, 80, sample_rate), &tone_tx);
+                                play_tone(
+                                    gravital_talk_transport::generate_pcm_tone(
+                                        440.0,
+                                        80,
+                                        sample_rate,
+                                    ),
+                                    &tone_tx,
+                                );
                             }
                         }
                         _ => {}
@@ -1156,8 +1432,6 @@ async fn ptt_ui_loop(
             }
         }
     }
-
-    Ok(PttUiResult::Quit)
 }
 
 /// Sends PCM i16 samples to the playback channel (non-blocking; drops on full channel).

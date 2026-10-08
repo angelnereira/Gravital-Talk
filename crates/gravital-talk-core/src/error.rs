@@ -87,9 +87,7 @@ impl fmt::Display for Error {
             Self::MalformedPayload => f.write_str("malformed payload structure"),
             Self::DecryptionFailed => f.write_str("AEAD decryption/authentication failed"),
             Self::ReservedFieldNonZero => f.write_str("reserved header bytes must be zero"),
-            Self::VersionNegotiationFailed => {
-                f.write_str("protocol version negotiation failed")
-            }
+            Self::VersionNegotiationFailed => f.write_str("protocol version negotiation failed"),
         }
     }
 }

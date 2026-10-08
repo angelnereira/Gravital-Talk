@@ -1,0 +1,30 @@
+name: gravital_talk_app
+description: "Gravital Talk — app multiplataforma (P2P + servidor)"
+publish_to: 'none'
+version: 0.3.0-alpha.1+1
+
+environment:
+  sdk: ^3.13.5
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  # Estado y ciclo de vida de la app.
+  provider: ^6.1.5
+  # Persistencia de perfiles y ajustes.
+  shared_preferences: ^2.5.3
+  # Llamadas FFI a `libgravital_talk_ffi` (C ABI v1).
+  ffi: ^2.1.4
+  # API HTTP del relay (rooms, healthz) y diagnóstico.
+  http: ^1.5.0
+  # QR del room code / pairing.
+  qr_flutter: ^4.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

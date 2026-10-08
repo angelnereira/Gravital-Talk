@@ -1,0 +1,64 @@
+syntax = "proto3";
+
+package gravital.v1;
+
+option go_package = "gravital.dev/gravital/v1;gravitalv1";
+option java_package = "dev.gravitaltalk.v1";
+
+import "google/protobuf/empty.proto";
+
+// ─────────────────────────────────────────────────────────────────────────
+// Señalización P2P y pairing — candidato gRPC (o JSON sobre WS).
+//
+// El audio P2P es UDP directo; la señalización solo intercambia metadatos:
+// dirección, nonce de emparejamiento y resultado. Nada de esto viaja en el
+// plano de audio.
+// ─────────────────────────────────────────────────────────────────────────
+
+// Parámetros de conexión que comparte un host P2P.
+message PairingOffer {
+  // URI canónica: gravital-talk://pair?v=1&lan=<ip>:<port>&pub=<ip>:<port>
+  string uri = 1;
+  // Descripción humana (nombre del dispositivo).
+  string device_name = 2;
+  // session_id que usará el peer al conectar (0 = lo decide el servidor).
+  uint32 session_id = 3;
+  // Marca de tiempo de generación.
+  int64 generated_at_unix_ms = 4;
+}
+
+// Respuesta del peer que acepta el emparejamiento.
+message PairingAccept {
+  // Rol que adoptará el peer: comenzar el handshake como cliente.
+  bool accepted = 1;
+  string reject_reason = 2;
+  // Dirección de vuelta al host (para casos de redes con relay intermedio).
+  string fallback_relay = 3;
+}
+
+// Resultado del intento de conexión.
+message PairingResult {
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    SUCCESS = 1;
+    REJECTED = 2;
+    TIMEOUT = 3;
+    UNREACHABLE = 4;
+    AUTH_FAILED = 5;
+  }
+  Status status = 1;
+  uint32 negotiated_session_id = 2;
+  string error_detail = 3;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Servicio de emparejamiento P2P.
+// ─────────────────────────────────────────────────────────────────────────
+
+service PairingService {
+  // El host publica su oferta (p.ej. en el relay para anclaje NAT).
+  rpc PublishOffer(PairingOffer) returns (google.protobuf.Empty);
+
+  // El peer recupera la oferta por URI o ID y confirma.
+  rpc ResolveOffer(PairingOffer) returns (PairingOffer);
+}

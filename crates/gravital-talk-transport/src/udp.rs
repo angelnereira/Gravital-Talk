@@ -115,7 +115,7 @@ impl UdpTransport {
     /// Referencia al socket subyacente (útil para integración con
     /// `tokio::select!`).
     #[must_use]
-    pub fn socket(&self) -> &UdpSocket {
+    pub const fn socket(&self) -> &UdpSocket {
         &self.socket
     }
 }

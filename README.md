@@ -79,6 +79,19 @@ cargo build --release -p gravital-talk-cli
 ./target/release/gs ptt --relay 192.168.1.5:9000
 ```
 
+### Docker (contenedores, pruebas y benchmarks)
+
+```bash
+docker compose up -d relay                        # relay + healthcheck
+make docker-e2e                                   # 2 clientes headless en salas reales
+make docker-test docker-bench                     # tests y benchmarks en contenedor
+make docker-perf                                  # rendimiento bajo red simulada (tc netem)
+FUZZ_SECONDS=90 make docker-fuzz                  # fuzzing de seguridad
+make docker-obs                                   # Prometheus (:9091) + Grafana (:3001)
+```
+
+Detalles en [`docker/README.md`](docker/README.md).
+
 ---
 
 ## Arquitectura
@@ -114,16 +127,20 @@ El transporte primario es UDP con DSCP EF. El handshake establece claves con **X
 | Protocolo wire v1 | ✅ funcional | handshake 4-way, cifrado por paquete, negociación de codec |
 | `gravital-talk-core` | ✅ funcional | `no_std`, 54 tests unitarios, proptest |
 | `gravital-talk-transport` | ✅ funcional | UDP, STUN, FEC XOR, jitter buffer, congestion control |
+| Modo sala (servidor central) | ✅ funcional | `set_preset_session_id`: handshake enrutado por el relay con `session_id` compartido |
 | `gravital-talk-codec` | ✅ funcional | PCM pass-through, Opus 64 kbps con PLC |
 | `gravital-talk-metrics` | ✅ funcional | RTT EWMA, jitter RFC 3550, pérdida bitmap, MOS estimado |
-| `gravital-talk-ffi` | ✅ funcional | ABI C estable, cbindgen, JNI bridge Android |
+| `gravital-talk-ffi` | ✅ funcional | ABI C estable, cbindgen, JNI bridge Android, `gs_session_set_session_id` |
 | `gravital-talk-relay` | ✅ funcional | UDP + WebSocket, /metrics Prometheus, /healthz |
 | `gravital-talk-io` | ✅ funcional | cpal (ALSA/CoreAudio/WASAPI/AAudio) |
-| `gravital-talk-cli` | ✅ funcional | send, receive, ptt, relay, devices, bench, info, doctor |
+| `gravital-talk-cli` | ✅ funcional | send, receive, ptt (interactivo y headless), relay, devices, bench, info, doctor |
+| App Flutter multiplataforma | ✅ scaffold | `app/`: inicio, servidor (sala+QR), P2P, sesión PTT, ajustes; motor FFI real + demo |
 | App Android | ✅ funcional | emparejamiento QR, PTT, wake lock, reconexión automática |
 | STUN / NAT traversal | ✅ funcional | RFC 5389, stun.l.google.com, fallback P2P → relay |
 | PLC (Packet Loss Concealment) | ✅ funcional | CodecSession: hasta 4 frames de silencio por hueco |
 | Auto-reconexión CLI | ✅ funcional | gs ptt: backoff 2 s→30 s, reconexión por cambio de red |
+| Contratos del plano de control | ✅ definidos | `proto/gravital/v1/*.proto` (rooms, salud, pairing) + `docs/grpc-evaluation.md` |
+| Docker / CI en contenedores | ✅ funcional | `compose.yaml`: e2e multi-contenedor, tests, bench, perf (netem), fuzz, obs |
 | Tonos PTT (CLI + Android) | ✅ funcional | beep 880 Hz al presionar, 440 Hz al soltar |
 | Build outputs automático (CI) | ✅ funcional | APK + binarios en outputs/ por cada push |
 | Python SDK | ✅ funcional | PyO3 + maturin |
@@ -132,6 +149,7 @@ El transporte primario es UDP con DSCP EF. El handshake establece claves con **X
 | Noise Protocol (forward secrecy) | 🔲 pendiente | roadmap 0.3 |
 | Swift SDK | 🔲 pendiente | roadmap 0.4 |
 | Node.js SDK | 🔲 pendiente | roadmap 0.4 |
+| gRPC plano de control | 🔲 contrato listo | roadmap 0.3.1 |
 
 ---
 
@@ -205,7 +223,7 @@ Documentación detallada: [`docs/pairing.md`](docs/pairing.md).
 **Toolchain:**
 
 ```
-Rust >= 1.78 (stable)
+Rust >= 1.99 (stable)
 Java 17+ (sólo para compilar el APK Android)
 ```
 
@@ -669,9 +687,12 @@ helm install gravital-talk-relay ./infra/helm/gravital-talk-relay \
 | **0.2.0-alpha.1** | ✅ | Codec Opus, audio I/O cpal, CLI con `--device` |
 | **0.2.0-alpha.2** | ✅ | Negociación codec, resampler, relay productivo, Terraform/Helm |
 | **0.2.0-alpha.3** | ✅ | **App Android** (PairingActivity, QR, CameraX), **STUN** RFC 5389, **PLC**, auto-reconexión CLI, tonos PTT, CI auto-build `outputs/` |
+| **0.3.0-alpha.1** | 🔄 en curso | **Modo sala/servidor real** (handshake enrutado, CLI y FFI), **app Flutter** multiplataforma, **contratos gRPC** (`proto/`), **Docker** (e2e multi-contenedor, bench, perf con netem, fuzz) |
 | **0.3** | 🔲 | Noise Protocol (forward secrecy), rate limiting, relay cluster Redis |
 | **0.4** | 🔲 | SDKs Swift + Node.js, publicación crates.io / PyPI / npm |
 | **1.0** | 🔲 | Protocolo estable, auditoría de seguridad, SemVer |
+
+Detalle con criterios de salida en [`docs/roadmap.md`](docs/roadmap.md).
 
 ---
 

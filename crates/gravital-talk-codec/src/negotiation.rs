@@ -41,7 +41,7 @@ impl CodecId {
 
 /// Lista local de codecs soportados en este build, en orden de preferencia.
 #[must_use]
-pub fn supported() -> &'static [CodecId] {
+pub const fn supported() -> &'static [CodecId] {
     #[cfg(feature = "opus")]
     {
         &[CodecId::Opus, CodecId::Pcm]

@@ -14,12 +14,20 @@ use gravital_talk::{Config, Session, SessionRole, Transport, UdpConfig, UdpTrans
 
 async fn make_loopback_pair() -> (Arc<Session>, Arc<Session>) {
     let t_srv = Arc::new(
-        UdpTransport::bind(UdpConfig { bind_addr: "127.0.0.1:0".parse().unwrap(), ..Default::default() })
-            .await.unwrap(),
+        UdpTransport::bind(UdpConfig {
+            bind_addr: "127.0.0.1:0".parse().unwrap(),
+            ..Default::default()
+        })
+        .await
+        .unwrap(),
     );
     let t_cli = Arc::new(
-        UdpTransport::bind(UdpConfig { bind_addr: "127.0.0.1:0".parse().unwrap(), ..Default::default() })
-            .await.unwrap(),
+        UdpTransport::bind(UdpConfig {
+            bind_addr: "127.0.0.1:0".parse().unwrap(),
+            ..Default::default()
+        })
+        .await
+        .unwrap(),
     );
     let srv_addr = t_srv.local_addr().unwrap();
     let cli_addr = t_cli.local_addr().unwrap();
@@ -27,8 +35,14 @@ async fn make_loopback_pair() -> (Arc<Session>, Arc<Session>) {
     let server = Arc::new(Session::new(t_srv, Config::default()));
     let client = Arc::new(Session::new(t_cli, Config::default()));
 
-    let sh = { let s = server.clone(); tokio::spawn(async move { s.handshake(SessionRole::Server, cli_addr).await }) };
-    let ch = { let c = client.clone(); tokio::spawn(async move { c.handshake(SessionRole::Client, srv_addr).await }) };
+    let sh = {
+        let s = server.clone();
+        tokio::spawn(async move { s.handshake(SessionRole::Server, cli_addr).await })
+    };
+    let ch = {
+        let c = client.clone();
+        tokio::spawn(async move { c.handshake(SessionRole::Client, srv_addr).await })
+    };
     sh.await.unwrap().unwrap();
     ch.await.unwrap().unwrap();
 

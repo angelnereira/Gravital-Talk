@@ -1,0 +1,23 @@
+# syntax=docker/dockerfile:1.7
+# ─────────────────────────────────────────────────────────────────────
+# Gravital Talk — imagen de desarrollo: tests, benchmarks y estrés.
+#
+# El código fuente se monta en /src en tiempo de ejecución (compose),
+# así que la imagen solo aporta toolchain + dependencias de sistema.
+# La caché de cargo va en un volumen (`cargo-cache`).
+
+FROM rust:1.99-slim-bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        pkg-config libopus-dev libasound2-dev curl jq \
+        iproute2 iputils-ping tcpdump \
+    && rm -rf /var/lib/apt/lists/*
+
+# Pre-carga de dependencias (capa cacheable; el target se monta como volumen).
+WORKDIR /src
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+COPY crates ./crates
+RUN cargo fetch
+
+ENV CARGO_HOME=/usr/local/cargo
+CMD ["cargo", "test", "--workspace", "--all-targets"]

@@ -22,9 +22,15 @@ use tokio::sync::{mpsc, Mutex};
 /// La aleatoriedad para las pérdidas usa un `AtomicU32` (LCG atómico) en lugar
 /// de `thread_local!`, porque las tareas tokio pueden migrar entre hilos del
 /// worker pool y el estado thread-local se resetearía en cada nuevo hilo.
+/// Datagrama tal como viaja por el simulador: payload + origen.
+type Datagram = (Vec<u8>, SocketAddr);
+
+/// Cola de entrada de un `SimTransport`.
+type Inbox = Arc<Mutex<mpsc::Receiver<Datagram>>>;
+
 struct SimTransport {
-    inbox: Arc<Mutex<mpsc::Receiver<(Vec<u8>, SocketAddr)>>>,
-    peer_tx: mpsc::Sender<(Vec<u8>, SocketAddr)>,
+    inbox: Inbox,
+    peer_tx: mpsc::Sender<Datagram>,
     local_addr: SocketAddr,
     loss_percent: Arc<AtomicU8>,
     rng_state: Arc<std::sync::atomic::AtomicU32>,
@@ -45,14 +51,14 @@ impl SimTransport {
         let addr_a: SocketAddr = "127.0.0.1:20001".parse().unwrap();
         let addr_b: SocketAddr = "127.0.0.1:20002".parse().unwrap();
         let loss = Arc::new(AtomicU8::new(loss_percent.min(100)));
-        let a = Arc::new(SimTransport {
+        let a = Arc::new(Self {
             inbox: Arc::new(Mutex::new(rx_a)),
             peer_tx: tx_b,
             local_addr: addr_a,
             loss_percent: loss.clone(),
             rng_state: Arc::new(std::sync::atomic::AtomicU32::new(0xABCD_1234)),
         });
-        let b = Arc::new(SimTransport {
+        let b = Arc::new(Self {
             inbox: Arc::new(Mutex::new(rx_b)),
             peer_tx: tx_a,
             local_addr: addr_b,
@@ -71,7 +77,8 @@ impl SimTransport {
         loop {
             let v = self.rng_state.load(Ordering::Relaxed);
             let new_v = v.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-            if self.rng_state
+            if self
+                .rng_state
                 .compare_exchange_weak(v, new_v, Ordering::Relaxed, Ordering::Relaxed)
                 .is_ok()
             {
@@ -106,7 +113,9 @@ impl Transport for SimTransport {
 
     async fn recv(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr), TransportError> {
         let mut rx = self.inbox.lock().await;
-        let (packet, from) = rx.recv().await.ok_or_else(|| {
+        let received = rx.recv().await;
+        drop(rx);
+        let (packet, from) = received.ok_or_else(|| {
             TransportError::Io(std::io::Error::new(
                 std::io::ErrorKind::BrokenPipe,
                 "sim channel closed",
@@ -168,7 +177,10 @@ async fn sim_handshake_survives_20pct_loss() {
         handshake_pair(client.clone(), server.clone()),
     )
     .await;
-    assert!(r.is_ok(), "handshake should complete within 15s under 20% loss");
+    assert!(
+        r.is_ok(),
+        "handshake should complete within 15s under 20% loss"
+    );
     assert_eq!(client.state().await, SessionState::Active);
 }
 
@@ -201,7 +213,7 @@ async fn sim_audio_survives_10pct_loss() {
     handshake_pair(client.clone(), server.clone()).await;
 
     for i in 0..FRAMES {
-        client.send_audio(&vec![i as u8; 160]).await.unwrap();
+        client.send_audio(&[i as u8; 160]).await.unwrap();
         tokio::time::sleep(Duration::from_millis(1)).await;
     }
 
@@ -225,9 +237,12 @@ async fn congestion_controller_active_after_handshake() {
     let (client, server) = build_session_pair(0).await;
     handshake_pair(client.clone(), server.clone()).await;
     let bitrate = client.current_bitrate();
-    assert!(bitrate >= 8_000 && bitrate <= 64_000, "bitrate out of range: {bitrate}");
+    assert!(
+        (8_000..=64_000).contains(&bitrate),
+        "bitrate out of range: {bitrate}"
+    );
     for _ in 0..8 {
-        client.send_audio(&vec![0x42u8; 160]).await.unwrap();
+        client.send_audio(&[0x42u8; 160]).await.unwrap();
     }
     let _ = server.current_bitrate();
 }

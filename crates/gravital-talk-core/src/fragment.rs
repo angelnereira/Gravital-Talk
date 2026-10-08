@@ -32,7 +32,7 @@ impl FragmentHeader {
         Ok(())
     }
 
-    pub fn decode(buf: &[u8]) -> Result<Self, Error> {
+    pub const fn decode(buf: &[u8]) -> Result<Self, Error> {
         if buf.len() < Self::SIZE {
             return Err(Error::MalformedPayload);
         }

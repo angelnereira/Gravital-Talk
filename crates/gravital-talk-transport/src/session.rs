@@ -23,10 +23,12 @@ use bytes::{Bytes, BytesMut};
 use gravital_talk_core::constants::{
     CONGESTION_MIN_BITRATE, DEFAULT_FRAME_DURATION_MS, DEFAULT_JITTER_BUFFER_MS,
     DEFAULT_MAX_BITRATE, DEFAULT_MTU, DEFAULT_SAMPLE_RATE, HANDSHAKE_RETRY_BASE_MS,
-    HANDSHAKE_TIMEOUT_MS, HEARTBEAT_INTERVAL_MS, HEARTBEAT_TIMEOUT_MS, HEADER_SIZE,
+    HANDSHAKE_TIMEOUT_MS, HEADER_SIZE, HEARTBEAT_INTERVAL_MS, HEARTBEAT_TIMEOUT_MS,
     PROTOCOL_VERSION_MAX, PROTOCOL_VERSION_MIN,
 };
-use gravital_talk_core::crypto::{decrypt_in_place, encrypt_in_place, make_nonce, SessionKey, TAG_SIZE};
+use gravital_talk_core::crypto::{
+    decrypt_in_place, encrypt_in_place, make_nonce, SessionKey, TAG_SIZE,
+};
 use gravital_talk_core::header::{Flags, PacketHeader};
 use gravital_talk_core::message::{
     ClientHello, ControlBitrateMsg, KeyExchangeMsg, MessageType, ServerHello, SessionConfirm,
@@ -124,6 +126,9 @@ pub struct Session {
     peer_ptt_active: AtomicBool,
     /// SSRC del participante local (derivado del session_id).
     local_ssrc: AtomicU32,
+    /// `session_id` fijado de antemano para el handshake (modo relay/sala).
+    /// `0` = el servidor elige uno aleatorio (P2P directo).
+    preset_session_id: AtomicU32,
     /// Señal de cancelación: se activa en `close()` para interrumpir loops bloqueantes.
     closed: AtomicBool,
 }
@@ -163,7 +168,36 @@ impl Session {
             ptt_active: AtomicBool::new(false),
             peer_ptt_active: AtomicBool::new(false),
             local_ssrc: AtomicU32::new(0),
+            preset_session_id: AtomicU32::new(0),
             closed: AtomicBool::new(false),
+        }
+    }
+
+    /// Fija el `session_id` que se usará en el handshake.
+    ///
+    /// Es lo que habilita el **modo servidor/relay**: todos los participantes
+    /// de una sala comparten un `session_id` para que el relay pueda enrutar
+    /// los paquetes del handshake. Sin un id pre-fijado, `ClientHello` viaja
+    /// con `session_id = 0` y el relay lo descarta (no puede saber a qué sala
+    /// pertenece).
+    ///
+    /// Debe llamarse **antes** de [`Session::handshake`]. Un valor `0`
+    /// restaura el comportamiento P2P (el servidor elige un id aleatorio).
+    pub fn set_preset_session_id(&self, id: u32) {
+        self.preset_session_id.store(id, Ordering::Release);
+    }
+
+    /// `session_id` pre-fijado, o `0` si no hay ninguno.
+    #[must_use]
+    pub fn preset_session_id(&self) -> u32 {
+        self.preset_session_id.load(Ordering::Acquire)
+    }
+
+    /// Resuelve el `session_id` a usar: el pre-fijado o uno aleatorio.
+    fn resolved_session_id(&self) -> u32 {
+        match self.preset_session_id() {
+            0 => rand_u32_secure(),
+            id => id,
         }
     }
 
@@ -181,7 +215,7 @@ impl Session {
 
     /// Configuración inmutable de esta sesión.
     #[must_use]
-    pub fn config(&self) -> &Config {
+    pub const fn config(&self) -> &Config {
         &self.config
     }
 
@@ -193,13 +227,16 @@ impl Session {
     /// ControlResume es el indicador inmediato para el peer (mostrar "alguien habla").
     pub async fn ptt_press(&self) -> Result<(), TransportError> {
         self.ptt_active.store(true, Ordering::Release);
-        if let Some(p) = *self.peer.lock().await {
+        let peer = *self.peer.lock().await;
+        if let Some(p) = peer {
             let sid = self.session_id();
             // SSRC local = session_id como proxy (sin SSRC dedicado aún)
             let mut ssrc_buf = [0u8; 4];
             ssrc_buf.copy_from_slice(&sid.to_be_bytes());
-            self.send_control(MessageType::FloorRequest, sid, &ssrc_buf, p).await?;
-            self.send_control(MessageType::ControlResume, sid, &[], p).await?;
+            self.send_control(MessageType::FloorRequest, sid, &ssrc_buf, p)
+                .await?;
+            self.send_control(MessageType::ControlResume, sid, &[], p)
+                .await?;
         }
         Ok(())
     }
@@ -207,12 +244,15 @@ impl Session {
     /// Desactiva PTT: limpia el flag local y envía FloorRelease + ControlPause.
     pub async fn ptt_release(&self) -> Result<(), TransportError> {
         self.ptt_active.store(false, Ordering::Release);
-        if let Some(p) = *self.peer.lock().await {
+        let peer = *self.peer.lock().await;
+        if let Some(p) = peer {
             let sid = self.session_id();
             let mut ssrc_buf = [0u8; 4];
             ssrc_buf.copy_from_slice(&sid.to_be_bytes());
-            self.send_control(MessageType::FloorRelease, sid, &ssrc_buf, p).await?;
-            self.send_control(MessageType::ControlPause, sid, &[], p).await?;
+            self.send_control(MessageType::FloorRelease, sid, &ssrc_buf, p)
+                .await?;
+            self.send_control(MessageType::ControlPause, sid, &[], p)
+                .await?;
         }
         Ok(())
     }
@@ -396,14 +436,25 @@ impl Session {
         };
 
         let mut hello_payload = [0u8; ClientHello::SIZE];
-        hello.encode(&mut hello_payload).map_err(TransportError::Protocol)?;
+        hello
+            .encode(&mut hello_payload)
+            .map_err(TransportError::Protocol)?;
 
         // Reintento con backoff hasta el timeout del caller.
         let mut attempt: u32 = 0;
         let mut buf = vec![0u8; self.config.mtu];
+
+        // Modo relay/sala: el `session_id` pre-fijado viaja en `ClientHello`
+        // para que el relay sepa enrutarlo. P2P directo: 0 (el servidor elige).
+        let preset_sid = self.preset_session_id();
         loop {
-            self.send_control(MessageType::HandshakeClientHello, 0, &hello_payload, peer)
-                .await?;
+            self.send_control(
+                MessageType::HandshakeClientHello,
+                preset_sid,
+                &hello_payload,
+                peer,
+            )
+            .await?;
 
             let backoff = Duration::from_millis(HANDSHAKE_RETRY_BASE_MS << attempt.min(4));
             let res = timeout(backoff, self.transport.recv(&mut buf)).await;
@@ -426,18 +477,33 @@ impl Session {
                 }
 
                 // 2. Decodificar ServerHello.
-                let server_hello = ServerHello::decode(view.payload())
-                    .map_err(TransportError::Protocol)?;
+                let server_hello =
+                    ServerHello::decode(view.payload()).map_err(TransportError::Protocol)?;
+
+                // Si el id estaba pre-fijado (sala), el servidor debe respetarlo.
+                if preset_sid != 0 && server_hello.session_id != preset_sid {
+                    return Err(TransportError::Handshake(
+                        "server replied with a different session_id than preset",
+                    ));
+                }
 
                 // Validación de versión negociada: el servidor sólo puede
                 // hacer downgrade (nunca proponer una versión más alta que la
                 // que pedimos) y no puede proponer algo fuera del rango.
                 let neg_ver = server_hello.protocol_version;
                 if neg_ver < PROTOCOL_VERSION_MIN || neg_ver > PROTOCOL_VERSION_MAX {
-                    return Err(TransportError::Handshake("version negotiation failed: out of range"));
+                    return Err(TransportError::Handshake(
+                        "version negotiation failed: out of range",
+                    ));
                 }
-                if !self.config.supported_codecs.contains(&server_hello.codec_accepted) {
-                    return Err(TransportError::Handshake("server selected unsupported codec"));
+                if !self
+                    .config
+                    .supported_codecs
+                    .contains(&server_hello.codec_accepted)
+                {
+                    return Err(TransportError::Handshake(
+                        "server selected unsupported codec",
+                    ));
                 }
 
                 // 3. ECDH + HKDF → encrypt_key, decrypt_key.
@@ -445,7 +511,8 @@ impl Session {
                 let shared = client_secret.diffie_hellman(&server_pubkey);
                 let session_id = server_hello.session_id;
 
-                let transcript = build_transcript(&client_nonce, &server_hello.server_nonce, session_id);
+                let transcript =
+                    build_transcript(&client_nonce, &server_hello.server_nonce, session_id);
                 let (enc_key, dec_key) = derive_session_keys(shared.as_bytes(), &transcript);
 
                 // 4. Calcular auth_tag del cliente y enviar KeyExchange.
@@ -455,15 +522,25 @@ impl Session {
                     auth_tag: client_auth_tag,
                 };
                 let mut ke_payload = [0u8; KeyExchangeMsg::SIZE];
-                ke_msg.encode(&mut ke_payload).map_err(TransportError::Protocol)?;
-                self.send_control(MessageType::HandshakeKeyExchange, session_id, &ke_payload, peer)
-                    .await?;
+                ke_msg
+                    .encode(&mut ke_payload)
+                    .map_err(TransportError::Protocol)?;
+                self.send_control(
+                    MessageType::HandshakeKeyExchange,
+                    session_id,
+                    &ke_payload,
+                    peer,
+                )
+                .await?;
 
                 // 5. Esperar SessionConfirm del servidor.
-                let confirm = self.recv_session_confirm(peer, &mut buf, session_id).await?;
+                let confirm = self
+                    .recv_session_confirm(peer, &mut buf, session_id)
+                    .await?;
 
                 // 6. Verificar auth_tag del servidor.
-                let expected_server_tag = derive_auth_tag(&dec_key, b"GS-server-fin-v1", &transcript);
+                let expected_server_tag =
+                    derive_auth_tag(&dec_key, b"GS-server-fin-v1", &transcript);
                 if !constant_time_eq(&confirm.server_auth_tag, &expected_server_tag) {
                     return Err(TransportError::AuthenticationFailed(
                         "server auth tag mismatch",
@@ -474,9 +551,11 @@ impl Session {
                 self.session_id.store(session_id, Ordering::Release);
                 // SSRC local = los primeros 4 bytes del session_id XOR con
                 // los últimos 4 de la clave de cifrado (distingue cliente/servidor).
-                let ssrc = session_id ^ u32::from_be_bytes([enc_key[0], enc_key[1], enc_key[2], enc_key[3]]);
+                let ssrc = session_id
+                    ^ u32::from_be_bytes([enc_key[0], enc_key[1], enc_key[2], enc_key[3]]);
                 self.local_ssrc.store(ssrc, Ordering::Release);
-                self.negotiated_codec.store(server_hello.codec_accepted, Ordering::Release);
+                self.negotiated_codec
+                    .store(server_hello.codec_accepted, Ordering::Release);
                 *self.encrypt_key.lock().await = Some(enc_key);
                 *self.decrypt_key.lock().await = Some(dec_key);
                 return Ok(());
@@ -492,7 +571,7 @@ impl Session {
     async fn recv_session_confirm(
         &self,
         peer: SocketAddr,
-        buf: &mut Vec<u8>,
+        buf: &mut [u8],
         expected_sid: u32,
     ) -> Result<SessionConfirm, TransportError> {
         loop {
@@ -507,7 +586,8 @@ impl Session {
             if view.header().msg_type != MessageType::HandshakeSessionConfirm.code() {
                 continue;
             }
-            let confirm = SessionConfirm::decode(view.payload()).map_err(TransportError::Protocol)?;
+            let confirm =
+                SessionConfirm::decode(view.payload()).map_err(TransportError::Protocol)?;
             if confirm.session_id != expected_sid {
                 return Err(TransportError::Handshake("session_id mismatch in confirm"));
             }
@@ -519,6 +599,16 @@ impl Session {
 
     async fn handshake_server(&self, peer: SocketAddr) -> Result<(), TransportError> {
         let mut buf = vec![0u8; self.config.mtu];
+
+        // Modo relay/sala: registrarse ante el relay antes de esperar el
+        // ClientHello. El relay aprende la dirección del servidor con el primer
+        // paquete que recibe; sin este registro, el ClientHello del cliente no
+        // tendría destino al que reenviarse.
+        let preset_sid = self.preset_session_id();
+        if preset_sid != 0 {
+            self.send_control(MessageType::Heartbeat, preset_sid, &[], peer)
+                .await?;
+        }
 
         // 1. Esperar ClientHello del peer esperado.
         let client_hello: ClientHello = loop {
@@ -562,11 +652,15 @@ impl Session {
         let server_secret = EphemeralSecret::random_from_rng(rand_core::OsRng);
         let server_pubkey = PublicKey::from(&server_secret);
         let server_nonce = random_nonce_32();
-        let session_id = rand_u32_secure();
+        let session_id = self.resolved_session_id();
         self.session_id.store(session_id, Ordering::Release);
 
         // 3. Negociar codec.
-        let chosen_codec = if self.config.supported_codecs.contains(&client_hello.codec_preferred) {
+        let chosen_codec = if self
+            .config
+            .supported_codecs
+            .contains(&client_hello.codec_preferred)
+        {
             client_hello.codec_preferred
         } else {
             *self
@@ -591,9 +685,16 @@ impl Session {
             capability_flags: client_hello.capability_flags & self.config.capability_flags,
         };
         let mut sh_payload = [0u8; ServerHello::SIZE];
-        server_hello.encode(&mut sh_payload).map_err(TransportError::Protocol)?;
-        self.send_control(MessageType::HandshakeServerHello, session_id, &sh_payload, peer)
-            .await?;
+        server_hello
+            .encode(&mut sh_payload)
+            .map_err(TransportError::Protocol)?;
+        self.send_control(
+            MessageType::HandshakeServerHello,
+            session_id,
+            &sh_payload,
+            peer,
+        )
+        .await?;
 
         // 5. ECDH + HKDF → encrypt_key, decrypt_key (perspectiva servidor).
         let client_pubkey = PublicKey::from(client_hello.ephemeral_public_key);
@@ -648,14 +749,18 @@ impl Session {
         };
 
         if ke_msg.session_id != session_id {
-            return Err(TransportError::Handshake("session_id mismatch in KeyExchange"));
+            return Err(TransportError::Handshake(
+                "session_id mismatch in KeyExchange",
+            ));
         }
 
         // 7. Verificar auth_tag del cliente.
         // El cliente usó su encrypt_key (= dec_key del servidor) para derivar el tag.
         let expected_client_tag = derive_auth_tag(&dec_key, b"GS-client-fin-v1", &transcript);
         if !constant_time_eq(&ke_msg.auth_tag, &expected_client_tag) {
-            return Err(TransportError::AuthenticationFailed("client auth tag mismatch"));
+            return Err(TransportError::AuthenticationFailed(
+                "client auth tag mismatch",
+            ));
         }
 
         // 8. Enviar SessionConfirm con auth_tag del servidor.
@@ -665,9 +770,16 @@ impl Session {
             server_auth_tag,
         };
         let mut sc_payload = [0u8; SessionConfirm::SIZE];
-        confirm.encode(&mut sc_payload).map_err(TransportError::Protocol)?;
-        self.send_control(MessageType::HandshakeSessionConfirm, session_id, &sc_payload, peer)
-            .await?;
+        confirm
+            .encode(&mut sc_payload)
+            .map_err(TransportError::Protocol)?;
+        self.send_control(
+            MessageType::HandshakeSessionConfirm,
+            session_id,
+            &sc_payload,
+            peer,
+        )
+        .await?;
 
         // 9. Almacenar claves.
         *self.encrypt_key.lock().await = Some(enc_key);
@@ -723,10 +835,14 @@ impl Session {
         let server_secret = EphemeralSecret::random_from_rng(rand_core::OsRng);
         let server_pubkey = PublicKey::from(&server_secret);
         let server_nonce = random_nonce_32();
-        let session_id = rand_u32_secure();
+        let session_id = self.resolved_session_id();
         self.session_id.store(session_id, Ordering::Release);
 
-        let chosen_codec = if self.config.supported_codecs.contains(&client_hello.codec_preferred) {
+        let chosen_codec = if self
+            .config
+            .supported_codecs
+            .contains(&client_hello.codec_preferred)
+        {
             client_hello.codec_preferred
         } else {
             *self
@@ -750,9 +866,16 @@ impl Session {
             capability_flags: client_hello.capability_flags & self.config.capability_flags,
         };
         let mut sh_payload = [0u8; ServerHello::SIZE];
-        server_hello.encode(&mut sh_payload).map_err(TransportError::Protocol)?;
-        self.send_control(MessageType::HandshakeServerHello, session_id, &sh_payload, peer)
-            .await?;
+        server_hello
+            .encode(&mut sh_payload)
+            .map_err(TransportError::Protocol)?;
+        self.send_control(
+            MessageType::HandshakeServerHello,
+            session_id,
+            &sh_payload,
+            peer,
+        )
+        .await?;
 
         let client_pubkey = PublicKey::from(client_hello.ephemeral_public_key);
         let shared = server_secret.diffie_hellman(&client_pubkey);
@@ -797,20 +920,34 @@ impl Session {
         };
 
         if ke_msg.session_id != session_id {
-            return Err(TransportError::Handshake("session_id mismatch in KeyExchange"));
+            return Err(TransportError::Handshake(
+                "session_id mismatch in KeyExchange",
+            ));
         }
 
         let expected_client_tag = derive_auth_tag(&dec_key, b"GS-client-fin-v1", &transcript);
         if !constant_time_eq(&ke_msg.auth_tag, &expected_client_tag) {
-            return Err(TransportError::AuthenticationFailed("client auth tag mismatch"));
+            return Err(TransportError::AuthenticationFailed(
+                "client auth tag mismatch",
+            ));
         }
 
         let server_auth_tag = derive_auth_tag(&enc_key, b"GS-server-fin-v1", &transcript);
-        let confirm = SessionConfirm { session_id, server_auth_tag };
+        let confirm = SessionConfirm {
+            session_id,
+            server_auth_tag,
+        };
         let mut sc_payload = [0u8; SessionConfirm::SIZE];
-        confirm.encode(&mut sc_payload).map_err(TransportError::Protocol)?;
-        self.send_control(MessageType::HandshakeSessionConfirm, session_id, &sc_payload, peer)
-            .await?;
+        confirm
+            .encode(&mut sc_payload)
+            .map_err(TransportError::Protocol)?;
+        self.send_control(
+            MessageType::HandshakeSessionConfirm,
+            session_id,
+            &sc_payload,
+            peer,
+        )
+        .await?;
 
         *self.encrypt_key.lock().await = Some(enc_key);
         *self.decrypt_key.lock().await = Some(dec_key);
@@ -858,21 +995,24 @@ impl Session {
         };
 
         // Cifrar prefixed si hay clave disponible.
-        let (wire_payload, encrypt_flag_active) = if let Some(key) = self.encrypt_key.lock().await.as_ref() {
-            let nonce = make_nonce(seq, sid);
-            let mut hdr_buf = [0u8; HEADER_SIZE];
-            header.encode(&mut hdr_buf).map_err(TransportError::Protocol)?;
+        let (wire_payload, encrypt_flag_active) =
+            if let Some(key) = self.encrypt_key.lock().await.as_ref() {
+                let nonce = make_nonce(seq, sid);
+                let mut hdr_buf = [0u8; HEADER_SIZE];
+                header
+                    .encode(&mut hdr_buf)
+                    .map_err(TransportError::Protocol)?;
 
-            let plain_len = prefixed.len();
-            prefixed.resize(plain_len + TAG_SIZE, 0);
-            let enc_len = encrypt_in_place(key, &nonce, &hdr_buf, &mut prefixed, plain_len)
-                .map_err(TransportError::Protocol)?;
-            (Bytes::copy_from_slice(&prefixed[..enc_len]), true)
-        } else {
-            // Sin clave: fallback a texto claro (no debería ocurrir en sesión Active).
-            header.flags = Flags::empty();
-            (Bytes::copy_from_slice(&prefixed), false)
-        };
+                let plain_len = prefixed.len();
+                prefixed.resize(plain_len + TAG_SIZE, 0);
+                let enc_len = encrypt_in_place(key, &nonce, &hdr_buf, &mut prefixed, plain_len)
+                    .map_err(TransportError::Protocol)?;
+                (Bytes::copy_from_slice(&prefixed[..enc_len]), true)
+            } else {
+                // Sin clave: fallback a texto claro (no debería ocurrir en sesión Active).
+                header.flags = Flags::empty();
+                (Bytes::copy_from_slice(&prefixed), false)
+            };
         let _ = encrypt_flag_active;
 
         let mut buf = BytesMut::with_capacity(self.config.mtu);
@@ -885,7 +1025,8 @@ impl Session {
 
         // FEC: alimentar con el payload original (sin prefijo) usando audio_seq
         // para que el seq_base del grupo sea contiguo con el jitter buffer.
-        if let Some(parity) = self.fec_enc.lock().await.push(audio_seq, payload) {
+        let parity = self.fec_enc.lock().await.push(audio_seq, payload);
+        if let Some(parity) = parity {
             let _ = self.send_fec_parity(parity, peer, sid).await;
         }
 
@@ -918,7 +1059,9 @@ impl Session {
         if let Some(key) = self.encrypt_key.lock().await.as_ref() {
             let nonce = make_nonce(seq, sid);
             let mut hdr_buf = [0u8; HEADER_SIZE];
-            header.encode(&mut hdr_buf).map_err(TransportError::Protocol)?;
+            header
+                .encode(&mut hdr_buf)
+                .map_err(TransportError::Protocol)?;
 
             let plain_len = fec_payload.len();
             fec_payload.resize(plain_len + TAG_SIZE, 0);
@@ -971,7 +1114,8 @@ impl Session {
                 Ok(Ok((n, _))) => {
                     self.metrics.counters.record_received(n as u64);
                     if let Ok(view) = PacketView::decode(&buf[..n]) {
-                        self.last_rx.store(self.micros_since_epoch(), Ordering::Release);
+                        self.last_rx
+                            .store(self.micros_since_epoch(), Ordering::Release);
                         self.dispatch_packet(view, &buf[..n]).await?;
                     } else {
                         self.metrics.counters.record_integrity_error();
@@ -1013,7 +1157,8 @@ impl Session {
                 return Ok(());
             }
         };
-        self.last_rx.store(self.micros_since_epoch(), Ordering::Release);
+        self.last_rx
+            .store(self.micros_since_epoch(), Ordering::Release);
         self.dispatch_packet(view, &buf[..n]).await
     }
 
@@ -1057,15 +1202,23 @@ impl Session {
                     tracing::debug!(seq, "AudioFrame plaintext too short for audio_seq prefix");
                     return Ok(());
                 }
-                let audio_seq = u32::from_be_bytes([
-                    plaintext[0], plaintext[1], plaintext[2], plaintext[3],
-                ]);
+                let audio_seq =
+                    u32::from_be_bytes([plaintext[0], plaintext[1], plaintext[2], plaintext[3]]);
                 let audio_payload = plaintext.slice(4..);
 
-                let frame = Frame { sequence: audio_seq, timestamp: ts, payload: audio_payload.clone() };
+                let frame = Frame {
+                    sequence: audio_seq,
+                    timestamp: ts,
+                    payload: audio_payload.clone(),
+                };
                 self.metrics.loss.record(audio_seq);
-                self.metrics.jitter.record(frame.timestamp, self.micros_since_epoch());
-                self.fec_dec.lock().await.push_data(audio_seq, audio_payload);
+                self.metrics
+                    .jitter
+                    .record(frame.timestamp, self.micros_since_epoch());
+                self.fec_dec
+                    .lock()
+                    .await
+                    .push_data(audio_seq, audio_payload);
                 if !self.jitter.push(frame) {
                     tracing::trace!(seq, audio_seq, "jitter buffer rejected frame");
                 }
@@ -1091,7 +1244,10 @@ impl Session {
                             Ok(plain_len) if plain_len >= 5 => {
                                 let fec_data = &tmp[..plain_len];
                                 let seq_base = u32::from_be_bytes([
-                                    fec_data[0], fec_data[1], fec_data[2], fec_data[3],
+                                    fec_data[0],
+                                    fec_data[1],
+                                    fec_data[2],
+                                    fec_data[3],
                                 ]);
                                 let window = fec_data[4];
                                 let fec_parity = FecParity {
@@ -1099,16 +1255,18 @@ impl Session {
                                     window,
                                     payload: Bytes::copy_from_slice(&fec_data[5..]),
                                 };
-                                if let Some((rec_seq, rec_payload)) =
-                                    self.fec_dec.lock().await.push_parity(fec_parity)
-                                {
+                                let recovered = self.fec_dec.lock().await.push_parity(fec_parity);
+                                if let Some((rec_seq, rec_payload)) = recovered {
                                     let frame = Frame {
                                         sequence: rec_seq,
                                         timestamp: 0,
                                         payload: rec_payload,
                                     };
                                     if !self.jitter.push(frame) {
-                                        tracing::trace!(rec_seq, "jitter buffer rejected FEC-recovered frame");
+                                        tracing::trace!(
+                                            rec_seq,
+                                            "jitter buffer rejected FEC-recovered frame"
+                                        );
                                     }
                                 }
                             }
@@ -1135,12 +1293,18 @@ impl Session {
                 // En modo P2P optimista, conceder el floor inmediatamente si no
                 // estamos transmitiendo nosotros. El árbitro real está en el relay.
                 if !self.ptt_active.load(Ordering::Acquire) {
-                    if let Some(p) = *self.peer.lock().await {
+                    let peer = *self.peer.lock().await;
+                    if let Some(p) = peer {
                         let ssrc = self.session_id();
                         let mut payload_buf = [0u8; 4];
                         payload_buf.copy_from_slice(&ssrc.to_be_bytes());
                         let _ = self
-                            .send_control(MessageType::FloorGrant, self.session_id(), &payload_buf, p)
+                            .send_control(
+                                MessageType::FloorGrant,
+                                self.session_id(),
+                                &payload_buf,
+                                p,
+                            )
                             .await;
                     }
                 }
@@ -1200,11 +1364,13 @@ impl Session {
         let mut sm = self.state.lock().await;
         let _ = sm.transition(SessionEvent::Close);
         let _ = sm.transition(SessionEvent::Close);
+        drop(sm);
         Ok(())
     }
 
     async fn send_heartbeat(&self) -> Result<(), TransportError> {
-        let peer = match *self.peer.lock().await {
+        let peer = *self.peer.lock().await;
+        let peer = match peer {
             Some(p) => p,
             None => return Ok(()),
         };
@@ -1277,7 +1443,10 @@ fn build_transcript(client_nonce: &[u8; 32], server_nonce: &[u8; 32], session_id
 ///   IKM  = shared_secret
 ///   info para encrypt_key = b"GS-encrypt-v1"
 ///   info para decrypt_key = b"GS-decrypt-v1"
-fn derive_session_keys(shared_secret: &[u8; 32], transcript: &[u8; 68]) -> (SessionKey, SessionKey) {
+fn derive_session_keys(
+    shared_secret: &[u8; 32],
+    transcript: &[u8; 68],
+) -> (SessionKey, SessionKey) {
     let hkdf = Hkdf::<Sha256>::new(Some(transcript.as_ref()), shared_secret);
     let mut encrypt_key = [0u8; 32];
     let mut decrypt_key = [0u8; 32];

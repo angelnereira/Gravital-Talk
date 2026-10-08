@@ -80,20 +80,20 @@ impl Resampler {
 
     /// Sample rate de entrada.
     #[must_use]
-    pub fn in_rate(&self) -> u32 {
+    pub const fn in_rate(&self) -> u32 {
         self.in_rate
     }
 
     /// Sample rate de salida.
     #[must_use]
-    pub fn out_rate(&self) -> u32 {
+    pub const fn out_rate(&self) -> u32 {
         self.out_rate
     }
 
     /// Número de samples (interleaved) de salida que se producen cuando hay
     /// suficiente entrada acumulada.
     #[must_use]
-    pub fn out_block_size(&self) -> usize {
+    pub const fn out_block_size(&self) -> usize {
         self.out_frames_per_channel * self.channels
     }
 
@@ -102,7 +102,7 @@ impl Resampler {
     /// `out_block_size()` interleaved que se devuelven en un `Vec<i16>`
     /// concatenado. Si no hay suficiente entrada, el `Vec` puede estar vacío.
     pub fn push(&mut self, samples_in: &[i16]) -> Result<Vec<i16>> {
-        if samples_in.len() % self.channels != 0 {
+        if !samples_in.len().is_multiple_of(self.channels) {
             return Err(IoError::UnsupportedConfig(format!(
                 "input length {} not multiple of channels {}",
                 samples_in.len(),

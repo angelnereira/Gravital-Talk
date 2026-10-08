@@ -34,6 +34,9 @@ fn main() -> anyhow::Result<()> {
     rt.block_on(run(codec_id, duration_s))
 }
 
+// El futuro mantiene vivo `AudioCapture` (cpal `Stream` no es `Send`) a través
+// de los `await`; el ejemplo lo ejecuta con `block_on`, nunca lo spawnea.
+#[allow(clippy::future_not_send)]
 async fn run(codec_id: CodecId, duration_s: u64) -> anyhow::Result<()> {
     let server_addr = "127.0.0.1:19700".parse()?;
     let client_addr = "127.0.0.1:19701".parse()?;

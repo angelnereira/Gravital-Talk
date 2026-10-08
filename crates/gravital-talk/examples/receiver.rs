@@ -56,7 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         match tokio::time::timeout(remaining, session.recv_audio()).await {
             Ok(Ok(frame)) => {
-                for chunk in frame.payload.chunks_exact(2) {
+                for chunk in frame.payload.as_chunks::<2>().0 {
                     writer.write_sample(i16::from_le_bytes([chunk[0], chunk[1]]))?;
                 }
             }

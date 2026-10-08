@@ -13,10 +13,7 @@ use proptest::prelude::*;
 // ── Estrategia: generar ventanas de frames arbitrarios ────────────────────────
 
 /// Genera una ventana de `window` frames con payloads de longitud `frame_len`.
-fn arb_frame_window(
-    max_window: u8,
-    max_frame: usize,
-) -> impl Strategy<Value = (u8, Vec<Vec<u8>>)> {
+fn arb_frame_window(max_window: u8, max_frame: usize) -> impl Strategy<Value = (u8, Vec<Vec<u8>>)> {
     (2u8..=max_window, 1usize..=max_frame).prop_flat_map(|(window, frame_len)| {
         let frames = proptest::collection::vec(
             proptest::collection::vec(any::<u8>(), frame_len),

@@ -32,7 +32,7 @@ impl PcmCodec {
         self.samples_per_channel() * self.channels as usize
     }
 
-    fn wire_bytes(&self) -> usize {
+    const fn wire_bytes(&self) -> usize {
         self.total_samples() * 2
     }
 }
@@ -79,7 +79,7 @@ impl Decoder for PcmCodec {
     }
 
     fn decode(&mut self, bytes: &[u8], pcm: &mut [i16]) -> Result<usize> {
-        if bytes.len() % 2 != 0 {
+        if !bytes.len().is_multiple_of(2) {
             return Err(CodecError::InvalidParams("PCM payload length not even"));
         }
         let samples = bytes.len() / 2;

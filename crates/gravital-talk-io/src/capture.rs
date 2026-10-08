@@ -59,7 +59,6 @@ impl AudioCapture {
 
         let (tx, rx) = mpsc::channel();
         let mut accum: Vec<i16> = Vec::with_capacity(frame_samples);
-        let tx_clone = tx.clone();
 
         let err_fn = |e| tracing::error!(%e, "cpal input stream error");
 
@@ -67,7 +66,7 @@ impl AudioCapture {
             SampleFormat::F32 => device.build_input_stream(
                 &actual_config,
                 move |data: &[f32], _: &_| {
-                    push_f32(data, &mut accum, frame_samples, &tx_clone);
+                    push_f32(data, &mut accum, frame_samples, &tx);
                 },
                 err_fn,
                 None,
@@ -75,7 +74,7 @@ impl AudioCapture {
             SampleFormat::I16 => device.build_input_stream(
                 &actual_config,
                 move |data: &[i16], _: &_| {
-                    push_i16(data, &mut accum, frame_samples, &tx_clone);
+                    push_i16(data, &mut accum, frame_samples, &tx);
                 },
                 err_fn,
                 None,
@@ -83,7 +82,7 @@ impl AudioCapture {
             SampleFormat::U16 => device.build_input_stream(
                 &actual_config,
                 move |data: &[u16], _: &_| {
-                    push_u16(data, &mut accum, frame_samples, &tx_clone);
+                    push_u16(data, &mut accum, frame_samples, &tx);
                 },
                 err_fn,
                 None,

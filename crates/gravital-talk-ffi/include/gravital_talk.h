@@ -178,6 +178,16 @@ GsStatus gs_session_state(GsSessionHandle *handle, GsSessionState *out_state);
 GsStatus gs_session_id(GsSessionHandle *handle, uint32_t *out_id);
 
 /*
+ Fija el `session_id` a usar durante el handshake.
+
+ Es lo que habilita el **modo servidor/relay por sala**: todas las partes
+ comparten el mismo id para que el relay pueda enrutar los paquetes del
+ handshake. Debe llamarse **antes** de `gs_session_connect` /
+ `gs_session_accept`. Un valor `0` restaura el modo P2P (id aleatorio).
+ */
+GsStatus gs_session_set_session_id(GsSessionHandle *handle, uint32_t session_id);
+
+/*
  Rellena `out` con un snapshot atómico de métricas.
  */
 GsStatus gs_session_metrics(GsSessionHandle *handle, GsMetrics *out);

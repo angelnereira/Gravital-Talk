@@ -46,7 +46,7 @@ impl Default for StreamConfig {
 }
 
 impl StreamConfig {
-    pub fn samples_per_frame(&self) -> usize {
+    pub const fn samples_per_frame(&self) -> usize {
         (self.sample_rate as usize * self.frame_duration_ms as usize) / 1000
             * self.channels as usize
     }

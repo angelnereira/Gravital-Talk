@@ -1,0 +1,6 @@
+[toolchain]
+# Versión fijada del proyecto. `rustup` la instala automáticamente.
+# MSRV declarado en Cargo.toml (`rust-version = "1.99"`) debe coincidir.
+channel    = "1.99.0"
+components = ["rustfmt", "clippy"]
+targets    = ["wasm32-unknown-unknown"]

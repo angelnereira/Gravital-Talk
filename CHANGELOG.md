@@ -2,6 +2,56 @@
 
 Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y el proyecto usa [SemVer](https://semver.org/lang/es/).
 
+## [Unreleased] — 0.3.0-alpha.1
+
+Modo servidor (sala) real + Rust 1.99 + app Flutter + contratos + Docker.
+
+### Added
+
+**Modo servidor/sala — handshake enrutado por relay**
+- `Session::set_preset_session_id(id)`: permite fijar el `session_id` antes del handshake. Sin esto, `ClientHello` viaja con id 0 y el relay lo descartaba, haciendo imposible el modo sala (terminal central).
+- El servidor se registra ante el relay con un `Heartbeat` al empezar el handshake; el relay enruta los 4 mensajes del handshake sin descifrar nada.
+- El cliente valida que el `ServerHello` respeta el id pre-fijado.
+- FFI: `gs_session_set_session_id(handle, session_id)` (ABI C v1, aditiva).
+- CLI: `gs ptt --relay H --room C` resuelve la sala y pre-fija el id; `--listen` actúa como servidor de la sala.
+- Test e2e nuevo `crates/gravital-talk-relay/tests/relay_routed_session.rs`: handshake 4-way + frame de audio cifrado a través del relay.
+- CLI headless para CI/contenedores: `gs ptt --no-audio --headless --duration N` (fuente senoidal interna, resume frames y RTT/jitter/loss/MOS).
+
+**Toolchain Rust 1.99**
+- MSRV `rust-version = "1.99"` en todo el workspace y SDKs; `rust-toolchain.toml` pin a 1.99.0; Dockerfile del relay actualizado (rust:1.99-slim).
+- `async-trait` 0.1.89 → 0.1.92 (elimina lints redundantes del macro).
+
+**App Flutter multiplataforma (`app/`)**
+- Proyecto Flutter 3.47 (android, ios, linux, macos, windows, web).
+- Pantallas: Home (hero + modo servidor/P2P + diagnóstico + eventos), configuración de servidor (crear sala con QR / unirse), configuración P2P (host/join), sesión en vivo (PTT, VU meter, métricas de red), ajustes (audio/códec/tema/diagnóstico) y Acerca de.
+- Motor doble: `dart:ffi` contra `libgravital_talk_ffi` (handshakes bloqueantes en isolate) con fallback demo para desarrollo de UI sin librería nativa.
+- Servicios: `RoomApi` (REST del relay), `SettingsStore` (shared_preferences), `EventLog`, controlador de sesión con ticker de métricas.
+- Ajustes persistidos: sample rate, canales, frame, jitter buffer, MTU, bitrate, codec, tema.
+
+**Contratos del plano de control (proto)**
+- `proto/gravital/v1/server_control.proto`: ServerInfo, Health, CreateRoom, GetRoom, ListRooms, DeleteRoom, WatchRoom (stream).
+- `proto/gravital/v1/pairing.proto`: ofertas de emparejamiento P2P.
+- `docs/grpc-evaluation.md`: análisis (control sí, media no) y plan de adopción con tonic.
+
+**Docker**
+- `docker/Dockerfile` multi-target (relay/cli), `Dockerfile.dev` (tests/bench), `Dockerfile.fuzz` (nightly + cargo-fuzz).
+- `compose.yaml` con perfiles: `e2e` (host+join headless con verificación de frames), `test`, `bench`, `perf` (tc netem: delay/jitter/pérdida), `security` (fuzz acotado), `observability` (Prometheus+Grafana).
+- `make docker-e2e/test/bench/perf/fuzz/obs` + scripts de sala compartida por volumen.
+- `.dockerignore` para contextos de build mínimos.
+
+### Changed
+
+- `README.md`: tabla de estado (modo sala, Flutter, contratos, Docker), quickstart Docker, hoja de ruta 0.3.0-alpha.1.
+- `Makefile`: nuevos targets `docker-*`.
+- Calidad: clippy/fmt limpios en todo el workspace (incluido gate `perf`+`nursery`); 25 suites de tests en verde.
+
+### Fixed
+
+- `gravital-talk-core`: `FragmentReassembler` reexportado solo con la feature `alloc` (compila `--no-default-features` y `make cross-wasm`).
+- Tests de `floor.rs` y `prop_decode.rs` sin dependencias de `alloc` forzadas.
+- `session.rs`: mutex no retenidos a través de `await` en PTT/close/FEC.
+- Benches `opus_encode`: overflow de `i16` en debug.
+
 ## [0.2.0-alpha.3] — 2026-05-10
 
 Emparejamiento P2P por QR + STUN + Android completo + CI auto-build de binarios.

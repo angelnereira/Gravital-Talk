@@ -10,7 +10,12 @@ use gravital_talk::{Config, Session, SessionRole, Transport, UdpConfig, UdpTrans
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-async fn make_session_pair() -> (Arc<Session>, Arc<Session>, std::net::SocketAddr, std::net::SocketAddr) {
+async fn make_session_pair() -> (
+    Arc<Session>,
+    Arc<Session>,
+    std::net::SocketAddr,
+    std::net::SocketAddr,
+) {
     let srv_transport = Arc::new(
         UdpTransport::bind(UdpConfig {
             bind_addr: "127.0.0.1:0".parse().unwrap(),
@@ -63,8 +68,7 @@ async fn stress_500_frames_roundtrip() {
     let recv_handle = tokio::spawn(async move {
         let mut count = 0u32;
         while count < FRAMES {
-            let result =
-                tokio::time::timeout(Duration::from_secs(10), srv.recv_audio()).await;
+            let result = tokio::time::timeout(Duration::from_secs(10), srv.recv_audio()).await;
             match result {
                 Ok(Ok(_frame)) => count += 1,
                 Ok(Err(e)) => panic!("recv_audio error at frame {count}: {e}"),
@@ -84,7 +88,10 @@ async fn stress_500_frames_roundtrip() {
     }
 
     let received = recv_handle.await.unwrap();
-    assert_eq!(received, FRAMES, "all {FRAMES} frames must arrive over loopback");
+    assert_eq!(
+        received, FRAMES,
+        "all {FRAMES} frames must arrive over loopback"
+    );
 }
 
 /// Envía 200 frames de tamaño máximo (MTU - overhead) sin pausa.
@@ -174,7 +181,10 @@ async fn stress_concurrent_senders() {
     }
 
     let received = recv_handle.await.unwrap();
-    assert_eq!(received, TOTAL, "all {TOTAL} frames from {SENDERS} senders must arrive");
+    assert_eq!(
+        received, TOTAL,
+        "all {TOTAL} frames from {SENDERS} senders must arrive"
+    );
 }
 
 /// Verifica que las métricas de la sesión reflejan el tráfico enviado y que
@@ -198,7 +208,7 @@ async fn stress_metrics_consistent_after_traffic() {
     });
 
     for _ in 0..FRAMES {
-        client.send_audio(&vec![0u8; 160]).await.unwrap();
+        client.send_audio(&[0u8; 160]).await.unwrap();
     }
     recv_handle.await.unwrap();
 
@@ -208,11 +218,11 @@ async fn stress_metrics_consistent_after_traffic() {
     let srv_bitrate = server.current_bitrate();
 
     assert!(
-        cli_bitrate >= 8_000 && cli_bitrate <= 64_000,
+        (8_000..=64_000).contains(&cli_bitrate),
         "client bitrate {cli_bitrate} out of [8k, 64k] range"
     );
     assert!(
-        srv_bitrate >= 8_000 && srv_bitrate <= 64_000,
+        (8_000..=64_000).contains(&srv_bitrate),
         "server bitrate {srv_bitrate} out of [8k, 64k] range"
     );
 
@@ -263,7 +273,7 @@ async fn stress_bidirectional_audio() {
     let cli = client.clone();
     let h_cli_send = tokio::spawn(async move {
         for _ in 0..FRAMES {
-            cli.send_audio(&vec![0x11u8; 160]).await.unwrap();
+            cli.send_audio(&[0x11u8; 160]).await.unwrap();
         }
     });
 
@@ -271,7 +281,7 @@ async fn stress_bidirectional_audio() {
     let srv = server.clone();
     let h_srv_send = tokio::spawn(async move {
         for _ in 0..FRAMES {
-            srv.send_audio(&vec![0x22u8; 160]).await.unwrap();
+            srv.send_audio(&[0x22u8; 160]).await.unwrap();
         }
     });
 
@@ -281,6 +291,12 @@ async fn stress_bidirectional_audio() {
     let received_by_server = h_srv_recv.await.unwrap();
     let received_by_client = h_cli_recv.await.unwrap();
 
-    assert_eq!(received_by_server, FRAMES, "server should receive all frames from client");
-    assert_eq!(received_by_client, FRAMES, "client should receive all frames from server");
+    assert_eq!(
+        received_by_server, FRAMES,
+        "server should receive all frames from client"
+    );
+    assert_eq!(
+        received_by_client, FRAMES,
+        "client should receive all frames from server"
+    );
 }

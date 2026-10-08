@@ -25,7 +25,7 @@ pub struct OpusCodec {
 // of `encode`/`decode` already enforces.
 unsafe impl Send for OpusCodec {}
 
-fn to_sample_rate(hz: u32) -> Result<SampleRate> {
+const fn to_sample_rate(hz: u32) -> Result<SampleRate> {
     match hz {
         8_000 => Ok(SampleRate::Hz8000),
         12_000 => Ok(SampleRate::Hz12000),
@@ -38,7 +38,7 @@ fn to_sample_rate(hz: u32) -> Result<SampleRate> {
     }
 }
 
-fn to_channels(n: u8) -> Result<Channels> {
+const fn to_channels(n: u8) -> Result<Channels> {
     match n {
         1 => Ok(Channels::Mono),
         2 => Ok(Channels::Stereo),
@@ -81,7 +81,7 @@ impl OpusCodec {
         })
     }
 
-    fn samples_per_channel(&self) -> usize {
+    const fn samples_per_channel(&self) -> usize {
         (self.sample_rate as usize * self.frame_duration_ms as usize) / 1000
     }
 }

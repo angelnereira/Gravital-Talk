@@ -60,6 +60,7 @@ fn crc16_table(data: &[u8]) -> u16 {
 }
 
 /// Calcula CRC-16 en dos segmentos (header y payload), sin concatenar.
+///
 /// Útil para evitar una copia al validar un paquete recibido: se pasa el
 /// header con el campo `checksum` puesto a cero y el payload por separado.
 #[inline]

@@ -1,0 +1,177 @@
+# Gravital Talk — stack completo de contenedores.
+#
+# Perfiles:
+#   (default)     relay  — daemon en primer plano
+#   e2e           relay + host + join  — prueba multi-contenedor headless
+#   test          tester               — cargo test --workspace
+#   bench         bench                — criterion en contenedor
+#   perf          relay + netem-join   — rendimiento bajo red simulada (tc)
+#   security      fuzz                 — cargo-fuzz (nightly), targets acotados
+#   observability prometheus + grafana — métricas del relay
+#
+# Uso (ver Makefile): `make docker-e2e`, `make docker-test`, `make docker-perf`, …
+
+name: gravital-talk
+
+services:
+  # ── Relay (terminal central) ────────────────────────────────────────────
+  relay:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: relay
+    image: gravital-talk/relay:local
+    ports:
+      - "9000:9000/udp"
+      - "9090:9090/tcp"
+      - "9100:9100/tcp"
+    environment:
+      GS_LOG: ${GS_LOG:-info}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9100/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  # ── E2E multi-contenedor: host + join headless ─────────────────────────
+  room-host:
+    profiles: ["e2e", "perf"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: cli
+    image: gravital-talk/cli:local
+    depends_on:
+      relay:
+        condition: service_healthy
+    volumes:
+      - room-code:/shared
+      - ./docker/scripts:/scripts:ro
+    entrypoint: ["bash", "/scripts/room-host.sh"]
+    environment:
+      RELAY_HOST: relay
+      UDP_PORT: "9000"
+      OBS_PORT: "9100"
+      SESSION_ID: "305419896"
+      DURATION: "25"
+
+  room-join:
+    profiles: ["e2e"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: cli
+    image: gravital-talk/cli:local
+    depends_on:
+      relay:
+        condition: service_healthy
+      room-host:
+        condition: service_started
+    volumes:
+      - room-code:/shared
+      - ./docker/scripts:/scripts:ro
+    entrypoint: ["bash", "/scripts/room-join.sh"]
+    environment:
+      RELAY_HOST: relay
+      UDP_PORT: "9000"
+      OBS_PORT: "9100"
+      DURATION: "10"
+
+  # ── Suite de tests en contenedor ───────────────────────────────────────
+  tester:
+    profiles: ["test"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dev
+    volumes:
+      - .:/src:cached
+      - cargo-cache:/usr/local/cargo/registry
+      - cargotarget:/src/target
+    working_dir: /src
+    command: ["cargo", "test", "--workspace", "--all-targets"]
+
+  # ── Benchmarks criterion ───────────────────────────────────────────────
+  bench:
+    profiles: ["bench"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dev
+    volumes:
+      - .:/src:cached
+      - cargo-cache:/usr/local/cargo/registry
+      - cargotarget:/src/target
+      - bench-output:/src/target/criterion
+    working_dir: /src
+    command: ["cargo", "bench", "--workspace"]
+
+  # ── Rendimiento bajo red simulada (tc netem) ───────────────────────────
+  netem-join:
+    profiles: ["perf"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: cli
+    image: gravital-talk/cli:local
+    cap_add:
+      - NET_ADMIN
+    depends_on:
+      relay:
+        condition: service_healthy
+      room-host:
+        condition: service_started
+    volumes:
+      - room-code:/shared
+      - ./docker/scripts:/scripts:ro
+    entrypoint: ["bash", "/scripts/netem-join.sh"]
+    environment:
+      RELAY_HOST: relay
+      UDP_PORT: "9000"
+      OBS_PORT: "9100"
+      DURATION: "10"
+      DELAY_MS: "30"
+      JITTER_MS: "5"
+      LOSS_PERCENT: "1"
+
+  # ── Fuzzing (seguridad) ────────────────────────────────────────────────
+  fuzz:
+    profiles: ["security"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.fuzz
+    volumes:
+      - cargo-cache:/usr/local/cargo/registry
+      - cargotarget:/src/target
+    environment:
+      FUZZ_SECONDS: ${FUZZ_SECONDS:-60}
+
+  # ── Observabilidad ─────────────────────────────────────────────────────
+  prometheus:
+    profiles: ["observability"]
+    image: prom/prometheus:latest
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - relay
+
+  grafana:
+    profiles: ["observability"]
+    image: grafana/grafana:latest
+    ports:
+      - "3001:3000"
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: gravital
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    depends_on:
+      - prometheus
+
+volumes:
+  room-code:
+  cargo-cache:
+  cargotarget:
+  bench-output:

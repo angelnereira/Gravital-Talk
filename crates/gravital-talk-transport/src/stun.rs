@@ -227,7 +227,7 @@ fn parse_xor_mapped_address(val: &[u8]) -> Option<SocketAddr> {
 }
 
 /// Parsea `MAPPED-ADDRESS` legacy (IPv4).
-fn parse_mapped_address(val: &[u8]) -> Option<SocketAddr> {
+const fn parse_mapped_address(val: &[u8]) -> Option<SocketAddr> {
     if val.len() < 8 {
         return None;
     }
@@ -262,7 +262,7 @@ mod tests {
         let mut attr = Vec::new();
         attr.extend_from_slice(&ATTR_XOR_MAPPED_ADDRESS.to_be_bytes());
         attr.extend_from_slice(&8u16.to_be_bytes()); // length
-        attr.push(0x00);                             // reserved
+        attr.push(0x00); // reserved
         attr.push(FAMILY_IPV4);
         attr.extend_from_slice(&x_port.to_be_bytes());
         attr.extend_from_slice(&x_ip.to_be_bytes());

@@ -2,7 +2,7 @@
 name         = "gravital-talk-python"
 version      = "0.1.0-alpha.1"
 edition      = "2021"
-rust-version = "1.78"
+rust-version = "1.99"
 authors      = ["Angel Nereira <angelnereira15@gmail.com>"]
 license      = "MIT OR Apache-2.0"
 repository   = "https://github.com/angelnereira/gravital-talk"

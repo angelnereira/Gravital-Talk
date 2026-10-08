@@ -53,10 +53,11 @@ async fn handle(
     let path = req.uri().path().to_string();
 
     // Collect body (needed for POST).
-    let body_bytes = match req.into_body().collect().await {
-        Ok(b) => b.to_bytes(),
-        Err(_) => Bytes::new(),
-    };
+    let body_bytes = req
+        .into_body()
+        .collect()
+        .await
+        .map_or_else(|_| Bytes::new(), |b| b.to_bytes());
 
     let resp = if path == "/healthz" {
         json_response(StatusCode::OK, "\"ok\"")
@@ -88,7 +89,9 @@ async fn handle(
         Response::builder()
             .status(StatusCode::NOT_FOUND)
             .header("content-type", "application/json")
-            .body(Full::new(Bytes::from_static(b"{\"error\":\"not found\"}\n")))
+            .body(Full::new(Bytes::from_static(
+                b"{\"error\":\"not found\"}\n",
+            )))
             .unwrap()
     };
 
@@ -125,16 +128,16 @@ fn handle_get_room(router: &Router, code: &str) -> Response<Full<Bytes>> {
             r#"{"error":"invalid room code format"}"#,
         );
     }
-    match router.resolve_room(code) {
-        Some(session_id) => {
+    router.resolve_room(code).map_or_else(
+        || json_response(StatusCode::NOT_FOUND, r#"{"error":"room not found"}"#),
+        |session_id| {
             let peer_count = router.peer_count(session_id);
             let body = format!(
                 r#"{{"code":"{code}","session_id":{session_id},"peer_count":{peer_count}}}"#
             );
             json_response(StatusCode::OK, &body)
-        }
-        None => json_response(StatusCode::NOT_FOUND, r#"{"error":"room not found"}"#),
-    }
+        },
+    )
 }
 
 fn handle_delete_room(router: &Router, code: &str) -> Response<Full<Bytes>> {

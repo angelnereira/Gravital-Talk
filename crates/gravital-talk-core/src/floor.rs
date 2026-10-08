@@ -158,7 +158,7 @@ impl FloorController {
     /// Aplica un evento. Si la transición es inválida el estado no cambia
     /// y se devuelve `Err`. `ssrc` es el SSRC del participante al que aplica
     /// el evento (0 para eventos sin sujeto como Timeout/Reset).
-    pub fn transition(
+    pub const fn transition(
         &mut self,
         event: FloorEvent,
         ssrc: u32,
@@ -263,7 +263,7 @@ impl FloorPayload {
         Ok(())
     }
 
-    pub fn decode(buf: &[u8]) -> Result<Self, Error> {
+    pub const fn decode(buf: &[u8]) -> Result<Self, Error> {
         if buf.len() < Self::SIZE {
             return Err(Error::MalformedPayload);
         }
@@ -338,13 +338,12 @@ mod tests {
 
     #[test]
     fn reset_from_any_state_goes_to_idle() {
-        for setup_events in [
-            vec![],
-            vec![(FloorEvent::Request, 0x1u32)],
-            vec![(FloorEvent::Request, 0x1), (FloorEvent::Grant, 0x1)],
-        ] {
+        let empty: [(FloorEvent, u32); 0] = [];
+        let requested = [(FloorEvent::Request, 0x1u32)];
+        let granted = [(FloorEvent::Request, 0x1u32), (FloorEvent::Grant, 0x1u32)];
+        for setup_events in [&empty[..], &requested[..], &granted[..]] {
             let mut fc = FloorController::default();
-            for (ev, ssrc) in setup_events {
+            for &(ev, ssrc) in setup_events {
                 fc.transition(ev, ssrc).unwrap();
             }
             fc.transition(FloorEvent::Reset, 0).unwrap();
@@ -397,11 +396,45 @@ mod tests {
         assert!(FloorPayload::decode(&[0; 3]).is_err());
     }
 
+    /// Writer de tamaño fijo para verificar `Display` sin `alloc`.
+    struct FixedBuf {
+        data: [u8; 32],
+        len: usize,
+    }
+
+    impl core::fmt::Write for FixedBuf {
+        fn write_str(&mut self, s: &str) -> core::fmt::Result {
+            let bytes = s.as_bytes();
+            let end = self.len + bytes.len();
+            if end > self.data.len() {
+                return Err(core::fmt::Error);
+            }
+            self.data[self.len..end].copy_from_slice(bytes);
+            self.len = end;
+            Ok(())
+        }
+    }
+
+    impl FixedBuf {
+        fn new() -> Self {
+            Self {
+                data: [0; 32],
+                len: 0,
+            }
+        }
+
+        fn as_str(&self) -> &str {
+            core::str::from_utf8(&self.data[..self.len]).unwrap()
+        }
+    }
+
     #[test]
     fn display_states() {
-        assert_eq!(FloorState::Idle.to_string(), "idle");
-        assert_eq!(FloorState::Granted.to_string(), "granted");
-        assert_eq!(FloorState::Released.to_string(), "released");
+        use core::fmt::Write as _;
+        let mut buf = FixedBuf::new();
+        write!(buf, "{}", FloorState::Idle).unwrap();
+        write!(buf, " {} {}", FloorState::Granted, FloorState::Released).unwrap();
+        assert_eq!(buf.as_str(), "idle granted released");
     }
 
     #[test]

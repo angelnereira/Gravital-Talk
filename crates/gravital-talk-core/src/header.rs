@@ -45,12 +45,12 @@ impl Flags {
     }
 
     #[inline]
-    pub fn set(&mut self, other: Self) {
+    pub const fn set(&mut self, other: Self) {
         self.0 |= other.0;
     }
 
     #[inline]
-    pub fn unset(&mut self, other: Self) {
+    pub const fn unset(&mut self, other: Self) {
         self.0 &= !other.0;
     }
 
@@ -87,7 +87,7 @@ impl PacketHeader {
     /// El `payload_len` y el `checksum` no están aquí — viven al final del
     /// paquete (ver [`crate::packet::Packet::decode`]).
     #[inline]
-    pub fn decode(buf: &[u8]) -> Result<Self, Error> {
+    pub const fn decode(buf: &[u8]) -> Result<Self, Error> {
         if buf.len() < HEADER_SIZE {
             return Err(Error::TooShort);
         }
