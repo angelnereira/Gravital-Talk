@@ -260,6 +260,9 @@ enum RoomAction {
         /// session_id numérico para la sala (debe ser el mismo que usarán los peers).
         #[arg(long)]
         session_id: u32,
+        /// Token de sala (PSK de Noise). El relay solo guarda su hash.
+        #[arg(long)]
+        token: Option<String>,
     },
     /// Resuelve un código de sala en un relay y muestra el session_id.
     Join {
@@ -788,6 +791,8 @@ async fn cmd_relay(
         udp_socket.clone(),
         router.clone(),
         gs_rate_limit,
+        // `gs relay` (CLI) no gestiona TLS; usa `gs-relay --tls-cert/--tls-key`.
+        None,
     ));
     let obs_task = tokio::spawn(observability::run(obs_listener, router.clone()));
 
@@ -815,8 +820,12 @@ async fn cmd_room(action: RoomAction) -> Result<()> {
             relay,
             obs_port,
             session_id,
+            token,
         } => {
-            let body = format!(r#"{{"session_id":{session_id}}}"#);
+            let body = token.as_deref().map_or_else(
+                || format!(r#"{{"session_id":{session_id}}}"#),
+                |t| format!(r#"{{"session_id":{session_id},"token":"{t}"}}"#),
+            );
             let resp = http_post(&relay, obs_port, "/api/rooms", &body).await?;
             println!("{resp}");
         }
@@ -942,7 +951,12 @@ async fn cmd_ptt(
                 // Modo servidor/relay: resolver room → session_id, luego conectar
                 // al relay UDP prefijando ese id para que el relay pueda enrutar
                 // el handshake (modo sala).
-                let path = format!("/api/rooms/{room_code}");
+                let path = match room_token.as_ref() {
+                    Some(t) if !t.is_empty() => {
+                        format!("/api/rooms/{room_code}?token={t}")
+                    }
+                    _ => format!("/api/rooms/{room_code}"),
+                };
                 let resp = http_get(relay_host, relay_obs_port, &path)
                     .await
                     .context("failed to resolve room code — is the relay running?")?;

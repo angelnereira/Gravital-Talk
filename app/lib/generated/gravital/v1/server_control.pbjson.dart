@@ -44,13 +44,14 @@ const CreateRoomRequest$json = {
   '2': [
     {'1': 'session_id', '3': 1, '4': 1, '5': 13, '10': 'sessionId'},
     {'1': 'display_name', '3': 2, '4': 1, '5': 9, '10': 'displayName'},
+    {'1': 'token', '3': 3, '4': 1, '5': 9, '10': 'token'},
   ],
 };
 
 /// Descriptor for `CreateRoomRequest`. Decode as a `google.protobuf.DescriptorProto`.
 final $typed_data.Uint8List createRoomRequestDescriptor = $convert.base64Decode(
     'ChFDcmVhdGVSb29tUmVxdWVzdBIdCgpzZXNzaW9uX2lkGAEgASgNUglzZXNzaW9uSWQSIQoMZG'
-    'lzcGxheV9uYW1lGAIgASgJUgtkaXNwbGF5TmFtZQ==');
+    'lzcGxheV9uYW1lGAIgASgJUgtkaXNwbGF5TmFtZRIUCgV0b2tlbhgDIAEoCVIFdG9rZW4=');
 
 @$core.Deprecated('Use createRoomResponseDescriptor instead')
 const CreateRoomResponse$json = {
@@ -77,12 +78,14 @@ const GetRoomRequest$json = {
   '1': 'GetRoomRequest',
   '2': [
     {'1': 'code', '3': 1, '4': 1, '5': 9, '10': 'code'},
+    {'1': 'token', '3': 2, '4': 1, '5': 9, '10': 'token'},
   ],
 };
 
 /// Descriptor for `GetRoomRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List getRoomRequestDescriptor =
-    $convert.base64Decode('Cg5HZXRSb29tUmVxdWVzdBISCgRjb2RlGAEgASgJUgRjb2Rl');
+final $typed_data.Uint8List getRoomRequestDescriptor = $convert.base64Decode(
+    'Cg5HZXRSb29tUmVxdWVzdBISCgRjb2RlGAEgASgJUgRjb2RlEhQKBXRva2VuGAIgASgJUgV0b2'
+    'tlbg==');
 
 @$core.Deprecated('Use getRoomResponseDescriptor instead')
 const GetRoomResponse$json = {

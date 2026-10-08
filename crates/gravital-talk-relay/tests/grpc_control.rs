@@ -61,6 +61,7 @@ async fn control_plane_roundtrip() {
         .create_room(CreateRoomRequest {
             session_id: SESSION_ID,
             display_name: String::new(),
+            token: "token-sala-1".into(),
         })
         .await
         .unwrap()
@@ -69,9 +70,21 @@ async fn control_plane_roundtrip() {
     assert!(!room.code.is_empty());
     assert_eq!(room.session_id, SESSION_ID);
 
+    // Sin token no resuelve (sala protegida).
+    let err = client
+        .get_room(GetRoomRequest {
+            code: room.code.clone(),
+            token: String::new(),
+        })
+        .await
+        .expect_err("sala con token no debe resolver sin token");
+    assert!(err.code() == tonic::Code::Unauthenticated || err.code() == tonic::Code::NotFound);
+
+    // Con el token correcto resuelve.
     let resolved = client
         .get_room(GetRoomRequest {
             code: room.code.clone(),
+            token: "token-sala-1".into(),
         })
         .await
         .unwrap()
@@ -79,6 +92,7 @@ async fn control_plane_roundtrip() {
         .room
         .expect("room resolved");
     assert_eq!(resolved.session_id, SESSION_ID);
+    assert_eq!(resolved.peer_count, 0);
 
     let list = client
         .list_rooms(ListRoomsRequest {})
@@ -91,7 +105,11 @@ async fn control_plane_roundtrip() {
     );
 
     // El router real también distingue la sala creada vía gRPC.
-    assert_eq!(router.resolve_room(&room.code), Some(SESSION_ID));
+    assert_eq!(
+        router.resolve_room(&room.code, Some("token-sala-1")),
+        Some(SESSION_ID)
+    );
+    assert_eq!(router.resolve_room(&room.code, None), None);
 
     drop(client);
     server_task.abort();

@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use dashmap::DashMap;
+use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 
 use crate::metrics::RelayMetrics;
@@ -98,12 +99,34 @@ pub enum RoomEventMsg {
 #[derive(Debug)]
 pub struct Router {
     routes: DashMap<u32, RouteEntry>,
-    rooms: DashMap<String, u32>,
+    rooms: DashMap<String, RoomEntry>,
     max_sessions: usize,
     max_peers_per_session: usize,
     metrics: RelayMetrics,
     /// Canal de eventos para suscriptores (WatchRoom gRPC, dashboards).
     event_tx: tokio::sync::broadcast::Sender<RoomEventMsg>,
+}
+
+/// Sala con su `session_id` y token opcional (hash SHA-256, nunca en claro).
+#[derive(Debug, Clone)]
+struct RoomEntry {
+    session_id: u32,
+    token_hash: Option<String>,
+}
+
+impl RoomEntry {
+    fn new(session_id: u32, token: Option<&str>) -> Self {
+        Self {
+            session_id,
+            token_hash: token.filter(|t| !t.is_empty()).map(hash_token),
+        }
+    }
+}
+
+/// SHA-256 hex de un token.
+fn hash_token(token: &str) -> String {
+    let digest = Sha256::digest(token.as_bytes());
+    digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 impl Router {
@@ -314,18 +337,34 @@ impl Router {
 
     // ── Rooms API ────────────────────────────────────────────────────────────
 
-    /// Registra un código de sala → session_id. Devuelve false si el código ya existe.
-    pub fn register_room(&self, code: String, session_id: u32) -> bool {
+    /// Registra un código de sala → session_id (con token opcional).
+    /// Devuelve false si el código ya existe.
+    pub fn register_room(&self, code: String, session_id: u32, token: Option<&str>) -> bool {
         if self.rooms.contains_key(&code) {
             return false;
         }
-        self.rooms.insert(code, session_id);
+        self.rooms.insert(code, RoomEntry::new(session_id, token));
         true
     }
 
-    /// Resuelve un código de sala a session_id.
-    pub fn resolve_room(&self, code: &str) -> Option<u32> {
-        self.rooms.get(code).map(|v| *v)
+    /// Resuelve un código de sala a `session_id`.
+    ///
+    /// Si la sala tiene token, `token` debe coincidir (protege la resolución
+    /// del código contra enumeración).
+    pub fn resolve_room(&self, code: &str, token: Option<&str>) -> Option<u32> {
+        let entry = self.rooms.get(code)?;
+        match &entry.token_hash {
+            Some(hash) => {
+                let provided = token.filter(|t| !t.is_empty())?;
+                (hash_token(provided) == *hash).then_some(entry.session_id)
+            }
+            None => Some(entry.session_id),
+        }
+    }
+
+    /// `true` si la sala exige token para resolverse.
+    pub fn room_requires_token(&self, code: &str) -> bool {
+        self.rooms.get(code).is_some_and(|e| e.token_hash.is_some())
     }
 
     /// Elimina un código de sala.
@@ -338,7 +377,7 @@ impl Router {
         self.rooms
             .iter()
             .map(|r| {
-                let sid = *r.value();
+                let sid = r.value().session_id;
                 let peers = self.peer_count(sid);
                 (r.key().clone(), sid, peers)
             })
@@ -349,7 +388,7 @@ impl Router {
     pub fn room_code_for(&self, session_id: u32) -> Option<String> {
         self.rooms
             .iter()
-            .find(|r| *r.value() == session_id)
+            .find(|r| r.value().session_id == session_id)
             .map(|r| r.key().clone())
     }
 
@@ -495,10 +534,40 @@ mod tests {
     #[test]
     fn room_registry_roundtrip() {
         let r = router();
-        assert!(r.register_room("ABCD-1234".into(), 42));
-        assert_eq!(r.resolve_room("ABCD-1234"), Some(42));
-        assert!(!r.register_room("ABCD-1234".into(), 99)); // duplicate
+        assert!(r.register_room("ABCD-1234".into(), 42, None));
+        assert_eq!(r.resolve_room("ABCD-1234", None), Some(42));
+        assert!(!r.register_room("ABCD-1234".into(), 99, None)); // duplicate
         assert!(r.remove_room("ABCD-1234"));
-        assert_eq!(r.resolve_room("ABCD-1234"), None);
+        assert_eq!(r.resolve_room("ABCD-1234", None), None);
+    }
+
+    #[test]
+    fn room_token_required_to_resolve() {
+        let r = router();
+        assert!(r.register_room("TOKN-0001".into(), 7, Some("s3cr3t")));
+        assert_eq!(
+            r.resolve_room("TOKN-0001", None),
+            None,
+            "sin token no resuelve"
+        );
+        assert_eq!(
+            r.resolve_room("TOKN-0001", Some("malo")),
+            None,
+            "token incorrecto no resuelve"
+        );
+        assert_eq!(r.resolve_room("TOKN-0001", Some("s3cr3t")), Some(7));
+        assert!(r.room_requires_token("TOKN-0001"));
+        assert!(!r.room_requires_token("ABCD-1234"));
+    }
+
+    #[test]
+    fn room_token_not_stored_in_plaintext() {
+        let r = router();
+        r.register_room("TOKN-0002".into(), 8, Some("super-secreto"));
+        // El mapa interno solo guarda el hash.
+        let entry = r.rooms.get("TOKN-0002").unwrap();
+        let hash = entry.token_hash.as_deref().unwrap();
+        assert!(hash.len() == 64 && !hash.contains("super-secreto"));
+        drop(entry);
     }
 }

@@ -117,6 +117,7 @@ class SessionController extends ChangeNotifier {
           host: profile.host,
           port: profile.observabilityPort,
           sessionId: sid,
+          token: profile.token,
         );
         code = room.code;
       }
@@ -148,6 +149,7 @@ class SessionController extends ChangeNotifier {
         host: profile.host,
         port: profile.observabilityPort,
         code: profile.roomCode,
+        token: profile.token,
       );
       _roomCode = room.code;
       _sessionId = room.sessionId;

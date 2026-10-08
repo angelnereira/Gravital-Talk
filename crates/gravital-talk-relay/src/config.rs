@@ -32,6 +32,12 @@ pub struct RelayConfig {
     /// Bind del plano de control gRPC (feature `grpc`). `None` = desactivado.
     #[serde(default)]
     pub grpc_bind: Option<SocketAddr>,
+    /// Certificado PEM para TLS/WSS (feature `tls`). `None` = sin TLS.
+    #[serde(default)]
+    pub tls_cert: Option<std::path::PathBuf>,
+    /// Clave privada PEM para TLS/WSS.
+    #[serde(default)]
+    pub tls_key: Option<std::path::PathBuf>,
 }
 
 const fn default_rate_limit() -> u64 {
@@ -68,6 +74,8 @@ impl Default for RelayConfig {
             max_peers_per_session: default_max_peers(),
             rate_limit_per_sec: default_rate_limit(),
             grpc_bind: None,
+            tls_cert: None,
+            tls_key: None,
         }
     }
 }

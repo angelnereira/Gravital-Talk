@@ -35,6 +35,13 @@ hyper-util        = { version = "0.1", features = ["tokio"] }
 http-body-util    = "0.1"
 prometheus        = { version = "0.13", default-features = false }
 dashmap           = "6.1"
+sha2              = { workspace = true }
+# TLS: WSS (WebSocket seguro) y gRPC TLS (feature `tls`).
+tokio-rustls  = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"], optional = true }
+rustls        = { version = "0.23", default-features = false, features = ["ring", "std"], optional = true }
+rustls-pemfile = { version = "2", optional = true }
+# gRPC-Web (navegador) sobre el mismo puerto gRPC (feature `web`).
+tonic-web      = { version = "0.12", optional = true }
 # Plano de control gRPC (opcional; ver docs/grpc-evaluation.md)
 tonic            = { version = "0.12", optional = true }
 prost            = { version = "0.13", optional = true }
@@ -57,6 +64,16 @@ grpc    = [
     "dep:async-stream",
     "dep:tonic-build",
     "dep:protoc-bin-vendored",
+]
+tls     = [
+    "dep:tokio-rustls",
+    "dep:rustls",
+    "dep:rustls-pemfile",
+    "tonic/tls",
+]
+web     = [
+    "grpc",
+    "dep:tonic-web",
 ]
 
 [lints.rust]

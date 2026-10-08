@@ -47,3 +47,32 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+// ── Librería nativa Rust (libgravital_talk_ffi.so) ────────────────────────
+// Compila los .so con cargo-ndk antes del build de Android cuando:
+//   - existe un NDK instalado, y
+//   - el script `scripts/flutter-android-libs.sh` está presente.
+// Si no hay NDK, el build continúa (la app usa el motor demo).
+tasks.register<Exec>("buildRustLibs") {
+    description = "Compila libgravital_talk_ffi.so (cargo-ndk) para los ABIs Android"
+    val ndkDirs = file("${System.getenv("ANDROID_HOME") ?: ""}/ndk")
+    val genLibs = file("src/main/jniLibs")
+    outputs.dir(genLibs)
+    val cmd = mutableListOf(
+        "bash",
+        file("../../scripts/flutter-android-libs.sh").absolutePath,
+    )
+    commandLine(cmd)
+    enabled = ndkDirs.isDirectory || !System.getenv("ANDROID_NDK_HOME").isNullOrEmpty()
+    doFirst {
+        if (!enabled) {
+            logger.warn("NDK no detectado: sin .so nativos (motor demo). Usa scripts/flutter-android-libs.sh o el workflow flutter-android.yml.")
+        }
+    }
+}
+
+tasks.configureEach {
+    if (name == "preBuild") {
+        dependsOn("buildRustLibs")
+    }
+}

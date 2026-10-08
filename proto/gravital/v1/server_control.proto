@@ -36,6 +36,8 @@ message CreateRoomRequest {
   uint32 session_id = 1;
   // Metadatos opcionales (nombre de sala, organización).
   string display_name = 2;
+  // Token de sala (PSK de Noise). Vacío = sala abierta.
+  string token = 3;
 }
 
 message CreateRoomResponse {
@@ -45,6 +47,8 @@ message CreateRoomResponse {
 // Resolución de un código legible a sala.
 message GetRoomRequest {
   string code = 1;
+  // Token si la sala lo exige (solo se almacena su hash en el servidor).
+  string token = 2;
 }
 
 message GetRoomResponse {

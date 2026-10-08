@@ -37,7 +37,10 @@ se rompen).
       recv con timeout, VU por RMS, fallback senoidal sin hardware.
 - [x] UI moderna: flutter_animate, animate_do, toastification,
       percent_indicator, mobile_scanner (QR), introduction_screen.
-- [ ] Empaquetado nativo por plataforma (cargo-ndk → jniLibs, podspec iOS).
+- [x] **Empaquetado nativo**: `scripts/flutter-android-libs.sh` (cargo-ndk →
+      jniLibs, task Gradle automática con NDK), `scripts/flutter-ios-lib.sh`
+      (staticlib + hook de Xcode), workflow `flutter-android.yml` (APK con
+      `.so` nativos en CI).
 
 ### Contratos (gRPC candidato) ✅ hecho
 - [x] `proto/gravital/v1/server_control.proto`, `pairing.proto`.
@@ -51,16 +54,21 @@ se rompen).
 
 ## Hito 0.3.0 — Seguridad de producción
 
-- [ ] **Noise Protocol** (NK/XX) sustituyendo el handshake custom
-      (mantener transcript binding y auth tags; no romper wire v1).
+- [x] **Noise Protocol**: patrón `NN`/`NNpsk0` (snow) como handshake por
+      defecto (`Auto`), con confirmación mutua y claves HKDF desde el
+      handshake hash; el handshake legacy v1 queda como fallback (o se
+      fuerza con `--handshake legacy`).
 - [x] **Anti-replay**: ventana autenticada por sesión (`transport::replay`,
       RFC 6479-style) + contador `replayed_dropped` + test de reinyección.
 - [x] **Rate limiting** en relay (fixed-window por IP, UDP+WS,
       `--rate-limit`/`GS_RATE_LIMIT`, métrica `dropped{rate_limited}`).
-- [ ] **Auth en relay**: token de sala opcional, metadatos en `Room`.
-- [ ] TLS/WSS para el bridge WebSocket; HTTPS para observabilidad.
-- [x] Pruebas de seguridad base: `make docker-fuzz`, estrés, replay test.
-      (pendiente: fuzz en CI y anti-replay Noise-native).
+- [x] **Auth de sala**: token opcional (hash SHA-256 en el relay) exigido
+      para resolver el código (REST `?token=` y gRPC); como PSK de Noise
+      (`NNpsk0`) los peers sin token no completan el handshake.
+- [x] **TLS/WSS**: `--tls-cert/--tls-key` (feature `tls`) → WSS en el puerto
+      WS y gRPC over TLS; HTTP de observabilidad permanece plano.
+- [x] Pruebas de seguridad: `make docker-fuzz`, estrés, replay test,
+      tests de token (wrong token sin downgrade).
 
 ## Hito 0.3.1 — Plano de control gRPC
 
@@ -70,7 +78,9 @@ se rompen).
 - [x] Test de integración `grpc_control` con cliente tonic real.
 - [x] Cliente Dart (`grpc-dart` 5.x) generado en `app/lib/generated` y
       `FallbackRoomApi` (gRPC → REST) con tests del fallback.
-- [ ] CLI con feature `grpc` + `grpc-web`/connect para Flutter Web.
+- [x] **gRPC-Web** (feature `web`): `tonic-web` + CORS en el mismo puerto;
+      `GrpcWebClientChannel` en Flutter Web (fallback REST si el relay no
+      lo expone).
 
 ## Hito 0.4.0 — Distribución
 

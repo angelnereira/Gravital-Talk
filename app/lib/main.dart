@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import 'app.dart';
@@ -20,10 +19,9 @@ Future<void> main() async {
   final engine = FfiSessionEngine.tryCreate() ?? DemoSessionEngine();
   log.info('Motor seleccionado: ${engine.kind.label} (${engine.detail})');
 
-  // Plano de control: gRPC con fallback a REST (web siempre REST).
+  // Plano de control: gRPC (nativo o grpc-web) con fallback a REST.
   final rest = RoomApi();
-  final RoomControlApi roomApi =
-      kIsWeb ? rest : FallbackRoomApi(grpc: GrpcRoomApi(), rest: rest);
+  final RoomControlApi roomApi = FallbackRoomApi(grpc: GrpcRoomApi(), rest: rest);
 
   final controller = SessionController(engine, roomApi, log, store);
   await controller.init();

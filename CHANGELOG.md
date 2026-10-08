@@ -27,6 +27,14 @@ Modo servidor (sala) real + Rust 1.99 + app Flutter + contratos + Docker.
 
 **FFI**
 - `gs_session_recv_audio_timeout()`: recepción con timeout (no bloqueante con 0 ms) para loops de audio parables.
+- `gs_session_set_room_token()` (PSK de Noise) y `gs_session_set_handshake_mode()`.
+
+**Noise, auth de sala y TLS**
+- Handshake **Noise** (`NN`/`NNpsk0` con `snow`) como modo por defecto (`Auto`) con fallback a legacy v1; los tests de sesión cubren token correcto, token incorrecto sin downgrade y degradación a legacy.
+- Token de sala: PSK de Noise + exigido por el relay al resolver el código (REST `?token=`, gRPC `token`); solo se almacena SHA-256 en el relay.
+- **TLS/WSS** (feature `tls`): `--tls-cert/--tls-key` → WSS en el puerto WS y gRPC sobre TLS (verified con openssl TLSv1.3).
+- **gRPC-Web** (feature `web`): `tonic-web` + CORS en el mismo puerto gRPC; Flutter Web usa `GrpcWebClientChannel` con fallback REST.
+- Empaquetado nativo Flutter: scripts cargo-ndk (Android) / staticlib (iOS), task Gradle automática con NDK y workflow `flutter-android.yml`.
 
 **App Flutter: audio real y UI moderna**
 - `AudioPump`: captura PCM16 con `record`, playback con `flutter_sound` (PCM16 stream), recv con timeout en isolate, VU meter por RMS real, fallback senoidal sin hardware.

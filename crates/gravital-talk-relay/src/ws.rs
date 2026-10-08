@@ -11,24 +11,33 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::rate_limit::RateLimiter;
 use crate::router::{RouteDecision, Router, SessionEndpoint};
+use crate::tls::TlsAcceptor;
+
+/// Stream de red con TLS opcional (TCP plano o TLS ya aceptado).
+trait AsyncReadWrite: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin {}
+
+impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin> AsyncReadWrite for T {}
 
 pub async fn run(
     listener: TcpListener,
     udp_socket: Arc<UdpSocket>,
     router: Arc<Router>,
     rate_limit: Option<Arc<RateLimiter>>,
+    tls: Option<Arc<TlsAcceptor>>,
 ) -> anyhow::Result<()> {
     let local = listener.local_addr()?;
-    tracing::info!(?local, "WebSocket relay listening");
+    let scheme = if tls.is_some() { "wss" } else { "ws" };
+    tracing::info!(?local, %scheme, "WebSocket relay listening");
 
     loop {
         let (stream, peer_addr) = listener.accept().await?;
         let router = router.clone();
         let udp_socket = udp_socket.clone();
         let rate_limit = rate_limit.clone();
+        let tls = tls.clone();
         tokio::spawn(async move {
             if let Err(e) =
-                handle_connection(stream, peer_addr, udp_socket, router, rate_limit).await
+                handle_connection(stream, peer_addr, udp_socket, router, rate_limit, tls).await
             {
                 tracing::warn!(?peer_addr, ?e, "ws connection error");
             }
@@ -42,7 +51,20 @@ async fn handle_connection(
     udp_socket: Arc<UdpSocket>,
     router: Arc<Router>,
     rate_limit: Option<Arc<RateLimiter>>,
+    tls: Option<Arc<TlsAcceptor>>,
 ) -> anyhow::Result<()> {
+    // TLS opcional (WSS). El stream se boxea para unificar tipos.
+    #[cfg(feature = "tls")]
+    let stream: Box<dyn AsyncReadWrite> = match crate::tls::try_accept(tls.as_ref(), stream).await?
+    {
+        crate::tls::MaybeTls::Tls(s) => Box::new(s),
+        crate::tls::MaybeTls::Plain(s) => Box::new(s),
+    };
+    #[cfg(not(feature = "tls"))]
+    let stream: Box<dyn AsyncReadWrite> = match crate::tls::try_accept(tls.as_ref(), stream).await?
+    {
+        crate::tls::MaybeTls::Plain(s) => Box::new(s),
+    };
     let ws = tokio_tungstenite::accept_async(stream).await?;
     router.metrics().ws_connections.inc();
     let (mut ws_sink, mut ws_stream) = ws.split();

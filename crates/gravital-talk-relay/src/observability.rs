@@ -51,6 +51,10 @@ async fn handle(
 ) -> Result<Response<Full<Bytes>>, Infallible> {
     let method = req.method().clone();
     let path = req.uri().path().to_string();
+    let query_token: Option<String> = req.uri().query().and_then(|q| {
+        q.split('&')
+            .find_map(|kv| kv.strip_prefix("token=").map(str::to_string))
+    });
 
     // Collect body (needed for POST).
     let body_bytes = req
@@ -81,7 +85,7 @@ async fn handle(
         }
     } else if let Some(code) = path.strip_prefix("/api/rooms/") {
         match method {
-            Method::GET => handle_get_room(&router, code),
+            Method::GET => handle_get_room(&router, code, query_token.as_deref()),
             Method::DELETE => handle_delete_room(&router, code),
             _ => method_not_allowed(),
         }
@@ -108,9 +112,10 @@ fn handle_create_room(router: &Router, body: &[u8]) -> Response<Full<Bytes>> {
             );
         }
     };
+    let token = extract_token(body);
 
     let code = rooms::generate_code();
-    if router.register_room(code.clone(), session_id) {
+    if router.register_room(code.clone(), session_id, token.as_deref()) {
         let body = format!(r#"{{"code":"{code}","session_id":{session_id}}}"#);
         json_response(StatusCode::CREATED, &body)
     } else {
@@ -121,14 +126,20 @@ fn handle_create_room(router: &Router, body: &[u8]) -> Response<Full<Bytes>> {
     }
 }
 
-fn handle_get_room(router: &Router, code: &str) -> Response<Full<Bytes>> {
+fn handle_get_room(router: &Router, code: &str, token: Option<&str>) -> Response<Full<Bytes>> {
     if !rooms::is_valid_code(code) {
         return json_response(
             StatusCode::BAD_REQUEST,
             r#"{"error":"invalid room code format"}"#,
         );
     }
-    router.resolve_room(code).map_or_else(
+    if router.room_requires_token(code) && token.is_none() {
+        return json_response(
+            StatusCode::UNAUTHORIZED,
+            r#"{"error":"room requires token"}"#,
+        );
+    }
+    router.resolve_room(code, token).map_or_else(
         || json_response(StatusCode::NOT_FOUND, r#"{"error":"room not found"}"#),
         |session_id| {
             let peer_count = router.peer_count(session_id);
@@ -195,6 +206,18 @@ fn extract_session_id(body: &[u8]) -> Option<u32> {
         return None;
     }
     num_str[..end].parse().ok()
+}
+
+/// Extrae `"token":"..."` opcional del body JSON si existe.
+fn extract_token(body: &[u8]) -> Option<String> {
+    let s = std::str::from_utf8(body).ok()?;
+    let pos = s.find("\"token\"")?;
+    let after_key = &s[pos + "\"token\"".len()..];
+    let colon = after_key.find(':')? + 1;
+    let mut rest = after_key[colon..].trim_start();
+    rest = rest.strip_prefix('"')?;
+    let end = rest.find('"')?;
+    Some(rest[..end].to_string())
 }
 
 #[cfg(test)]

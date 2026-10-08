@@ -135,7 +135,12 @@ impl ServerControl for ControlService {
             return Err(Status::invalid_argument("session_id must be > 0"));
         }
         let code = rooms::generate_code();
-        if !self.router.register_room(code.clone(), r.session_id) {
+        let token = if r.token.is_empty() {
+            None
+        } else {
+            Some(r.token.as_str())
+        };
+        if !self.router.register_room(code.clone(), r.session_id, token) {
             return Err(Status::already_exists("room code collision, retry"));
         }
         Ok(Response::new(CreateRoomResponse {
@@ -147,8 +152,17 @@ impl ServerControl for ControlService {
         &self,
         req: Request<GetRoomRequest>,
     ) -> Result<Response<GetRoomResponse>, Status> {
-        let code = req.into_inner().code;
-        self.router.resolve_room(&code).map_or_else(
+        let r = req.into_inner();
+        let code = r.code;
+        if self.router.room_requires_token(&code) && r.token.is_empty() {
+            return Err(Status::unauthenticated("room requires token"));
+        }
+        let token = if r.token.is_empty() {
+            None
+        } else {
+            Some(r.token.as_str())
+        };
+        self.router.resolve_room(&code, token).map_or_else(
             || Err(Status::not_found("room not found")),
             |sid| {
                 Ok(Response::new(GetRoomResponse {
@@ -184,9 +198,12 @@ impl ServerControl for ControlService {
         req: Request<WatchRoomRequest>,
     ) -> Result<Response<Self::WatchRoomStream>, Status> {
         let code = req.into_inner().room_code;
+        if self.router.room_requires_token(&code) {
+            return Err(Status::unauthenticated("room requires token"));
+        }
         let session_id = self
             .router
-            .resolve_room(&code)
+            .resolve_room(&code, None)
             .ok_or_else(|| Status::not_found("room not found"))?;
 
         let mut rx = self.router.subscribe_events();
@@ -238,24 +255,71 @@ pub async fn serve(addr: std::net::SocketAddr, router: Arc<Router>) -> anyhow::R
     serve_with_listener(listener, router).await
 }
 
+/// Igual que [`serve`] pero con TLS (feature `tls`).
+#[cfg(feature = "tls")]
+pub async fn serve_tls(
+    addr: std::net::SocketAddr,
+    router: Arc<Router>,
+    cert: &std::path::Path,
+    key: &std::path::Path,
+) -> anyhow::Result<()> {
+    use tonic::transport::{Identity, ServerTlsConfig};
+
+    let identity = Identity::from_pem(std::fs::read(cert)?, std::fs::read(key)?);
+    let tls_config = ServerTlsConfig::new().identity(identity);
+    let control = ControlService::new(router);
+    tonic::transport::Server::builder()
+        .tls_config(tls_config)?
+        .add_service(proto::server_control_server::ServerControlServer::new(
+            control.clone(),
+        ))
+        .add_service(proto::pairing_service_server::PairingServiceServer::new(
+            control,
+        ))
+        .serve(addr)
+        .await
+        .map_err(Into::into)
+}
+
 /// Igual que [`serve`] pero reutilizando un listener ya bindeado
 /// (permite puertos efímeros sin carrera).
 pub async fn serve_with_listener(
     listener: tokio::net::TcpListener,
     router: Arc<Router>,
 ) -> anyhow::Result<()> {
+    serve_inner(listener, router).await
+}
+
+/// Implementación común (HTTP/1.1 + opcionalmente grpc-web).
+async fn serve_inner(listener: tokio::net::TcpListener, router: Arc<Router>) -> anyhow::Result<()> {
     use proto::pairing_service_server::PairingServiceServer;
     use proto::server_control_server::ServerControlServer;
     use tokio_stream::wrappers::TcpListenerStream;
 
     let incoming = TcpListenerStream::new(listener);
     let control = ControlService::new(router);
-    tonic::transport::Server::builder()
-        .add_service(ServerControlServer::new(control.clone()))
-        .add_service(PairingServiceServer::new(control))
-        .serve_with_incoming(incoming)
-        .await
-        .map_err(Into::into)
+
+    #[cfg(feature = "web")]
+    {
+        // HTTP/1.1 + gRPC-Web (navegador) con CORS, sobre el mismo puerto.
+        tonic::transport::Server::builder()
+            .accept_http1(true)
+            .add_service(tonic_web::enable(ServerControlServer::new(control.clone())))
+            .add_service(tonic_web::enable(PairingServiceServer::new(control)))
+            .serve_with_incoming(incoming)
+            .await
+            .map_err(Into::into)
+    }
+    #[cfg(not(feature = "web"))]
+    {
+        tonic::transport::Server::builder()
+            .accept_http1(true)
+            .add_service(ServerControlServer::new(control.clone()))
+            .add_service(PairingServiceServer::new(control))
+            .serve_with_incoming(incoming)
+            .await
+            .map_err(Into::into)
+    }
 }
 
 /// Valida un código de sala (para reutilizar la política del REST).

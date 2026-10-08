@@ -39,6 +39,14 @@ struct Args {
     /// Habilitar plano de control gRPC (feature `grpc`). Ej. 0.0.0.0:50051.
     #[arg(long)]
     grpc_bind: Option<std::net::SocketAddr>,
+
+    /// Certificado PEM (feature `tls`) → WSS en el puerto WS y TLS en gRPC.
+    #[arg(long)]
+    tls_cert: Option<PathBuf>,
+
+    /// Clave privada PEM (feature `tls`).
+    #[arg(long)]
+    tls_key: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -66,6 +74,10 @@ async fn main() -> Result<()> {
     if let Some(bind) = args.grpc_bind {
         cfg.grpc_bind = Some(bind);
     }
+    if args.tls_cert.is_some() || args.tls_key.is_some() {
+        cfg.tls_cert = args.tls_cert;
+        cfg.tls_key = args.tls_key;
+    }
 
     tracing::info!(?cfg, "starting gs-relay");
 
@@ -77,6 +89,20 @@ async fn main() -> Result<()> {
     ));
     let rate_limit =
         (cfg.rate_limit_per_sec > 0).then(|| Arc::new(RateLimiter::new(cfg.rate_limit_per_sec)));
+
+    // TLS (feature `tls`): si se dan cert+key, WS pasa a WSS y gRPC a TLS.
+    let tls_acceptor: Option<Arc<gravital_talk_relay::tls::TlsAcceptor>> =
+        match (&cfg.tls_cert, &cfg.tls_key) {
+            (Some(cert), Some(key)) if !cfg!(feature = "tls") => {
+                anyhow::bail!("TLS requiere compilar el relay con --features tls");
+            }
+            (Some(cert), Some(key)) => {
+                let acceptor = gravital_talk_relay::tls::load_acceptor(cert, key)?;
+                tracing::info!(?cert, "TLS habilitado: WSS + gRPC over TLS");
+                Some(acceptor)
+            }
+            _ => None,
+        };
 
     let udp_socket = Arc::new(UdpSocket::bind(cfg.udp_bind).await?);
     let ws_listener = TcpListener::bind(cfg.ws_bind).await?;
@@ -106,6 +132,7 @@ async fn main() -> Result<()> {
         udp_socket.clone(),
         router.clone(),
         rate_limit,
+        tls_acceptor.clone(),
     ));
     let obs_task = tokio::spawn(observability::run(obs_listener, router.clone()));
 
@@ -114,6 +141,15 @@ async fn main() -> Result<()> {
     if let Some(bind) = cfg.grpc_bind {
         let router_grpc = router.clone();
         tokio::spawn(async move {
+            #[cfg(feature = "tls")]
+            if let (Some(cert), Some(key)) = (&cfg.tls_cert, &cfg.tls_key) {
+                if let Err(e) =
+                    gravital_talk_relay::grpc::serve_tls(bind, router_grpc.clone(), cert, key).await
+                {
+                    tracing::error!(?e, "gRPC control plane (TLS) error");
+                }
+                return;
+            }
             if let Err(e) = gravital_talk_relay::grpc::serve(bind, router_grpc).await {
                 tracing::error!(?e, "gRPC control plane error");
             }

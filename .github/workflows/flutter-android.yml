@@ -1,0 +1,71 @@
+name: Flutter Android
+
+# Construye el APK de la app Flutter con la librería nativa Rust (`ffi`).
+# - Compila `libgravital_talk_ffi.so` con cargo-ndk para 3 ABIs.
+# - Corre `flutter build apk --debug` y sube el APK como artefacto.
+
+on:
+  push:
+    branches: [main, "claude/**", "feat/**"]
+    paths:
+      - "app/**"
+      - "crates/gravital-talk-ffi/**"
+      - ".github/workflows/flutter-android.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "app/**"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  NDK_VERSION: "26.3.11579264"
+  ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: temurin
+
+      - name: Android SDK + NDK
+        uses: android-actions/setup-android@v3
+      - name: Install NDK
+        run: |
+          sdkmanager "ndk;${{ env.NDK_VERSION }}"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/${{ env.NDK_VERSION }}" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: flutter-android-ffi
+          workspaces: . -> app # caché compartida
+
+      - name: cargo-ndk + libs Rust
+        run: |
+          cargo install cargo-ndk --locked
+          scripts/flutter-android-libs.sh
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Build APK (debug, con jniLibs nativos)
+        run: |
+          cd app
+          flutter pub get
+          flutter build apk --debug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: gravital-talk-app-debug
+          path: app/build/app/outputs/flutter-apk/*.apk
+          retention-days: 21
+          if-no-files-found: error

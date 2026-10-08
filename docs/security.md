@@ -37,10 +37,14 @@ Este documento cubre el modelo de amenazas del **protocolo** Gravital Talk y su 
 
 ### 4.2 Roadmap (v0.4+)
 
-- **Capa cripto opcional** vía handshake Noise (NK o XX pattern).
-- **AEAD** (ChaCha20-Poly1305 o AES-GCM según target) para cifrar payload + autenticar header.
-- **Rotación de claves** periódica dentro de la sesión.
-- **Forward secrecy** con efímeras X25519.
+- **Handshake Noise** ✅ (0.3): patrón `NN`/`NNpsk0` como modo por defecto
+  (`Auto`), claves HKDF desde el `handshake_hash`, confirmación mutua;
+  legacy v1 como fallback (sin downgrade con token).
+- **AEAD por paquete** ✅ (0.2+): ChaCha20-Poly1305 con nonce explícito y
+  header como AAD.
+- **Autenticación de sala** ✅ (0.3): token como PSK de Noise (`NNpsk0`);
+  el relay guarda solo su hash y lo exige al resolver el código.
+- **Rotación de claves** periódica dentro de la sesión (pendiente).
 
 ## 5. Mitigaciones implementadas
 

@@ -122,10 +122,12 @@ class CreateRoomRequest extends $pb.GeneratedMessage {
   factory CreateRoomRequest({
     $core.int? sessionId,
     $core.String? displayName,
+    $core.String? token,
   }) {
     final result = CreateRoomRequest._();
     if (sessionId != null) result.sessionId = sessionId;
     if (displayName != null) result.displayName = displayName;
+    if (token != null) result.token = token;
     return result;
   }
 
@@ -144,6 +146,7 @@ class CreateRoomRequest extends $pb.GeneratedMessage {
       createEmptyInstance: CreateRoomRequest.$_createMessage)
     ..aI(1, _omitFieldNames ? '' : 'sessionId', fieldType: $pb.PbFieldType.OU3)
     ..aOS(2, _omitFieldNames ? '' : 'displayName')
+    ..aOS(3, _omitFieldNames ? '' : 'token')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -187,6 +190,16 @@ class CreateRoomRequest extends $pb.GeneratedMessage {
   $core.bool hasDisplayName() => $_has(1);
   @$pb.TagNumber(2)
   void clearDisplayName() => $_clearField(2);
+
+  /// Token de sala (PSK de Noise). Vacío = sala abierta.
+  @$pb.TagNumber(3)
+  $core.String get token => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set token($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasToken() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearToken() => $_clearField(3);
 }
 
 class CreateRoomResponse extends $pb.GeneratedMessage {
@@ -253,9 +266,11 @@ class CreateRoomResponse extends $pb.GeneratedMessage {
 class GetRoomRequest extends $pb.GeneratedMessage {
   factory GetRoomRequest({
     $core.String? code,
+    $core.String? token,
   }) {
     final result = GetRoomRequest._();
     if (code != null) result.code = code;
+    if (token != null) result.token = token;
     return result;
   }
 
@@ -273,6 +288,7 @@ class GetRoomRequest extends $pb.GeneratedMessage {
       package: const $pb.PackageName(_omitMessageNames ? '' : 'gravital.v1'),
       createEmptyInstance: GetRoomRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'code')
+    ..aOS(2, _omitFieldNames ? '' : 'token')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -305,6 +321,16 @@ class GetRoomRequest extends $pb.GeneratedMessage {
   $core.bool hasCode() => $_has(0);
   @$pb.TagNumber(1)
   void clearCode() => $_clearField(1);
+
+  /// Token si la sala lo exige (solo se almacena su hash en el servidor).
+  @$pb.TagNumber(2)
+  $core.String get token => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set token($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasToken() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearToken() => $_clearField(2);
 }
 
 class GetRoomResponse extends $pb.GeneratedMessage {

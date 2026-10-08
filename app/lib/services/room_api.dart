@@ -11,12 +11,14 @@ abstract interface class RoomControlApi {
     required String host,
     required int port,
     required int sessionId,
+    String token = '',
   });
 
   Future<RoomInfo> resolveRoom({
     required String host,
     required int port,
     required String code,
+    String token = '',
   });
 
   Future<bool> healthy({required String host, required int port});
@@ -51,12 +53,16 @@ class RoomApi implements RoomControlApi {
     required String host,
     required int port,
     required int sessionId,
+    String token = '',
   }) async {
     final resp = await _client
         .post(
           _uri(host, port, '/api/rooms'),
           headers: {'content-type': 'application/json'},
-          body: jsonEncode({'session_id': sessionId}),
+          body: jsonEncode({
+            'session_id': sessionId,
+            if (token.isNotEmpty) 'token': token,
+          }),
         )
         .timeout(_timeout);
     if (resp.statusCode != 201) {
@@ -76,10 +82,15 @@ class RoomApi implements RoomControlApi {
     required String host,
     required int port,
     required String code,
+    String token = '',
   }) async {
+    final query = token.isEmpty ? '' : '?token=${Uri.encodeQueryComponent(token)}';
     final resp = await _client
-        .get(_uri(host, port, '/api/rooms/$code'))
+        .get(_uri(host, port, '/api/rooms/$code$query'))
         .timeout(_timeout);
+    if (resp.statusCode == 401) {
+      throw RoomApiException('la sala exige token (revisa el token de sala)');
+    }
     if (resp.statusCode != 200) {
       throw RoomApiException(resp.statusCode == 404
           ? 'sala no encontrada'
@@ -140,16 +151,20 @@ class FallbackRoomApi implements RoomControlApi {
     required String host,
     required int port,
     required int sessionId,
+    String token = '',
   }) =>
-      _call((api) => api.createRoom(host: host, port: port, sessionId: sessionId));
+      _call((api) => api.createRoom(
+          host: host, port: port, sessionId: sessionId, token: token));
 
   @override
   Future<RoomInfo> resolveRoom({
     required String host,
     required int port,
     required String code,
+    String token = '',
   }) =>
-      _call((api) => api.resolveRoom(host: host, port: port, code: code));
+      _call((api) =>
+          api.resolveRoom(host: host, port: port, code: code, token: token));
 
   @override
   Future<bool> healthy({required String host, required int port}) async {

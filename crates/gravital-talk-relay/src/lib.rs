@@ -26,6 +26,7 @@ pub mod observability;
 pub mod rate_limit;
 pub mod rooms;
 pub mod router;
+pub mod tls;
 pub mod udp;
 pub mod ws;
 

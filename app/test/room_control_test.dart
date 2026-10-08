@@ -12,6 +12,7 @@ class _GrpcFake implements RoomControlApi {
     required String host,
     required int port,
     required int sessionId,
+    String token = '',
   }) async {
     calls++;
     if (failing) throw RoomApiException('grpc no disponible');
@@ -23,6 +24,7 @@ class _GrpcFake implements RoomControlApi {
     required String host,
     required int port,
     required String code,
+    String token = '',
   }) async {
     calls++;
     if (failing) throw RoomApiException('grpc no disponible');
@@ -47,6 +49,7 @@ class _RestFake implements RoomControlApi {
     required String host,
     required int port,
     required int sessionId,
+    String token = '',
   }) async {
     calls++;
     return RoomInfo(code: 'REST-1111', sessionId: sessionId);
@@ -57,6 +60,7 @@ class _RestFake implements RoomControlApi {
     required String host,
     required int port,
     required String code,
+    String token = '',
   }) async {
     calls++;
     return RoomInfo(code: code, sessionId: 7, peerCount: 2);
