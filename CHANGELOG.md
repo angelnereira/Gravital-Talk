@@ -31,6 +31,11 @@ Modo servidor (sala) real + Rust 1.99 + app Flutter + contratos + Docker.
 **App Flutter: audio real y UI moderna**
 - `AudioPump`: captura PCM16 con `record`, playback con `flutter_sound` (PCM16 stream), recv con timeout en isolate, VU meter por RMS real, fallback senoidal sin hardware.
 - Componentes modernos (shortlist FlutterGems/FlutterLibrary): `flutter_animate`, `animate_do` (pulso PTT), `toastification`, `settings_ui` (pantalla de ajustes), `percent_indicator` (level meter), `mobile_scanner` (QR de sala), `introduction_screen` (onboarding primer arranque), `url_launcher` (enlaces).
+- Cliente gRPC del plano de control: código generado en `app/lib/generated` (protoc_plugin 25 + protobuf 6) y `FallbackRoomApi` (gRPC → REST) con tests.
+
+**CI y distribución**
+- Workflow `fuzz.yml`: smoke de cargo-fuzz en contenedor (manual + semanal) con subida de artefactos de crash.
+- `scripts/publish-order.sh`: orden de publicación crates.io; `cargo publish --dry-run` verificado para `gravital-talk-core` y `gravital-talk-io`.
 
 **Toolchain**
 - Versión del workspace alineada a `0.3.0-alpha.1` (Cargo.toml, SDKs, Helm); MSRV `1.99` + `rust-toolchain.toml`; Dockerfile `rust:1.99-slim`.

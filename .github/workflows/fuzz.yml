@@ -1,0 +1,44 @@
+name: Fuzz
+
+# Smoke de fuzzing por target (cargo-fuzz en contenedor).
+# - Manual: Actions → Fuzz → Run workflow (segundos configurables).
+# - Programado: lunes 03:00 UTC.
+
+on:
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: "Segundos de fuzzing por target"
+        required: false
+        default: "60"
+        type: string
+  schedule:
+    - cron: "0 3 * * 1"
+
+env:
+  FUZZ_SECONDS: ${{ inputs.seconds || '60' }}
+
+jobs:
+  fuzz-smoke:
+    name: fuzz (${{ inputs.seconds || '60' }}s/target)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build fuzz image (nightly + cargo-fuzz)
+        run: docker compose --profile security build fuzz
+
+      - name: Run fuzz smoke
+        run: |
+          docker compose --profile security run --rm \
+            -e FUZZ_SECONDS="${{ inputs.seconds || '60' }}" fuzz
+
+      - name: Upload crash artifacts (si hubo)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts/
+          if-no-files-found: ignore
+          retention-days: 14

@@ -138,7 +138,7 @@ El transporte primario es UDP con DSCP EF. El handshake establece claves con **X
 | App Android | ✅ funcional | emparejamiento QR, PTT, wake lock, reconexión automática |
 | Anti-replay | ✅ funcional | Ventana deslizante por sesión (RFC 6479-style) + test de reinyección de datagramas |
 | Rate limiting (relay) | ✅ funcional | Fixed-window por IP en UDP y WebSocket (`--rate-limit`/`GS_RATE_LIMIT`) |
-| gRPC (plano de control) | ✅ servidor | Feature `grpc`: `ServerControl` + `PairingService` + `WatchRoom` stream; test con cliente tonic |
+| gRPC (plano de control) | ✅ funcional | Feature `grpc`: `ServerControl` + `PairingService` + `WatchRoom` stream; cliente Dart con fallback REST |
 | STUN / NAT traversal | ✅ funcional | RFC 5389, stun.l.google.com, fallback P2P → relay |
 | PLC (Packet Loss Concealment) | ✅ funcional | CodecSession: hasta 4 frames de silencio por hueco |
 | Auto-reconexión CLI | ✅ funcional | gs ptt: backoff 2 s→30 s, reconexión por cambio de red |

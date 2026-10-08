@@ -1,8 +1,10 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import 'app.dart';
 import 'services/engine.dart';
 import 'services/event_log.dart';
+import 'services/grpc_room_api.dart';
 import 'services/room_api.dart';
 import 'services/session_controller.dart';
 import 'services/settings_store.dart';
@@ -18,7 +20,12 @@ Future<void> main() async {
   final engine = FfiSessionEngine.tryCreate() ?? DemoSessionEngine();
   log.info('Motor seleccionado: ${engine.kind.label} (${engine.detail})');
 
-  final controller = SessionController(engine, RoomApi(), log, store);
+  // Plano de control: gRPC con fallback a REST (web siempre REST).
+  final rest = RoomApi();
+  final RoomControlApi roomApi =
+      kIsWeb ? rest : FallbackRoomApi(grpc: GrpcRoomApi(), rest: rest);
+
+  final controller = SessionController(engine, roomApi, log, store);
   await controller.init();
 
   // Onboarding solo la primera vez.

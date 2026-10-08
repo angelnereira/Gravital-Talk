@@ -22,7 +22,7 @@ class SessionController extends ChangeNotifier {
   );
 
   final SessionEngine _engine;
-  final RoomApi _roomApi;
+  final RoomControlApi _roomApi;
   final EventLog _log;
   final SettingsStore _store;
 

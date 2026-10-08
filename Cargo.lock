@@ -1068,7 +1068,6 @@ dependencies = [
  "hyper-util",
  "prometheus",
  "prost",
- "prost-types",
  "protoc-bin-vendored",
  "serde",
  "tokio",

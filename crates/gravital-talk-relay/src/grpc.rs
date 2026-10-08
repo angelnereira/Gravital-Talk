@@ -63,7 +63,7 @@ impl ControlService {
             code: code.to_string(),
             session_id,
             peer_count: peers as i32,
-            created_at: None,
+            created_at_unix_ms: 0,
         }
     }
 
@@ -78,7 +78,7 @@ impl ControlService {
             r#type: etype,
             room_code: code,
             session_id: esid,
-            at: None,
+            at_unix_ms: 0,
             peer_ssrc: 0,
         }
     }

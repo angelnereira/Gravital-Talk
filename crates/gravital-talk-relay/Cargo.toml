@@ -38,7 +38,6 @@ dashmap           = "6.1"
 # Plano de control gRPC (opcional; ver docs/grpc-evaluation.md)
 tonic            = { version = "0.12", optional = true }
 prost            = { version = "0.13", optional = true }
-prost-types      = { version = "0.13", optional = true }
 tokio-stream     = { version = "0.1", features = ["net"], optional = true }
 async-stream     = { version = "0.3", optional = true }
 
@@ -54,7 +53,6 @@ default = []
 grpc    = [
     "dep:tonic",
     "dep:prost",
-    "dep:prost-types",
     "dep:tokio-stream",
     "dep:async-stream",
     "dep:tonic-build",

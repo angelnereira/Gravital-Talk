@@ -68,13 +68,17 @@ se rompen).
 - [x] `tonic-build` + `protoc-bin-vendored` en `build.rs` (sin protoc del sistema).
 - [x] `WatchRoom` streaming (eventos de sala vía broadcast del `Router`).
 - [x] Test de integración `grpc_control` con cliente tonic real.
-- [ ] Clientes: Dart (`grpc-dart`) con fallback REST; CLI con feature `grpc`.
-- [ ] `grpc-web`/connect para Flutter Web + dashboard de salas.
+- [x] Cliente Dart (`grpc-dart` 5.x) generado en `app/lib/generated` y
+      `FallbackRoomApi` (gRPC → REST) con tests del fallback.
+- [ ] CLI con feature `grpc` + `grpc-web`/connect para Flutter Web.
 
 ## Hito 0.4.0 — Distribución
 
-- [ ] Publicar `gravital-talk*` en crates.io (requiere fijar versión
-      del workspace: hoy `Cargo.toml` dice 0.1.0-alpha.1 vs docs 0.2.0-alpha.3).
+- [x] Orden de publicación definido (`scripts/publish-order.sh`);
+      `cargo publish --dry-run` OK para `gravital-talk-core` e
+      `gravital-talk-io` (los únicos sin deps internas).
+- [ ] Publicar `gravital-talk*` en crates.io (requiere `cargo login` y
+      publicar en orden: core → io → metrics/codec/transport → facade → ffi/cli/relay).
 - [ ] PyPI (`maturin`), npm (`wasm-pack`).
 - [ ] SDK Swift (Kotlin Multiplatform o FFI iOS) y Node.js (N-API).
 - [ ] Landing `gravitaltalk.dev` + docs hosted.
@@ -88,9 +92,10 @@ se rompen).
 
 ## Deuda técnica conocida (fuera de hitos)
 
-- Versión del workspace desalineada (`Cargo.toml` 0.1.0-alpha.1).
 - `outputs/windows` y `outputs/macos` sin artefactos (CI pendiente).
 - iOS sin SDK/App (roadmap 0.4).
 - Docs mencionan `io-uring`/`tokio-uring` sin implementación (a futuro).
 - SIMD CRC (`simd-crc`) existe pero no es el camino por default.
-- Fuzz targets no corren en CI (migrar a `make docker-fuzz`).
+- Fuzzing: workflow `.github/workflows/fuzz.yml` (semanal/manual) listo;
+  falta integrarlo como gate de PR.
+- Benchmarks aún no comparan contra baseline en CI (solo reportan).

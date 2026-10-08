@@ -18,6 +18,10 @@ dependencies:
   ffi: ^2.1.4
   # API HTTP del relay (rooms, healthz) y diagnóstico.
   http: ^1.5.0
+  # Plan de control gRPC (cliente generado desde proto/gravital/v1).
+  grpc: ^5.1.0
+  protobuf: ^6.1.0
+  fixnum: ^1.1.0
   # QR del room code / pairing.
   qr_flutter: ^4.1.0
   # Captura de micrófono PCM16 y reproducción PCM (audio real).

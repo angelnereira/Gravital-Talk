@@ -37,22 +37,38 @@ proto/
 
 ## Generación de código
 
+### Rust (automático)
+
+`crates/gravital-talk-relay/build.rs` compila los `.proto` con `tonic-build`
++ `protoc-bin-vendored` (no requiere protoc del sistema) al activar la
+feature `grpc`. No hay pasos manuales.
+
+### Dart / Flutter (cliente de la app)
+
 ```bash
-# Rust (candidato: tonic)
-protoc -I proto --plugin=protoc-gen-tonic=... proto/gravital/v1/*.proto
+# 1. Plugin de protoc para Dart (una vez)
+dart pub global activate protoc_plugin 25.1.0
 
-# Dart (candidato: grpc-dart, plugin protoc_plugin)
-protoc -I proto --dart_out=grpc:app/lib/generated proto/gravital/v1/*.proto
+# 2. protoc: sirve el binario vendorizado del repo Rust
+PROTOC=$(ls -d ~/.cargo/registry/src/*/protoc-bin-vendored-linux-x86_64-*/bin/protoc)
 
-# Go
-protoc -I proto --go_out=. --go-grpc_out=. proto/gravital/v1/*.proto
+# 3. Generar en app/lib/generated (no editar a mano)
+export PATH="$HOME/.pub-cache/bin:$PATH"
+$PROTOC -I proto --dart_out=grpc:app/lib/generated \
+  proto/gravital/v1/server_control.proto \
+  proto/gravital/v1/pairing.proto
 ```
 
-## Validación del contrato
+El cliente resultante (`ServerControlClient`) se usa en
+`app/lib/services/grpc_room_api.dart`, envuelto por `FallbackRoomApi`
+(gRPC → REST). Dependencias del runtime: `grpc ^5`, `protobuf ^6`, `fixnum`.
+
+### Otros lenguajes
 
 ```bash
-docker compose --profile test run --rm tester bash -c \
-  "apt-get update -qq && apt-get install -y -qq protobuf-compiler && \
-   protoc -I proto --descriptor_set_out=/tmp/descriptor.pb proto/gravital/v1/*.proto && \
-   echo CONTRATO_VALIDO"
+# Go
+protoc -I proto --go_out=. --go-grpc_out=. proto/gravital/v1/*.proto
+
+# Validación del contrato (descriptor set)
+protoc -I proto --descriptor_set_out=/tmp/descriptor.pb proto/gravital/v1/*.proto
 ```
