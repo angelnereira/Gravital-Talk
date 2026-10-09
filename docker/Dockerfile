@@ -34,8 +34,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --release ${CARGO_FEATURES} \
         -p gravital-talk-cli      --bin gs \
         -p gravital-talk-relay    --bin gs-relay \
+        -p gravital-talk-audit    --bin gs-audit \
     && mkdir -p /out \
-    && cp target/release/gs target/release/gs-relay /out/
+    && cp target/release/gs target/release/gs-relay target/release/gs-audit /out/
 
 # ── Stage 2: relay runtime ────────────────────────────────────────────
 FROM debian:bookworm-slim AS relay
@@ -65,6 +66,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && useradd --system --uid 10002 --no-create-home --shell /usr/sbin/nologin gravital
 
 COPY --from=builder /out/gs /usr/local/bin/gs
+COPY --from=builder /out/gs-relay /usr/local/bin/gs-relay
+# Harness de auditoría. Ojo: el binario debe venir de `/out`, no de
+# `/build/target`, porque `target` es un cache mount y no persiste en la capa.
+COPY --from=builder /out/gs-audit /usr/local/bin/gs-audit
 
 ENV GS_LOG=info
 ENTRYPOINT ["/usr/local/bin/gs"]

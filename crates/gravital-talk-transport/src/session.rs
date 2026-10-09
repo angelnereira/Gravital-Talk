@@ -31,9 +31,10 @@ use gravital_talk_core::crypto::{
 };
 use gravital_talk_core::header::{Flags, PacketHeader};
 use gravital_talk_core::message::{
-    ClientHello, ControlBitrateMsg, KeyExchangeMsg, MessageType, NoiseHello1, NoiseHello2,
-    ServerHello, SessionConfirm,
+    ClientHello, ControlBitrateMsg, KeyExchangeMsg, MessageType, ServerHello, SessionConfirm,
 };
+#[cfg(feature = "noise")]
+use gravital_talk_core::message::{NoiseHello1, NoiseHello2};
 use gravital_talk_core::packet::{PacketBuilder, PacketView};
 use gravital_talk_core::session::{SessionEvent, SessionState, SessionStateMachine};
 use gravital_talk_metrics::Metrics;
@@ -478,6 +479,23 @@ impl Session {
                 .map_err(expired)?,
             HandshakeMode::Auto => {
                 let token_set = self.has_room_token();
+
+                // Sin la feature `noise` el handshake Noise no existe. El
+                // servidor ya lo refleja con `allow_noise = cfg!(feature =
+                // "noise")`, así que aquí se va directo a v1 — salvo con token
+                // de sala, que exige Noise y no puede degradarse a legacy.
+                if !cfg!(feature = "noise") {
+                    if token_set {
+                        return Err(TransportError::Handshake(
+                            "room token requires the `noise` feature",
+                        ));
+                    }
+                    tracing::debug!("build sin `noise`: handshake v1 directo");
+                    return timeout(deadline, self.handshake_client(peer))
+                        .await
+                        .map_err(expired)?;
+                }
+
                 let noise_res = timeout(
                     Duration::from_millis(NOISE_FALLBACK_MS),
                     self.handshake_noise_client(peer),

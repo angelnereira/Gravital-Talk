@@ -104,6 +104,7 @@ gravital-talk/
 ├── Cargo.toml                              # Workspace root
 ├── Cross.toml                              # Configuración de cross-compilation
 ├── Makefile                                # Targets de build por plataforma
+├── AGENTS.md                               # Contexto para agentes de código
 ├── README.md
 ├── LICENSE-MIT
 ├── LICENSE-APACHE
@@ -204,6 +205,17 @@ gravital-talk/
 │       ├── Cargo.toml                      # Deps: clap, tokio
 │       └── src/
 │           └── main.rs                     # Subcommands: send, receive, bench, info, doctor
+│
+│   ├── gravital-talk-audit/                # Harness de auditoria (`gs-audit`), NO se publica
+│   │   ├── Cargo.toml                      # Sin libopus/ALSA por defecto; feature `opus` opcional
+│   │   └── src/
+│   │       ├── lib.rs                      # Modulos: analyze, harness, http, report, sine
+│   │       ├── main.rs                     # CLI (clap) + codigo de salida para CI
+│   │       ├── harness.rs                  # Sesiones, planes de turno, N pares paralelos
+│   │       ├── analyze.rs                  # Frecuencia/RMS/pico del PCM recibido + WAV
+│   │       ├── sine.rs                     # Fuente senoidal de 440 Hz (sin hardware)
+│   │       ├── http.rs                     # GET minimo para resolver codigos de sala
+│   │       └── report.rs                   # Informe JSON sin dependencias
 │
 │
 │   ════════════════════════════════════════

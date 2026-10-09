@@ -2,6 +2,64 @@
 
 Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y el proyecto usa [SemVer](https://semver.org/lang/es/).
 
+## [Unreleased]
+
+### Added
+
+**Harness de auditoría end-to-end (`gs-audit`)**
+- Nuevo crate `crates/gravital-talk-audit` (binario `gs-audit`, nunca publicado) que verifica que el audio **realmente** cruza el protocolo, no sólo que llegan datagramas.
+- **Planes de turno** (`--turn-plan`, `--split-turns`): alternan quién habla con ventanas disjuntas, así la bidireccionalidad y el floor control se vuelven verificables. `gs ptt --headless` mantiene el PTT activo toda la ejecución, con lo que ambos lados hablan a la vez y el arbitraje nunca se ejercita.
+- **Análisis del contenido del audio** (`analyze.rs`): frecuencia por conteo de cruces de cero, RMS y saturación sobre el PCM recibido. Los bytes corruptos no conservan ninguna de las tres.
+- **Criterios dentro del proceso**: `--expect-rx-frames`, `--expect-tx-frames`, `--expect-peer-ptt`, `--verify-audio`. Devuelve `exit != 0` si fallan, en vez de dejar que un shell haga `sed` sobre el stdout.
+- **N sesiones simultáneas** (`--sessions N`): cada sesión usa una frecuencia distinta (base + 60 Hz por sesión), de modo que un cruce de tráfico se detecta porque un par mide la frecuencia de otro.
+- **Informe JSON** sin dependencias de serialización (`--json`): permite a CI distinguir "pasó" de "no se ejecutó".
+- `--dump-rx-wav` escribe el PCM recibido para un segundo juicio con `scripts/verify_wav.py`.
+- Sin `libopus` ni ALSA: el códec por defecto es PCM y la fuente es una senoidal interna, así que la auditoría corre en cualquier máquina y en el job `test-no-default-features` de CI. Con `--features opus` valida también Opus.
+
+**Verificado en ambos códecs**
+- PCM (frame de 10 ms): host y join miden 439.7 Hz con RMS 0.345 y MOS 4.41 en las dos direcciones.
+- Opus (frame de 20 ms): host y join miden 441.1 / 440.9 Hz sobre audio comprimido, con el tamaño de frame que documenta el README.
+- 3 sesiones P2P simultáneas con frecuencias distintas: cada par midió su propio tono, sin cruce de tráfico.
+
+**Integración**
+- `crates/gravital-talk-audit/tests/p2p_bidirectional.rs`: 4 tests de integración que prueban audio en ambas direcciones, corrección del tono recibido, ausencia de cross-talk entre sesiones paralelas y respeto del plan de turnos.
+- `crates/gravital-talk-audit/tests/opus_bidirectional.rs`: lo mismo con Opus y frame de 20 ms (feature `opus`).
+- Perfil `docker compose --profile audit` + `docker/scripts/audit.sh`: escenarios `p2p`, `parallel` y `room`, con informe por escenario.
+  - `audit` (p2p + parallel, sin relay), `audit-room-host` (ancla que crea la sala) y `audit-room` (audit como JOIN de esa sala). El audit entra como JOIN porque el host de la sala es el ancla; el códec lo negocia el primer cliente, así que `ROOM_CODEC` debe coincidir con el del ancla.
+- `make docker-audit` cubre `p2p` + `parallel`; `docker compose --profile audit run --rm audit-room` añade la sala vía relay.
+
+### Fixed
+
+**Handshake en modo sala: el host esperaba a cualquier origen**
+- El harness usaba `handshake_open()` para el host también en modo sala, pero ahí todo el tráfico llega reenviado por el relay. Se añadió `PeerOptions::expect_known_peer`, que usa `handshake(Server, relay_addr)` en modo sala, igual que `gs ptt --listen --relay`.
+- Sin esto el escenario de sala se quedaba colgado esperando un handshake que el relay nunca presentaba como procedente del cliente.
+- `docker/Dockerfile`: `gs-audit` en la imagen `cli`.
+- Jobs `audit` (PCM) y `audit-opus` en `.github/workflows/ci.yml`, cada uno subiendo su informe JSON.
+- `make audit`, `make audit-parallel`, `make docker-audit`.
+
+**Carencias de la verificación anterior, que el harness corrige**
+- `docker/scripts/room-host.sh` hacía `exec gs ptt` sin parsear su salida, así que la dirección *join -> host* nunca se verificaba. Ahora se exige audio recibido en ambos sentidos.
+- `gs ptt --headless` mantiene el PTT activo durante toda la ejecución, con lo que ambos lados hablan a la vez y el floor control nunca se ejercita. Los planes de turno del harness cubren esa carencia.
+- Ningún test comprobaba el contenido del audio: un conteo de frames no distingue audio válido de bytes corruptos. `analyze.rs` mide frecuencia, RMS y saturación.
+
+### Fixed
+
+**Handshake de cliente roto sin la feature `noise`**
+- `Session::run_client_handshake` en modo `Auto` llamaba siempre a `handshake_noise_client`. Sin la feature `noise` ese stub devuelve `Handshake("compiled without noise feature")`, no `Timeout`, y el fallback a v1 legacy sólo cubría `Timeout`: el error se propagaba y **ningún** build sin `noise` podía completar un handshake de cliente.
+- El servidor ya era correcto en ambos caminos (`allow_noise = cfg!(feature = "noise")`); el cliente ahora es simétrico: sin `noise` va directo a v1 legacy. Con token de sala sigue fallando cerrado (el token exige Noise y no puede degradarse).
+- Detectado por el job `test-no-default` de CI, que fallaba en `replay_session::replayed_datagram_is_dropped`.
+
+**Limitación documentada: un frame PCM de 20 ms no cabe en el protocolo**
+- El core impone `MAX_PAYLOAD_SIZE = DEFAULT_MTU - HEADER_SIZE = 1176` bytes de payload y `PacketBuilder::encode` rechaza con `PayloadTooLarge` cualquier cosa mayor.
+- Un frame PCM16 mono de 20 ms a 48 kHz son **1920 bytes** de payload, más 4 de `audio_seq` y 16 de tag AEAD. Por lo tanto **no se puede enviar**: el error real es `protocol error: payload exceeds maximum size`, o `output buffer too small: need 1920, have 1500` si se sube el MTU sin tocar el tope.
+- El máximo que sí cabe es **12 ms** (1156 bytes útiles). `CodecSession` con PCM debe configurarse a 10 ms o menos; el harness de auditoría usa 10 ms por defecto (también es un tamaño de frame válido para Opus).
+- **No es un bug introducido aquí**: `send_audio` nunca llama a `FragmentReassembler`, que ya existe y está probado en `gravital-talk-core` (`MAX_FRAGMENTS = 16`). Conectar la fragmentación en el camino de envío permitiría PCM de 20 ms dentro del MTU por defecto, que es el arreglo natural. Queda como trabajo pendiente.
+- El ejemplo del README que hace `send_audio(&vec![0u8; 1920])` falla por esta razón: documenta un tamaño de frame que el protocolo no admite.
+- Fijado con el test `pcm_twenty_ms_frame_does_not_fit_the_wire_limit`, que además calcula el máximo válido. Si alguien conecta la fragmentación, ese test empieza a fallar y avisa de que hay que actualizar el README y `docs/packet-format.md`.
+
+**Imports muertos con `--no-default-features`**
+- `NoiseHello1`/`NoiseHello2` en `crates/gravital-talk-transport/src/session.rs` ahora se importan con `#[cfg(feature = "noise")]`. `cargo clippy --no-default-features` fallaba con `-D warnings`; CI no lo detectaba porque sólo aplica `--no-default-features` al job de `test`, no al de `clippy`.
+
 ## [0.3.0-alpha.1] — 2026-10-08
 
 Modo servidor (sala) real + Rust 1.99 + app Flutter + contratos + Docker.

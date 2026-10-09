@@ -111,6 +111,69 @@ jobs:
           -p gravital-talk-core
           -p gravital-talk-transport
 
+  # Auditoría del audio real sobre UDP loopback. No necesita libopus ni ALSA
+  # (el códec por defecto es PCM y la fuente de audio es interna), así que
+  # corre en cualquier runner sin dependencias del sistema.
+  #
+  # Es el test que distingue "llegaron datagramas" de "el audio cruzó el
+  # protocolo": mide la frecuencia y el RMS de lo recibido.
+  audit:
+    name: audit (audio bidireccional)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Audit P2P (turnos partidos, ambas direcciones)
+        run: |
+          cargo run --release -p gravital-talk-audit --bin gs-audit -- \
+            --mode p2p --port 34100 --duration-ms 4000 --split-turns \
+            --frame-ms 10 --verify-audio --expect-rx-frames 5 \
+            --expect-peer-ptt 1 --json audit-p2p.json
+      - name: Audit N sesiones paralelas (sin cross-talk)
+        run: |
+          cargo run --release -p gravital-talk-audit --bin gs-audit -- \
+            --mode p2p --port 34100 --duration-ms 4000 --sessions 3 \
+            --frame-ms 10 --verify-audio --expect-rx-frames 5 \
+            --json audit-parallel.json
+      - name: Subir informes PCM
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-pcm-reports
+          path: audit-*.json
+          if-no-files-found: ignore
+
+  # Opus necesita libopus, asi que va en un job aparte. Cubre el tamaño de
+  # frame de 20 ms que el README documenta (PCM no cabe en el tope del core).
+  audit-opus:
+    name: audit (opus, 20 ms)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Instalar libopus
+        run: sudo apt-get update && sudo apt-get install -y libopus-dev pkg-config
+      - name: Test de integración Opus
+        run: cargo test -p gravital-talk-audit --features opus
+      - name: Auditoría Opus
+        run: |
+          cargo run --release -p gravital-talk-audit --features opus --bin gs-audit -- \
+            --mode p2p --port 34200 --duration-ms 4000 --split-turns \
+            --codec opus --frame-ms 20 --verify-audio --expect-rx-frames 5 \
+            --expect-peer-ptt 1 --json audit-opus.json
+
+  # Cada job sube sus propios informes: un runner nuevo no ve los ficheros
+      # que produjo otro job.
+      - name: Subir informe Opus
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-opus-report
+          path: audit-opus.json
+          if-no-files-found: ignore
+
   python-sdk:
     name: python sdk
     runs-on: ubuntu-latest

@@ -15,6 +15,7 @@ Gravital Talk es un protocolo de comunicación de audio Push-To-Talk en tiempo r
 ## Índice
 
 - [Inicio rápido — Android](#inicio-rápido--android)
+- [Verificación: ¿esto funciona de verdad?](#verificación-esto-funciona-de-verdad)
 - [Inicio rápido — CLI](#inicio-rápido--cli)
 - [Arquitectura](#arquitectura)
 - [Estado del proyecto](#estado-del-proyecto)
@@ -62,6 +63,43 @@ No se requiere ningún servidor intermediario. La app intenta conexión directa 
 
 ---
 
+## Verificación: ¿esto funciona de verdad?
+
+La suite de tests confirma que el protocolo funciona. El harness `gs-audit` confirma que el
+**audio** funciona: mide la frecuencia, el RMS y la saturación de lo realmente recibido, que es
+lo que separa una transmisión real de un flujo de bytes corruptos.
+
+```bash
+make audit            # par P2P 1:1 con turnos partidos: audio en AMBAS direcciones
+make audit-parallel   # 3 sesiones P2P simultáneas, frecuencias distintas (detecta cruce)
+make docker-audit     # contenedor: añade codec Opus
+```
+
+Resultados medidos (frame de 10 ms PCM, 48 kHz mono):
+
+```
+[PASS] p2p/host      tx=177  rx=175  rx_hz=439.7  rms=0.3453  mos=4.41
+[PASS] p2p/join      tx=175  rx=177  rx_hz=439.8  rms=0.3453  mos=4.41
+[PASS] parallel#0    rx_hz=439.8      # cada sesión mide SU tono: sin cruce de tráfico
+[PASS] parallel#1    rx_hz=499.7
+[PASS] parallel#2    rx_hz=559.8
+```
+
+Escenarios de contenedor (`docker compose --profile audit`):
+
+| Servicio | Qué verifica |
+|---|---|
+| `audit` | P2P directo y N sesiones paralelas, sin relay |
+| `audit-room-host` | Crea la sala y sirve de ancla (`gs ptt`) |
+| `audit-room` | El audit entra como JOIN y verifica el audio a través del relay |
+
+Verificado también vía relay: el audit como JOIN midió **440.4 Hz con 225 frames enviados y 255
+recibidos**, que es la dirección que el perfil `e2e` nunca comprobaba.
+
+Detalle completo en `CHANGELOG.md` bajo `[Unreleased]` y en `AGENTS.md`.
+
+---
+
 ## Inicio rápido — CLI
 
 ```bash
@@ -84,6 +122,8 @@ cargo build --release -p gravital-talk-cli
 ```bash
 docker compose up -d relay                        # relay + healthcheck
 make docker-e2e                                   # 2 clientes headless en salas reales
+make docker-audit                                 # auditoría de audio real (gs-audit)
+docker compose --profile audit run --rm audit-room    # + sala vía relay
 make docker-test docker-bench                     # tests y benchmarks en contenedor
 make docker-perf                                  # rendimiento bajo red simulada (tc netem)
 FUZZ_SECONDS=90 make docker-fuzz                  # fuzzing de seguridad
@@ -105,7 +145,8 @@ Detalles en [`docker/README.md`](docker/README.md).
 │  gravital-talk          (facade: CodecSession, re-exports)          │
 │  gravital-talk-ffi      (ABI C estable + JNI bridge Android)        │
 │  gravital-talk-cli      (binario gs: send/receive/ptt/relay/bench)  │
-│  gravital-talk-relay    (daemon: UDP + WebSocket + Prometheus)      │
+│  gravital-talk-relay    (daemon: UDP + WebSocket + Prometheus)
+│  gravital-talk-audit    (gs-audit: verificación de audio real, no publicado)      │
 ├─────────────────────────────────────────────────────────────────────┤
 │  gravital-talk-transport  (Session, UDP, STUN, FEC, jitter buffer)  │
 │  gravital-talk-codec      (Opus, PCM, PLC, negociación)             │
@@ -143,13 +184,14 @@ El transporte primario es UDP con DSCP EF. El handshake establece claves con **X
 | PLC (Packet Loss Concealment) | ✅ funcional | CodecSession: hasta 4 frames de silencio por hueco |
 | Auto-reconexión CLI | ✅ funcional | gs ptt: backoff 2 s→30 s, reconexión por cambio de red |
 | Contratos del plano de control | ✅ definidos | `proto/gravital/v1/*.proto` (rooms, salud, pairing) + `docs/grpc-evaluation.md` |
-| Docker / CI en contenedores | ✅ funcional | `compose.yaml`: e2e multi-contenedor, tests, bench, perf (netem), fuzz, obs |
+| Docker / CI en contenedores | ✅ funcional | `compose.yaml`: e2e multi-contenedor, tests, bench, perf (netem), fuzz, obs, **audit** |
 | Tonos PTT (CLI + Android) | ✅ funcional | beep 880 Hz al presionar, 440 Hz al soltar |
 | Build outputs automático (CI) | ✅ funcional | APK + binarios en outputs/ por cada push |
 | Python SDK | ✅ funcional | PyO3 + maturin |
 | Web/WASM SDK | ✅ funcional | wasm-bindgen + WebSocket transport |
 | Publicación crates.io / PyPI / npm | 🔲 pendiente | roadmap 0.4 |
-| Noise Protocol (forward secrecy) | 🔲 pendiente | roadmap 0.3 |
+| Noise Protocol (forward secrecy) | ✅ funcional | `NN`/`NNpsk0` vía snow, default en modo `Auto` con fallback v1 |
+| Verificación de audio real (`gs-audit`) | ✅ funcional | mide frecuencia/RMS del PCM recibido; perfiles `audit` en Docker y CI |
 | Swift SDK | 🔲 pendiente | roadmap 0.4 |
 | Node.js SDK | 🔲 pendiente | roadmap 0.4 |
 | gRPC plano de control | 🔲 contrato listo | roadmap 0.3.1 |
@@ -186,6 +228,24 @@ gravital-talk://pair?v=1&lan=<ip_lan>:<puerto>&pub=<ip_publica>:<puerto>&relay=<
 ```
 
 Los campos `pub` y `relay` son opcionales. Si STUN falla (ej. sin internet) sólo aparece `lan`. Si no se configura relay, no aparece `relay`.
+
+##### Tamaño de frame y el tope del protocolo
+
+El header es de 24 bytes y el tope duro de payload es `MAX_PAYLOAD_SIZE = 1200 - 24 = 1176`
+bytes (ver `crates/gravital-talk-core/src/constants.rs`). El payload viaja como
+`[audio_seq: 4] || audio` y el AEAD añade 16 bytes de tag, así que:
+
+| Codec | Frame | Payload | ¿Cabe? |
+|---|---|---|---|
+| Opus 64 kbps | 20 ms | ~160 B | sí |
+| PCM16 mono 48 kHz | 10 ms | 960 B | sí |
+| PCM16 mono 48 kHz | 12 ms | 1152 B | sí (el máximo) |
+| PCM16 mono 48 kHz | 20 ms | 1920 B | **no** |
+
+Con PCM, usa `frame_duration_ms <= 12`. Un frame de 20 ms PCM devuelve
+`payload exceeds maximum size`. El core ya tiene `FragmentReassembler` implementado y probado,
+pero `send_audio` todavía no lo usa, así que hoy no hay fragmentación automática en el camino de
+envío.
 
 ### Integración STUN (RFC 5389)
 
@@ -282,6 +342,7 @@ Targets de Makefile disponibles:
 ```bash
 make check-all     # fmt + clippy + tests
 make bench         # benchmarks con criterion
+make audit         # auditoría: audio bidireccional real sobre UDP
 make ffi-smoke     # genera cabecera C y compila smoke test
 make python-test   # compila SDK Python y ejecuta pytest
 make web-sdk       # compila SDK WASM
@@ -457,6 +518,13 @@ cargo build --release -p gravital-talk-relay
 # Levantarlo desde el CLI
 ./target/release/gs relay --bind 0.0.0.0 --udp-port 9000
 ```
+
+### Modo sala: quién fija el códec
+
+En modo sala, **el códec lo negocia el primer cliente** que entra. El servidor de la sala fija su
+preferencia, pero si un cliente pide otro, `CodecSession::handshake` devuelve `CodecMismatch` en
+lugar de degradar en silencio. Si mezclas clientes con códecs distintos en la misma sala, todos
+deben usar el mismo (`--codec` en `gs ptt`, `ROOM_CODEC` en el perfil `audit`).
 
 ---
 
@@ -651,8 +719,21 @@ cargo test --test handshake_flow    -p gravital-talk
 cargo test --test net_sim           -p gravital-talk
 cargo test --test opus_roundtrip    -p gravital-talk
 
+# Integración — tests de audio bidireccional (miden frecuencia y RMS del PCM)
+cargo test -p gravital-talk-audit                                  # 4 tests P2P
+cargo test -p gravital-talk-audit --features opus                  # + 1 test Opus
+
 # Benchmarks
 cargo bench -p gravital-talk
+```
+
+### Auditoría de audio (gs-audit)
+
+```bash
+# Verifica el CONTENIDO del audio recibido, no sólo que llegan frames
+make audit            # P2P 1:1, turnos partidos, ambas direcciones
+make audit-parallel   # 3 sesiones simultáneas, sin cruce de tráfico
+make docker-audit     # en contenedor, con Opus
 ```
 
 ---
@@ -690,7 +771,7 @@ helm install gravital-talk-relay ./infra/helm/gravital-talk-relay \
 | **0.2.0-alpha.1** | ✅ | Codec Opus, audio I/O cpal, CLI con `--device` |
 | **0.2.0-alpha.2** | ✅ | Negociación codec, resampler, relay productivo, Terraform/Helm |
 | **0.2.0-alpha.3** | ✅ | **App Android** (PairingActivity, QR, CameraX), **STUN** RFC 5389, **PLC**, auto-reconexión CLI, tonos PTT, CI auto-build `outputs/` |
-| **0.3.0-alpha.1** | 🔄 en curso | **Modo sala/servidor real**, **anti-replay**, **rate limiting**, **gRPC (servidor)**, **app Flutter** con audio real, **contratos** (`proto/`), **Docker** (e2e, bench, perf netem, fuzz) |
+| **0.3.0-alpha.1** | ✅ | **Modo sala/servidor real**, **anti-replay**, **rate limiting**, **gRPC (servidor)**, **app Flutter** con audio real, **contratos** (`proto/`), **Docker** (e2e, bench, perf netem, fuzz), **harness `gs-audit`** |
 | **0.3** | 🔲 | Noise Protocol (forward secrecy), auth de sala, TLS/WSS, relay cluster Redis |
 | **0.4** | 🔲 | SDKs Swift + Node.js, publicación crates.io / PyPI / npm |
 | **1.0** | 🔲 | Protocolo estable, auditoría de seguridad, SemVer |

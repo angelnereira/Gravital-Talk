@@ -10,6 +10,7 @@ members = [
     "crates/gravital-talk-ffi",
     "crates/gravital-talk-cli",
     "crates/gravital-talk-relay",
+    "crates/gravital-talk-audit",
 ]
 
 # Los SDKs de Python y WASM se construyen con sus propias herramientas
@@ -30,6 +31,7 @@ default-members = [
     "crates/gravital-talk-ffi",
     "crates/gravital-talk-cli",
     "crates/gravital-talk-relay",
+    "crates/gravital-talk-audit",
 ]
 
 [workspace.package]

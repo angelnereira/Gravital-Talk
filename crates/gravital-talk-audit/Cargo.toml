@@ -1,0 +1,40 @@
+[package]
+name         = "gravital-talk-audit"
+version.workspace    = true
+edition.workspace    = true
+rust-version.workspace = true
+authors.workspace    = true
+license.workspace    = true
+repository.workspace = true
+description = "Gravital Talk — harness de auditoría end-to-end (verifica audio bidireccional real, no sólo conteo de bytes)."
+readme       = "../../README.md"
+
+[lib]
+name = "gravital_talk_audit"
+path = "src/lib.rs"
+
+[[bin]]
+name = "gs-audit"
+path = "src/main.rs"
+
+[features]
+# Sin `opus` el binario compila en maquinas sin libopus-dev (util para
+# iterar y para el job `test-no-default-features` de CI). Con `opus` el
+# binario valida ademas el codec Opus (lo construye la imagen Docker `cli`).
+default = []
+opus    = ["gravital-talk/opus"]
+
+[dependencies]
+gravital-talk = { workspace = true, default-features = false, features = ["std"] }
+tokio         = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync", "macros"] }
+anyhow        = { workspace = true }
+clap          = { workspace = true }
+hound         = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync", "macros"] }
+# `tests/opus_bidirectional.rs` habla el códec desde fuera del crate.
+gravital-talk = { workspace = true, default-features = false, features = ["std"] }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"

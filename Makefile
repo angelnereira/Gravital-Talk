@@ -120,10 +120,26 @@ docker-fuzz: ## Smoke de fuzzing acotado (FUZZ_SECONDS=60 por target)
 	docker compose --profile security build fuzz
 	docker compose --profile security run --rm fuzz
 
+.PHONY: audit
+audit: ## Auditoría end-to-end del audio real (gs-audit, sin libopus/ALSA en el host)
+	$(CARGO) run --release -p gravital-talk-audit --bin gs-audit -- \
+		--mode p2p --port 34100 --duration-ms 4000 --split-turns \
+		--frame-ms 10 --verify-audio --expect-rx-frames 5 --expect-peer-ptt 1
+
+.PHONY: audit-parallel
+audit-parallel: ## Auditoría con N sesiones P2P simultáneas (SIN_CROSS_TALK)
+	$(CARGO) run --release -p gravital-talk-audit --bin gs-audit -- \
+		--mode p2p --port 34100 --duration-ms 4000 --sessions 3 \
+		--frame-ms 10 --verify-audio --expect-rx-frames 5
+
+.PHONY: docker-audit
+docker-audit: ## Auditoría completa en contenedor (incluye Opus): make docker-audit
+	docker compose --profile audit run --rm audit
+
 .PHONY: docker-obs
 docker-obs: ## Prometheus + Grafana contra el relay (relay:9100)
 	docker compose --profile observability up -d prometheus grafana
 
 .PHONY: docker-down
 docker-down: ## Detiene el stack y limpia volúmenes (room codes, caché)
-	docker compose --profile e2e --profile test --profile bench --profile perf --profile security --profile observability down -v
+	docker compose --profile e2e --profile test --profile bench --profile perf --profile security --profile observability --profile audit down -v

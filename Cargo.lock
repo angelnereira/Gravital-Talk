@@ -1039,6 +1039,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "gravital-talk-audit"
+version = "0.3.0-alpha.1"
+dependencies = [
+ "anyhow",
+ "clap",
+ "gravital-talk",
+ "hound",
+ "tokio",
+]
+
+[[package]]
 name = "gravital-talk-cli"
 version = "0.3.0-alpha.1"
 dependencies = [

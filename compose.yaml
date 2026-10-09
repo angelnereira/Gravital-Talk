@@ -7,6 +7,7 @@
 #   bench         bench                — criterion en contenedor
 #   perf          relay + netem-join   — rendimiento bajo red simulada (tc)
 #   security      fuzz                 — cargo-fuzz (nightly), targets acotados
+#   audit         audit                — auditoría de audio real (gs-audit)
 #   observability prometheus + grafana — métricas del relay
 #
 # Uso (ver Makefile): `make docker-e2e`, `make docker-test`, `make docker-perf`, …
@@ -84,6 +85,85 @@ services:
       UDP_PORT: "9000"
       OBS_PORT: "9100"
       DURATION: "10"
+
+  # ── Auditoría end-to-end del audio real (gs-audit) ─────────────────────
+  # A diferencia del perfil `e2e`, este verifica el CONTENIDO del audio
+  # recibido (frecuencia, RMS, saturación) y no sólo que llegan frames.
+
+  # P2P y paralelo: no necesitan relay, así que van solos.
+  audit:
+    profiles: ["audit"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: cli
+    image: gravital-talk/cli:local
+    volumes:
+      - audit-out:/shared/audit
+      - ./docker/scripts:/scripts:ro
+    entrypoint: ["bash", "/scripts/audit.sh"]
+    environment:
+      SCENARIOS: "${SCENARIOS:-p2p parallel}"
+      SESSIONS: "${SESSIONS:-3}"
+      DURATION_MS: "${DURATION_MS:-4000}"
+      FRAME_MS: "${FRAME_MS:-10}"
+      CODEC: "${CODEC:-pcm}"
+      BASE_PORT: "${BASE_PORT:-34100}"
+
+  # Ancla de sala para el escenario `room`: crea el código y se queda
+  # escuchando mientras `audit-room` verifica el audio en AMBAS direcciones a
+  # través del relay. Es la bidireccionalidad que el perfil `e2e` no comprueba,
+  # porque allí el host nunca asserta su propia recepción.
+  audit-room-host:
+    profiles: ["audit"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: cli
+    image: gravital-talk/cli:local
+    depends_on:
+      relay:
+        condition: service_healthy
+    volumes:
+      - room-code:/shared
+      - ./docker/scripts:/scripts:ro
+    entrypoint: ["bash", "/scripts/room-host.sh"]
+    environment:
+      RELAY_HOST: relay
+      UDP_PORT: "9000"
+      OBS_PORT: "9100"
+      SESSION_ID: "305419896"
+      DURATION: "40"
+
+  audit-room:
+    profiles: ["audit"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: cli
+    image: gravital-talk/cli:local
+    depends_on:
+      relay:
+        condition: service_healthy
+      audit-room-host:
+        condition: service_started
+    volumes:
+      - room-code:/shared
+      - audit-out:/shared/audit
+      - ./docker/scripts:/scripts:ro
+    entrypoint: ["bash", "/scripts/audit.sh"]
+    environment:
+      SCENARIOS: "${ROOM_SCENARIOS:-room}"
+      SESSIONS: "${SESSIONS:-3}"
+      DURATION_MS: "${ROOM_DURATION_MS:-5000}"
+      FRAME_MS: "${ROOM_FRAME_MS:-20}"
+      # El códec lo negocia el primer cliente de la sala, que es el ancla
+      # (`gs ptt`, Opus por defecto). Debe coincidir con el suyo.
+      CODEC: "${ROOM_CODEC:-opus}"
+      BASE_PORT: "${ROOM_BASE_PORT:-34120}"
+      RELAY_HOST: relay
+      RELAY_UDP_PORT: "9000"
+      RELAY_OBS_PORT: "9100"
 
   # ── Suite de tests en contenedor ───────────────────────────────────────
   tester:
@@ -182,3 +262,4 @@ volumes:
   cargo-cache:
   cargotarget:
   bench-output:
+  audit-out:
