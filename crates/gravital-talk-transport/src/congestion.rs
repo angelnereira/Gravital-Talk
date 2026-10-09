@@ -38,6 +38,19 @@ impl CongestionController {
         }
     }
 
+    /// Vuelve al bitrate inicial del rango.
+    ///
+    /// Sin esto, un re-emparejamiento heredaría el bitrate que la congestión
+    /// había bajado en la sesión anterior —posiblemente durante un tramo de red
+    /// mala que ya no existe— y la nueva conexión arrancaría estrangulada sin
+    /// motivo.
+    pub fn reset(&self) {
+        // El "inicial" es `max`: es con el que se construyó y el que toca
+        // después de un corte, porque del camino nuevo no se sabe nada aún.
+        self.current_bitrate
+            .store(self.max_bitrate, Ordering::Release);
+    }
+
     /// Bitrate actual estimado (bps).
     #[inline]
     #[must_use]

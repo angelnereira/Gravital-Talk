@@ -447,6 +447,35 @@ pub unsafe extern "C" fn gs_session_close(handle: *mut GsSessionHandle) -> GsSta
     GsStatus::GS_OK
 }
 
+/// Rearma una sesión cerrada para poder emparejar de nuevo.
+///
+/// Es el requisito de "cualquiera de los dos cierra y vuelve a solicitar el
+/// emparejamiento". Sin esto, `gs_session_close` deja el handle inútil para
+/// siempre: sólo cabe destruirlo y crear otro, con el coste de rehacer todo el
+/// setup (transporte, configuración, token de sala).
+///
+/// Preserva la configuración de la sala (token, modo de handshake) y borra el
+/// estado de la conexión anterior: claves, peers, ventanas anti-replay,
+/// métricas y contadores.
+///
+/// Devuelve `GS_ERR_INVALID_STATE` si la sesión no estaba cerrada: rearrancar en
+/// caliente perdería audio sin aviso.
+#[no_mangle]
+pub unsafe extern "C" fn gs_session_reopen(handle: *mut GsSessionHandle) -> GsStatus {
+    if handle.is_null() {
+        return GsStatus::GS_ERR_NULL_POINTER;
+    }
+    let inner = unsafe { &*(handle as *mut SessionInner) };
+    let session = inner.session.clone();
+    match inner
+        .runtime
+        .block_on(async move { session.reopen().await })
+    {
+        Ok(()) => GsStatus::GS_OK,
+        Err(_) => GsStatus::GS_ERR_INVALID_STATE,
+    }
+}
+
 /// Devuelve el estado actual por el puntero `out_state`.
 #[no_mangle]
 pub unsafe extern "C" fn gs_session_state(

@@ -39,6 +39,20 @@ impl LossTracker {
         }
     }
 
+    /// Reinicia el rastreador a su estado inicial.
+    ///
+    /// Necesario para re-emparejar. Es el más peligroso de arrastrar: el bitmap
+    /// de pérdidas está anclado a `high_seq` de la sesión anterior, así que el
+    /// primer paquete de la nueva se interpretaría como un salto enorme de
+    /// secuencia y daría un 100 % de pérdida ficticio.
+    pub fn reset(&self) {
+        self.bitmap.store(0, Ordering::Release);
+        self.high_seq.store(0, Ordering::Release);
+        self.total_packets.store(0, Ordering::Release);
+        self.reorder_count.store(0, Ordering::Release);
+        self.initialised.store(0, Ordering::Release);
+    }
+
     /// Registra la recepción de un paquete con `sequence`.
     pub fn record(&self, sequence: u32) {
         let initialised = self.initialised.load(Ordering::Relaxed) != 0;

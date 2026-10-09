@@ -233,6 +233,81 @@ impl Session {
         }
     }
 
+    /// Rearma una sesión cerrada para poder emparejar de nuevo.
+    ///
+    /// Sin esto, una `Session` es de un solo uso: `close()` fija `closed=true`
+    /// y todos los lazos de handshake lo consultan para salir, así que el
+    /// mismo objeto nunca puede volver a negociar. El requisito de producto es
+    /// justo el contrario —"cualquiera de los dos cierra y vuelve a
+    /// emparejar"—, así que esto es lo que lo hace posible.
+    ///
+    /// Preserva lo que es configuración de la sala: `config`, el token de sala
+    /// (`room_token`) y el modo de handshake. Un emparejamiento nuevo sobre la
+    /// misma sala no debería tener que reconfigurarlos.
+    ///
+    /// Resetea lo que es estado de la conexión anterior: claves, agenda de
+    /// peers, ventanas anti-replay, contadores de secuencia, jitter buffer,
+    /// FEC, congestión y flags de PTT. Dejarlos sucios haría que el segundo
+    /// emparejamiento hereclara estado del primero: la ventana anti-replay
+    /// descartaría paquetes legítimamente numerados, y el jitter buffer
+    /// entregaría audio de la sesión anterior.
+    ///
+    /// Devuelve `Err` si la sesión no estaba cerrada: rearrancar una sesión
+    /// activa en caliente perdería audio sin aviso, y debe ser una decisión
+    /// explícita (`close()` primero).
+    pub async fn reopen(&self) -> Result<(), TransportError> {
+        if !self.closed.load(Ordering::Acquire) {
+            return Err(TransportError::InvalidState(
+                "session is still open: close() it before reopening",
+            ));
+        }
+
+        // Claves y estado criptográfico: lo primero, para que ni un paquete en
+        // vuelo de la sesión anterior pueda descifrarse con ellas.
+        *self.encrypt_key.lock().await = None;
+        *self.decrypt_key.lock().await = None;
+        self.replay_by_peer.lock().await.clear();
+        self.book.lock().await.clear();
+
+        // Contadores de secuencia: empiezan de cero, como en `new()`.
+        self.session_id.store(0, Ordering::Release);
+        self.tx_sequence.store(0, Ordering::Release);
+        self.audio_tx_seq.store(0, Ordering::Release);
+        self.last_rx.store(0, Ordering::Release);
+        self.negotiated_codec.store(0, Ordering::Release);
+        self.local_ssrc.store(0, Ordering::Release);
+
+        // Flags de PTT: si la sesión anterior se cerró a mitad de una
+        // transmisión, el flag quedaría activo y la próxima empezaría
+        // "transmitiendo" sin que nadie pulse nada.
+        self.ptt_active.store(false, Ordering::Release);
+        self.peer_ptt_active.store(false, Ordering::Release);
+
+        // Jitter buffer, FEC y congestión: estado derivado del flujo anterior.
+        self.jitter.reset();
+        *self.fec_enc.lock().await = FecEncoder::with_default_window();
+        *self.fec_dec.lock().await = FecDecoder::with_default_window();
+        self.congestion.reset();
+
+        // Métricas: se sustituye el acumulador para no mezclar dos sesiones.
+        // El campo es `Arc<Metrics>` compartido con quien observe, así que se
+        // reinicia en el sitio.
+        self.metrics.reset();
+
+        // La FSM acepta `(Closed, Reconnect)`, que es exactamente la
+        // transición de "volver a emparejar".
+        {
+            let mut sm = self.state.lock().await;
+            sm.transition(SessionEvent::Reconnect)
+                .map_err(|_| TransportError::InvalidState("cannot reopen from current state"))?;
+        }
+
+        // La señal de cancelación va al final: mientras está puesta, ningún
+        // lazo bloqueante arranca.
+        self.closed.store(false, Ordering::Release);
+        Ok(())
+    }
+
     /// Modo de handshake efectivo.
     #[must_use]
     pub fn handshake_mode(&self) -> HandshakeMode {
@@ -1923,7 +1998,12 @@ impl Session {
                 .send_control(MessageType::Close, self.session_id(), &[], p)
                 .await;
         }
+        // Dos transiciones, no una: `Active -> Closing -> Closed`. La FSM exige
+        // pasar por `Closing` antes de llegar a `Closed`. Con una sola la
+        // sesión se quedaba en `Closing` para siempre y no podía
+        // re-emparejarse.
         let mut sm = self.state.lock().await;
+        let _ = sm.transition(SessionEvent::Close);
         let _ = sm.transition(SessionEvent::Close);
         drop(sm);
         self.book.lock().await.clear();

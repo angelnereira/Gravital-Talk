@@ -25,6 +25,19 @@ impl Counters {
         }
     }
 
+    /// Reinicia todos los contadores a cero.
+    ///
+    /// Necesario para re-emparejar: sin esto la segunda sesión acumularía
+    /// paquetes y bytes sobre los de la primera.
+    pub fn reset(&self) {
+        self.packets_sent.store(0, Ordering::Release);
+        self.packets_received.store(0, Ordering::Release);
+        self.bytes_sent.store(0, Ordering::Release);
+        self.bytes_received.store(0, Ordering::Release);
+        self.integrity_errors.store(0, Ordering::Release);
+        self.replayed_dropped.store(0, Ordering::Release);
+    }
+
     #[inline]
     pub fn record_sent(&self, bytes: u64) {
         self.packets_sent.fetch_add(1, Ordering::Relaxed);

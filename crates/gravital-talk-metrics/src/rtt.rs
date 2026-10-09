@@ -29,6 +29,15 @@ impl RttEstimator {
         }
     }
 
+    /// Reinicia el estimador a su estado inicial.
+    ///
+    /// Necesario para re-emparejar: sin esto, el segundo emparejamiento
+    /// mostraría el RTT/jitter/pérdida de la sesión anterior, que es
+    /// información de un camino de red que ya no existe.
+    pub fn reset(&self) {
+        self.rtt_us.store(u32::MAX, Ordering::Release);
+    }
+
     /// Añade una muestra nueva. `sample_us` es la diferencia entre el
     /// timestamp del heartbeat enviado y el heartbeat-ack recibido.
     pub fn record(&self, sample_us: u32) {

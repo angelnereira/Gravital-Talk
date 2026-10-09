@@ -43,6 +43,18 @@ impl Metrics {
         }
     }
 
+    /// Reinicia todas las métricas a su estado inicial.
+    ///
+    /// Necesario para re-emparejar: sin esto, la segunda sesión heredaría el
+    /// RTT, jitter, pérdida y contadores de la primera, mostrando números de un
+    /// camino de red que ya no existe.
+    pub fn reset(&self) {
+        self.rtt.reset();
+        self.jitter.reset();
+        self.loss.reset();
+        self.counters.reset();
+    }
+
     /// Produce un snapshot atómico de todas las métricas. El buffer-fill y el
     /// MOS se pasan externamente (dependen de componentes fuera del crate).
     #[must_use]

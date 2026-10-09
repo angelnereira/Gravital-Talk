@@ -28,6 +28,16 @@ impl JitterEstimator {
         }
     }
 
+    /// Reinicia el estimador a su estado inicial.
+    ///
+    /// Necesario para re-emparejar: sin esto, el segundo emparejamiento
+    /// mostraría el RTT/jitter/pérdida de la sesión anterior, que es
+    /// información de un camino de red que ya no existe.
+    pub fn reset(&self) {
+        self.jitter_us_q4.store(0, Ordering::Release);
+        self.prev_diff_us.store(i64::MIN, Ordering::Release);
+    }
+
     /// Registra una muestra. `send_ts_us` es el timestamp del emisor extraído
     /// del header, `recv_ts_us` es el instante local de llegada.
     pub fn record(&self, send_ts_us: u64, recv_ts_us: u64) {

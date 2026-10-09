@@ -180,6 +180,23 @@ GsStatus gs_session_recv_audio_timeout(GsSessionHandle *handle,
 GsStatus gs_session_close(GsSessionHandle *handle);
 
 /*
+ Rearma una sesión cerrada para poder emparejar de nuevo.
+
+ Es el requisito de "cualquiera de los dos cierra y vuelve a solicitar el
+ emparejamiento". Sin esto, `gs_session_close` deja el handle inútil para
+ siempre: sólo cabe destruirlo y crear otro, con el coste de rehacer todo el
+ setup (transporte, configuración, token de sala).
+
+ Preserva la configuración de la sala (token, modo de handshake) y borra el
+ estado de la conexión anterior: claves, peers, ventanas anti-replay,
+ métricas y contadores.
+
+ Devuelve `GS_ERR_INVALID_STATE` si la sesión no estaba cerrada: rearrancar en
+ caliente perdería audio sin aviso.
+ */
+GsStatus gs_session_reopen(GsSessionHandle *handle);
+
+/*
  Devuelve el estado actual por el puntero `out_state`.
  */
 GsStatus gs_session_state(GsSessionHandle *handle, GsSessionState *out_state);

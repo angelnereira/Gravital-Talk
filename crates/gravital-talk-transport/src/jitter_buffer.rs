@@ -71,6 +71,24 @@ impl JitterBuffer {
         }
     }
 
+    /// Vacía el buffer y reinicia su secuencia.
+    ///
+    /// Hace falta para re-emparejar: sin esto, los frames de la sesión
+    /// anterior seguirían en los slots y se entregarían como si fueran de la
+    /// nueva. Es el caso más claro de estado que *no* debe sobrevivir a un
+    /// `close()`.
+    pub fn reset(&self) {
+        for slot in &self.slots {
+            // Limpiar `frame` antes que `occupied`: si no, otro hilo podría ver
+            // el slot como ocupado con un frame a medio borrar.
+            *slot.frame.lock().unwrap() = None;
+            slot.sequence.store(0, Ordering::Release);
+            slot.occupied.store(false, Ordering::Release);
+        }
+        self.next_seq.store(0, Ordering::Release);
+        self.primed.store(false, Ordering::Release);
+    }
+
     /// Capacidad en slots.
     #[inline]
     #[must_use]
