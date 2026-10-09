@@ -7,7 +7,6 @@ import 'package:gravital_talk_app/services/room_api.dart';
 import 'package:gravital_talk_app/services/room_events.dart';
 import 'package:gravital_talk_app/services/session_controller.dart';
 import 'package:gravital_talk_app/services/settings_store.dart';
-import 'package:gravital_talk_app/models/session.dart';
 import 'package:gravital_talk_app/widgets/active_session_card.dart';
 import 'package:gravital_talk_app/widgets/common.dart';
 import 'package:provider/provider.dart';
