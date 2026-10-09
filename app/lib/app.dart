@@ -7,6 +7,7 @@ import 'models/connection.dart';
 import 'screens/home_screen.dart';
 import 'screens/onboarding_screen.dart';
 import 'services/event_log.dart';
+import 'services/room_events.dart';
 import 'services/session_controller.dart';
 
 /// Raíz de la aplicación.
@@ -15,12 +16,16 @@ class GravitalTalkApp extends StatelessWidget {
     super.key,
     required this.controller,
     required this.log,
+    required this.roomEvents,
     this.showOnboarding = false,
     this.onOnboardingDone,
   });
 
   final SessionController controller;
   final EventLog log;
+
+  /// Estado de los participantes de la sala (stream `WatchRoom` del relay).
+  final RoomEvents roomEvents;
 
   /// Muestra el onboarding de primer arranque en lugar de la home.
   final bool showOnboarding;
@@ -34,6 +39,7 @@ class GravitalTalkApp extends StatelessWidget {
       providers: [
         ChangeNotifierProvider.value(value: controller),
         ChangeNotifierProvider.value(value: log),
+        ChangeNotifierProvider.value(value: roomEvents),
       ],
       child: ToastificationWrapper(
         child: Consumer<SessionController>(

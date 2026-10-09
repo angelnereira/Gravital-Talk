@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../core/states.dart';
+import '../core/tokens.dart';
 import '../models/connection.dart';
+import '../models/session.dart';
 import '../services/session_controller.dart';
 import '../widgets/common.dart';
 
@@ -83,7 +86,20 @@ class SessionScreen extends StatelessWidget {
                     ),
                   ],
                 ),
-                const SizedBox(height: 22),
+                if (c.state == SessionState.reconnecting) ...[
+                  const SizedBox(height: Spacing.md),
+                  const ReconnectingBanner(),
+                ],
+                if (c.engineKind == EngineKind.demo) ...[
+                  const SizedBox(height: Spacing.md),
+                  WarningBanner(
+                    message: 'Motor demo: no hay audio real. '
+                        'Compila la librería nativa para hablar de verdad.',
+                  ),
+                ],
+                const SizedBox(height: Spacing.lg),
+                const ParticipantsCard(),
+                const SizedBox(height: Spacing.lg),
                 if (c.peerPttActive && !c.pttActive)
                   Container(
                     padding: const EdgeInsets.all(12),

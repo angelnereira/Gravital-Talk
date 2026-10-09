@@ -5,6 +5,7 @@ import 'services/engine.dart';
 import 'services/event_log.dart';
 import 'services/grpc_room_api.dart';
 import 'services/room_api.dart';
+import 'services/room_events.dart';
 import 'services/session_controller.dart';
 import 'services/settings_store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -26,6 +27,9 @@ Future<void> main() async {
   final controller = SessionController(engine, roomApi, log, store);
   await controller.init();
 
+  // Estado de los participantes, alimentado por `WatchRoom` del relay.
+  final roomEvents = RoomEvents();
+
   // Onboarding solo la primera vez.
   final prefs = await SharedPreferences.getInstance();
   final seenOnboarding = prefs.getBool('onboarding.done') ?? false;
@@ -33,6 +37,7 @@ Future<void> main() async {
   runApp(GravitalTalkApp(
     controller: controller,
     log: log,
+    roomEvents: roomEvents,
     showOnboarding: !seenOnboarding,
     onOnboardingDone: () => prefs.setBool('onboarding.done', true),
   ));

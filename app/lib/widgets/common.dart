@@ -2,9 +2,13 @@ import 'package:animate_do/animate_do.dart';
 import 'package:flutter/material.dart';
 import 'package:percent_indicator/linear_percent_indicator.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:provider/provider.dart';
 
+import '../core/tokens.dart';
 import '../models/session.dart';
 import '../services/event_log.dart';
+import '../services/room_events.dart';
+import '../services/session_controller.dart';
 
 /// Badge de estado de la sesión.
 class StatusBadge extends StatelessWidget {
@@ -486,4 +490,175 @@ class GravitalColors {
   static const online = Color(0xFF00C853);
 
   const GravitalColors._();
+}
+
+/// Banner de reconexión: la sesión se está recuperando sola.
+///
+/// Sin esto, un corte de red parece una sesión congelada: el PTT no responde y
+/// no hay explicación. El backoff vive en el controller (`2s -> 30s`).
+class ReconnectingBanner extends StatelessWidget {
+  const ReconnectingBanner({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.all(Spacing.md),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.tertiaryContainer,
+        borderRadius: BorderRadius.circular(Radii.md),
+      ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              valueColor: AlwaysStoppedAnimation<Color>(
+                theme.colorScheme.onTertiaryContainer,
+              ),
+            ),
+          ),
+          const SizedBox(width: Spacing.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Reconectando…',
+                  style: theme.textTheme.labelLarge?.copyWith(
+                    color: theme.colorScheme.onTertiaryContainer,
+                  ),
+                ),
+                Text(
+                  'La sesión se recupera sola tras un corte de red',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onTertiaryContainer
+                        .withValues(alpha: 0.8),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Lista de participantes de la sala.
+///
+/// Consume el stream `WatchRoom` del relay (`PEER_JOINED`, `PEER_LEFT`,
+/// `FLOOR_GRANTED`, `FLOOR_RELEASED`), que la app no usaba: la pantalla de
+/// sesión mostraba métricas pero no quién estaba en la sala ni quién tenía el
+/// turno. El floor es lo que hace útil el PTT, así que mostrarlo es mostrar la
+/// característica, no un adorno.
+class ParticipantsCard extends StatelessWidget {
+  const ParticipantsCard({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final events = context.watch<RoomEvents>();
+    final controller = context.watch<SessionController>();
+
+    final participants = <Participant>[
+      Participant(
+        ssrc: controller.sessionId,
+        isLocal: true,
+        hasFloor: events.floorHolder == controller.sessionId,
+      ),
+      for (final ssrc in events.peers)
+        Participant(
+          ssrc: ssrc,
+          hasFloor: events.floorHolder == ssrc,
+        ),
+    ];
+
+    return SectionCard(
+      title: 'Participantes',
+      subtitle: switch (events.isConnected) {
+        true => '${participants.length} en la sala',
+        false when events.roomCode == null => 'Sin observación de sala',
+        false => 'Observación de sala perdida',
+      },
+      trailing: events.isConnected
+          ? Icon(Icons.circle, size: 10, color: GravitalColors.online)
+          : Icon(Icons.cloud_off, size: 18, color: theme.colorScheme.outline),
+      child: Column(
+        children: [
+          for (final p in participants)
+            Padding(
+              padding: const EdgeInsets.only(bottom: Spacing.sm),
+              child: Row(
+                children: [
+                  Container(
+                    width: 32,
+                    height: 32,
+                    decoration: BoxDecoration(
+                      color: p.hasFloor
+                          ? GravitalColors.pttActive.withValues(alpha: 0.15)
+                          : theme.colorScheme.surfaceContainerHighest,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      p.hasFloor
+                          ? Icons.graphic_eq
+                          : (p.isLocal ? Icons.person : Icons.people),
+                      size: 16,
+                      color: p.hasFloor
+                          ? GravitalColors.pttActive
+                          : theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(width: Spacing.md),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          p.isLocal ? '${p.label} (tú)' : p.label,
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            fontWeight:
+                                p.hasFloor ? FontWeight.w700 : FontWeight.w500,
+                          ),
+                        ),
+                        Text(
+                          p.statusLabel,
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: p.hasFloor
+                                ? GravitalColors.pttActive
+                                : theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (p.hasFloor)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: Spacing.sm,
+                        vertical: Spacing.xxs,
+                      ),
+                      decoration: BoxDecoration(
+                        color: GravitalColors.pttActive,
+                        borderRadius: BorderRadius.circular(Radii.pill),
+                      ),
+                      child: Text(
+                        'TURNO',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.6,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 }

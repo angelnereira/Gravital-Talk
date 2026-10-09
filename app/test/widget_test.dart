@@ -3,6 +3,7 @@ import 'package:gravital_talk_app/app.dart';
 import 'package:gravital_talk_app/services/engine.dart';
 import 'package:gravital_talk_app/services/event_log.dart';
 import 'package:gravital_talk_app/services/room_api.dart';
+import 'package:gravital_talk_app/services/room_events.dart';
 import 'package:gravital_talk_app/services/session_controller.dart';
 import 'package:gravital_talk_app/services/settings_store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -20,7 +21,11 @@ void main() {
     );
     await controller.init();
 
-    await tester.pumpWidget(GravitalTalkApp(controller: controller, log: log));
+    await tester.pumpWidget(GravitalTalkApp(
+      controller: controller,
+      log: log,
+      roomEvents: RoomEvents(),
+    ));
     await tester.pumpAndSettle();
 
     expect(find.text('Servidor (sala)'), findsOneWidget);
