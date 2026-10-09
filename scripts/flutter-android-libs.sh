@@ -16,7 +16,14 @@ set -euo pipefail
 
 PROFILE="${1:-debug}"
 ABIS=(aarch64-linux-android armv7-linux-androideabi x86_64-linux-android)
-OUT="app/android/app/src/main/jniLibs"
+
+# La ruta se resuelve desde la ubicación del SCRIPT, no desde el directorio
+# actual. Con `OUT` relativo el script sólo funcionaba invocado desde la raíz
+# del repo; cuando lo lanza Gradle (CWD = `app/android/app/`) escribía los .so
+# en `app/android/app/app/android/…` y el APK se quedaba con las librerías
+# antiguas sin que el build fallara.
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+OUT="$ROOT/app/android/app/src/main/jniLibs"
 
 # Defaults para que el script funcione sin configurar nada, que es el caso
 # normal cuando lo invoca Gradle: la tarea `buildRustLibs` ejecuta este script
