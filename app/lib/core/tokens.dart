@@ -32,16 +32,20 @@ class Radii {
 
 /// Duraciones de animación.
 ///
+/// Se llama `GravitalDurations` y no `Durations` porque Flutter Material ya
+/// exporta una clase con ese nombre: al importar `material.dart` junto a estos
+/// tokens, el nombre queda ambiguo y no compila.
+///
 /// Debajo de 150 ms una transición se percibe como instantánea. Entre 150 y
 /// 300 ms es el rango cómodo. Por encima, el usuario pierde la sensación de
 /// respuesta directa.
-class Durations {
+class GravitalDurations {
   static const Duration instant = Duration(milliseconds: 100);
   static const Duration fast = Duration(milliseconds: 150);
   static const Duration normal = Duration(milliseconds: 220);
   static const Duration slow = Duration(milliseconds: 320);
 
-  const Durations._();
+  const GravitalDurations._();
 }
 
 /// Elevaciones, en lugar de números sueltos.

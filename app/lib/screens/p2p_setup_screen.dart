@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../core/constants.dart';
 import '../core/states.dart';
+import '../core/routes.dart';
 import '../core/tokens.dart';
 import '../models/connection.dart';
 import '../services/session_controller.dart';
@@ -77,7 +78,7 @@ class _P2pSetupScreenState extends State<P2pSetupScreen> {
     if (!mounted) return;
     if (ok && c.isLive) {
       Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const SessionScreen()));
+          ForwardRoute(builder: (_) => const SessionScreen()));
     }
   }
 

@@ -3,6 +3,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
 
 import '../core/states.dart';
+import '../core/routes.dart';
 import '../core/tokens.dart';
 import '../models/session.dart';
 import '../services/session_controller.dart';
@@ -49,13 +50,13 @@ class _HomeScreenState extends State<HomeScreen> {
           IconButton(
             tooltip: 'Ajustes',
             onPressed: () => Navigator.push(context,
-                MaterialPageRoute(builder: (_) => const SettingsScreen())),
+                QuickRoute(builder: (_) => const SettingsScreen())),
             icon: const Icon(Icons.settings_outlined),
           ),
           IconButton(
             tooltip: 'Acerca de',
             onPressed: () => Navigator.push(context,
-                MaterialPageRoute(builder: (_) => const AboutScreen())),
+                QuickRoute(builder: (_) => const AboutScreen())),
             icon: const Icon(Icons.info_outline),
           ),
         ],
@@ -79,7 +80,7 @@ class _HomeScreenState extends State<HomeScreen> {
             subtitle:
                 'Terminal central: crea o únete a una sala vía relay con código',
             onTap: () => Navigator.push(context,
-                MaterialPageRoute(builder: (_) => const ServerSetupScreen())),
+                ForwardRoute(builder: (_) => const ServerSetupScreen())),
           )
               .animate(delay: 120.ms)
               .fadeIn(duration: 300.ms)
@@ -91,7 +92,7 @@ class _HomeScreenState extends State<HomeScreen> {
             title: 'P2P directo',
             subtitle: 'Conexión directa entre dos dispositivos, sin relay',
             onTap: () => Navigator.push(context,
-                MaterialPageRoute(builder: (_) => const P2pSetupScreen())),
+                ForwardRoute(builder: (_) => const P2pSetupScreen())),
           )
               .animate(delay: 220.ms)
               .fadeIn(duration: 300.ms)
