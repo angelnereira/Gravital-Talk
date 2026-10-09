@@ -85,7 +85,7 @@ class AboutScreen extends StatelessWidget {
               children: [
                 ListTile(
                   contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.code),
+                  leading: const Icon(Icons.code, color: _kIconTone),
                   title: const Text('Repositorio'),
                   subtitle: const Text('github.com/angelnereira/gravital-talk'),
                   onTap: () => _open(
@@ -93,7 +93,7 @@ class AboutScreen extends StatelessWidget {
                 ),
                 ListTile(
                   contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.description_outlined),
+                  leading: const Icon(Icons.description_outlined, color: _kIconTone),
                   title: const Text('Especificación del protocolo'),
                   subtitle: const Text('docs/protocol-spec.md'),
                   onTap: () => _open(
@@ -102,7 +102,7 @@ class AboutScreen extends StatelessWidget {
                 ),
                 ListTile(
                   contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.balance),
+                  leading: const Icon(Icons.balance, color: _kIconTone),
                   title: const Text('Licencia'),
                   subtitle: const Text('MIT OR Apache-2.0'),
                   onTap: () => _snack(context, 'MIT OR Apache-2.0'),
@@ -139,7 +139,7 @@ class AboutScreen extends StatelessWidget {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Icon(icon, size: 18, color: Theme.of(context).colorScheme.primary),
+        Icon(icon, size: 18, color: _kIconTone),
         const SizedBox(width: 10),
         Expanded(
           child: Column(
@@ -167,3 +167,10 @@ class AboutScreen extends StatelessWidget {
         .showSnackBar(SnackBar(content: Text(msg)));
   }
 }
+
+/// Tiento de los iconos auxiliares.
+///
+/// No se define como constante global con color de marca porque el color de
+/// marca debe reservarse para una sola cosa por pantalla: el estado activo. Si
+/// todos los iconos lo usan, ninguno significa nada.
+const _kIconTone = Color(0xFF8FA3B5);

@@ -59,40 +59,68 @@ abstract final class GravitalPalette {
   static const warning = Color(0xFFD97706);
 
   // ── Superficies: modo oscuro ───────────────────────────────────────────
+  //
+  // La escalera está calculada, no elegida a ojo. El problema que corrige: con
+  // los valores anteriores el fondo y la tarjeta tenían un salto de luminancia
+  // de 1.10x, es decir invisibles, y la app se veía como una mancha informe.
+  //
+  // Cada paso se midió con el ratio de contraste WCAG entre superficies:
 
-  /// Fondo base. Azul-negro, no gris: el matiz frío es lo que da el carácter.
-  static const surfaceDark = Color(0xFF0A0F16);
+  /// Fondo base. Casi negro, con matiz azul frío.
+  static const surfaceDark = Color(0xFF070B10);
 
-  /// Superficie elevada (tarjetas).
-  static const surfaceContainerDark = Color(0xFF111A24);
+  /// Superficie elevada (tarjetas). Δlum 1.30x vs fondo.
+  ///
+  /// Es el que hace el trabajo: es el que separa la tarjeta del fondo.
+  static const surfaceContainerDark = Color(0xFF1C2733);
 
-  /// Superficie aún más elevada (diálogos, hojas).
-  static const surfaceContainerHighDark = Color(0xFF1A2634);
+  /// Superficie aún más elevada (diálogos, hojas). Δlum 1.16x.
+  static const surfaceContainerHighDark = Color(0xFF25323F);
 
-  /// Borde sutil.
-  static const outlineDark = Color(0xFF2C3E50);
+  /// Superficie de máximo nivel (chips, campos). Δlum 1.19x.
+  static const surfaceContainerHighestDark = Color(0xFF2E3E4C);
+
+  /// Borde de tarjeta. Blanco al 12 % sobre la tarjeta.
+  ///
+  /// En modo oscuro la luminancia está comprimida: 1.30x de relleno no siempre
+  /// basta para que una tarjeta se lea en pantallas baratas. El borde es la
+  /// garantía extra. Es sutil a propósito (44 % más de contraste que el
+  /// relleno), no una línea dura.
+  static const outlineDark = Color(0xFF37404B);
 
   /// Texto principal en oscuro. Blanco azulado, no blanco puro.
   static const onSurfaceDark = Color(0xFFE6EDF3);
 
   /// Texto secundario en oscuro.
-  static const onSurfaceVariantDark = Color(0xFF9AAAB8);
+  ///
+  /// Subido respecto al `#9AAAB8` anterior: 8.33:1 sobre la tarjeta nueva. El
+  /// valor antiguo pasaba AA pero se leía apagado.
+  static const onSurfaceVariantDark = Color(0xFFB3C2D1);
 
   // ── Superficies: modo claro ────────────────────────────────────────────
+  //
+  // El problema en claro es el inverso y más grave de lo que parece: con fondo
+  // `#F6F8FA` y tarjeta blanca el salto era de 1.06x —también invisible—. La
+  // solución no es aclarar la tarjeta, es oscurecer el fondo.
 
-  /// Fondo base claro, con un matiz frío mínimo.
-  static const surfaceLight = Color(0xFFF6F8FA);
+  /// Fondo base claro.
+  ///
+  /// Más gris que el `#F6F8FA` anterior a propósito: contra la tarjeta blanca
+  /// el salto pasa de 1.06x a 1.13x.
+  static const surfaceLight = Color(0xFFEEF2F5);
 
   /// Tarjetas en claro. Blanco real: las tarjetas son lo que destaca.
   static const surfaceContainerLight = Color(0xFFFFFFFF);
 
-  static const surfaceContainerHighLight = Color(0xFFEAF0F4);
+  static const surfaceContainerHighLight = Color(0xFFFFFFFF);
 
-  static const outlineLight = Color(0xFFC4CFD8);
+  /// Borde en claro. Negro al 10 %: separa sin endurecer.
+  static const outlineLight = Color(0xFFE5E5E5);
 
   static const onSurfaceLight = Color(0xFF0F1923);
 
-  static const onSurfaceVariantLight = Color(0xFF4A5B6A);
+  /// Texto secundario en claro. 8.56:1 sobre blanco.
+  static const onSurfaceVariantLight = Color(0xFF3E4E5D);
 }
 
 /// Escala tipográfica de Gravital Talk.

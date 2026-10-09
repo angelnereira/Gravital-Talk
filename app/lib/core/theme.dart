@@ -130,6 +130,9 @@ class GravitalTheme {
         ),
       ),
 
+      // Sin divisor por línea: la referencia de Pixel separa por espaciado,
+      // no por líneas. El tema se mantiene por si algún widget lo pide
+      // explícitamente, pero el tema visual es espaciado.
       dividerTheme: DividerThemeData(
         color: scheme.outlineVariant,
         space: Spacing.lg,
@@ -173,10 +176,12 @@ class GravitalTheme {
       surfaceContainerLowest: Colors.white,
       surfaceContainerLow: GravitalPalette.surfaceContainerLight,
       surfaceContainer: GravitalPalette.surfaceContainerHighLight,
-      surfaceContainerHigh: Color(0xFFDFE7EC),
-      surfaceContainerHighest: Color(0xFFD4DEE5),
+      surfaceContainerHigh: Color(0xFFE4EAEF),
+      surfaceContainerHighest: Color(0xFFDAE2E8),
       outline: GravitalPalette.outlineLight,
-      outlineVariant: Color(0xFFDCE4EA),
+      // Variante de borde un paso más clara: para divisores internos, no para
+      // el contorno de la tarjeta.
+      outlineVariant: Color(0xFFF0F3F5),
     );
   }
 
@@ -197,10 +202,12 @@ class GravitalTheme {
       surfaceContainerLowest: Color(0xFF060B10),
       surfaceContainerLow: GravitalPalette.surfaceContainerDark,
       surfaceContainer: GravitalPalette.surfaceContainerHighDark,
-      surfaceContainerHigh: Color(0xFF243444),
-      surfaceContainerHighest: Color(0xFF2E4053),
+      surfaceContainerHigh: GravitalPalette.surfaceContainerHighDark,
+      surfaceContainerHighest: GravitalPalette.surfaceContainerHighestDark,
       outline: GravitalPalette.outlineDark,
-      outlineVariant: Color(0xFF22303E),
+      // Variante interna: un paso más oscura que el contorno, para que los
+      // divisores no compitan con el borde de la tarjeta.
+      outlineVariant: Color(0xFF18222D),
     );
   }
 

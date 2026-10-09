@@ -189,18 +189,16 @@ class _Hero extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(22),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(22),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            scheme.primary.withValues(alpha: 0.16),
-            scheme.primary.withValues(alpha: 0.04),
-          ],
-        ),
-        border: Border.all(color: scheme.primary.withValues(alpha: 0.25)),
+        borderRadius: BorderRadius.circular(Radii.xl),
+        // Superficie elevada normal, sin degradado de color. El hero antes
+        // llevaba un lavado teal con borde del mismo color: era el bloque más
+        // saturado de la pantalla y el que hacía que todo lo demás pareciera
+        // plano al lado. La referencia de Pixel separa por superficie y
+        // tipografía, no por tintes.
+        color: scheme.surfaceContainerLow,
+        border: Border.all(color: scheme.outline),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

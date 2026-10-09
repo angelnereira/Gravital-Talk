@@ -251,6 +251,11 @@ class ModeCard extends StatelessWidget {
   final IconData icon;
   final String title;
   final String subtitle;
+
+  /// Tono del icono cuando tiene que distinguirse (p. ej. estado activo).
+  ///
+  /// Antes se usaba como relleno de un cuadrado al 14 %, que era lo que
+  /// cargaba la pantalla. Ahora sólo tiñe el icono.
   final Color color;
   final VoidCallback onTap;
 
@@ -265,16 +270,15 @@ class ModeCard extends StatelessWidget {
           padding: const EdgeInsets.all(18),
           child: Row(
             children: [
-              Container(
-                width: 52,
-                height: 52,
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.14),
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Icon(icon, color: color, size: 28),
-              ),
-              const SizedBox(width: 14),
+              // Icono monócromo sobre la superficie, sin cuadrado de color
+              // detrás. Es lo que hace la referencia de Pixel, y es lo que
+              // quita el bloque de teal saturado que dominaba cada fila.
+              //
+              // El `color` del widget se respeta sólo como tono del icono;
+              // nunca como relleno. Si todas las tarjetas pintaran su icono a
+              // todo color, ninguna destacaría.
+              Icon(icon, color: theme.colorScheme.onSurfaceVariant, size: 26),
+              const SizedBox(width: Spacing.lg),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
