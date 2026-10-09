@@ -4,6 +4,21 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
 
 ## [Unreleased]
 
+### Added
+
+**Contrato de emparejamiento con código TOTP (`gravital_talk_transport::pairing`)**
+- `PairingOffer`: secreto de sala, caducidad opcional y usos máximos opcionales
+  (0 = ilimitado, para salas con varios invitados).
+- `PairingReject` con cuatro motivos distintos, cada uno con mensaje accionable:
+  expirado, código incorrecto, agotado y código caducado. La UI puede explicar
+  qué pasó en lugar de "no se pudo conectar".
+- Código de 6 dígitos derivado del secreto de la sala, rotando cada 30 s, con
+  ventana de deriva de ±1 paso.
+- No es un segundo factor por sí solo: deriva del mismo secreto que autentica la
+  sesión. Sí lo es en modo sala, donde el relay puede verificarlo contra Band-All.
+- El truncado dinámico (RFC 4226) se verifica contra los vectores canónicos del
+  RFC 6238, reproducidos con una implementación independiente antes de escribirlos.
+
 ### Fixed
 
 **La app Flutter no compilaba para Android, iOS ni escritorio**

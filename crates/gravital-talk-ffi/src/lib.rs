@@ -22,8 +22,8 @@ use std::ptr;
 use std::sync::Arc;
 
 use gravital_talk::{
-    discover_public_addr, Config as RustConfig, HandshakeMode, LatencyClass, MetricsSnapshot,
-    Session, SessionRole, SessionState, TransportError, UdpConfig, UdpTransport,
+    discover_public_addr, reach, Config as RustConfig, HandshakeMode, LatencyClass,
+    MetricsSnapshot, Session, SessionRole, SessionState, TransportError, UdpConfig, UdpTransport,
 };
 
 thread_local! {
@@ -701,6 +701,66 @@ pub unsafe extern "C" fn gs_session_local_port(
 /// Escribe `"ip:port"` como C-string NUL-terminada en `out_buf`.
 /// `buf_len` debe ser al menos 48 bytes para acomodar IPv4+puerto.
 ///
+/// Diagnostica si este dispositivo puede recibir invitados de fuera de su red.
+///
+/// Es la comprobación que evita el fallo silencioso: sin ella, un anfitrión
+/// detrás de CGNAT (red móvil) muestra un QR que nunca va a funcionar y nadie
+/// entiende por qué. Con ella, la app avisa *antes* de que el invitado lo
+/// intente.
+///
+/// Escribe en `out_code` uno de:
+/// `0` = alcanzable públicamente, `1` = sólo LAN, `2` = CGNAT, `3` = desconocido.
+///
+/// Devuelve `GS_OK` siempre que el diagnóstico se pueda expresar; el
+/// `GS_ERR_*` es para fallos de la propia llamada, no de la red.
+///
+/// # Safety
+/// `out_code` debe apuntar a un `i32` escribible.
+#[no_mangle]
+pub unsafe extern "C" fn gs_diagnose_reachability(local_port: u16, out_code: *mut i32) -> GsStatus {
+    if out_code.is_null() {
+        return GsStatus::GS_ERR_NULL_POINTER;
+    }
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            set_last_error(format!("runtime: {e}"));
+            return GsStatus::GS_ERR_INTERNAL;
+        }
+    };
+
+    let code = match runtime.block_on(discover_public_addr(local_port)) {
+        Ok(addr) => {
+            let reachability = reach::diagnose(addr.ip());
+            reachability as i32
+        }
+        Err(_) => reach::Reachability::Unknown as i32,
+    };
+    unsafe { *out_code = code };
+    GsStatus::GS_OK
+}
+
+/// Puerto que dedica Gravital Talk al anfitrión, según política.
+///
+/// `preferred` de 0 significa "el que sea más rápido y sencillo", que en la
+/// práctica es el puerto documentado (9000) si está libre. La ventaja de un
+/// puerto fijo sobre el efímero es concreta: el reenvío del router sólo hay que
+/// hacerlo una vez.
+///
+/// # Safety
+/// `out_port` debe apuntar a un `u16` escribible.
+#[no_mangle]
+pub unsafe extern "C" fn gs_preferred_host_port(preferred: u16, out_port: *mut u16) -> GsStatus {
+    if out_port.is_null() {
+        return GsStatus::GS_ERR_NULL_POINTER;
+    }
+    unsafe { *out_port = reach::preferred_host_port(preferred) };
+    GsStatus::GS_OK
+}
+
 /// # Safety
 /// `out_buf` debe apuntar a un buffer de al menos `buf_len` bytes escribibles.
 #[no_mangle]

@@ -17,6 +17,7 @@ pub mod jitter_buffer;
 #[cfg(feature = "noise")]
 pub mod noise;
 pub mod pairing;
+pub mod reach;
 pub mod replay;
 pub mod session;
 pub mod stun;

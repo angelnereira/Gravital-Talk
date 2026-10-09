@@ -56,5 +56,10 @@ pub use gravital_talk_transport::{
     Config, LatencyClass, Session, SessionRole, StunError, Transport, TransportError,
 };
 
+// Emparejamiento y alcance de red: se re-exportan como módulos completos para
+// que la FFI (y cualquier consumidor) llegue a ellos sin depender del layout
+// interno de `gravital-talk-transport`.
+pub use gravital_talk_transport::{pairing, reach};
+
 /// Version del crate facade.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

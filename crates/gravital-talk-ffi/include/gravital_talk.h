@@ -287,6 +287,38 @@ GsStatus gs_session_local_port(GsSessionHandle *handle, uint16_t *out_port);
  Escribe `"ip:port"` como C-string NUL-terminada en `out_buf`.
  `buf_len` debe ser al menos 48 bytes para acomodar IPv4+puerto.
 
+ Diagnostica si este dispositivo puede recibir invitados de fuera de su red.
+
+ Es la comprobación que evita el fallo silencioso: sin ella, un anfitrión
+ detrás de CGNAT (red móvil) muestra un QR que nunca va a funcionar y nadie
+ entiende por qué. Con ella, la app avisa *antes* de que el invitado lo
+ intente.
+
+ Escribe en `out_code` uno de:
+ `0` = alcanzable públicamente, `1` = sólo LAN, `2` = CGNAT, `3` = desconocido.
+
+ Devuelve `GS_OK` siempre que el diagnóstico se pueda expresar; el
+ `GS_ERR_*` es para fallos de la propia llamada, no de la red.
+
+ # Safety
+ `out_code` debe apuntar a un `i32` escribible.
+ */
+GsStatus gs_diagnose_reachability(uint16_t local_port, int32_t *out_code);
+
+/*
+ Puerto que dedica Gravital Talk al anfitrión, según política.
+
+ `preferred` de 0 significa "el que sea más rápido y sencillo", que en la
+ práctica es el puerto documentado (9000) si está libre. La ventaja de un
+ puerto fijo sobre el efímero es concreta: el reenvío del router sólo hay que
+ hacerlo una vez.
+
+ # Safety
+ `out_port` debe apuntar a un `u16` escribible.
+ */
+GsStatus gs_preferred_host_port(uint16_t preferred, uint16_t *out_port);
+
+/*
  # Safety
  `out_buf` debe apuntar a un buffer de al menos `buf_len` bytes escribibles.
  */
