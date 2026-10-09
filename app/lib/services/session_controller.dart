@@ -10,6 +10,7 @@ import 'engine.dart';
 import 'event_log.dart';
 import 'native_bridge.dart';
 import 'room_api.dart';
+import 'room_events.dart';
 import 'settings_store.dart';
 
 /// Orquesta el ciclo de vida de la conexión (servidor o P2P) sobre un motor.
@@ -19,12 +20,20 @@ class SessionController extends ChangeNotifier {
     this._roomApi,
     this._log,
     this._store,
+    this._roomEvents,
   );
 
   final SessionEngine _engine;
   final RoomControlApi _roomApi;
   final EventLog _log;
   final SettingsStore _store;
+
+  /// Estado de los participantes de la sala (stream `WatchRoom` del relay).
+  ///
+  /// Es el último parámetro y puede ser `null` para no romper los tests, que
+  /// construyen el controller sin él. Quien no lo pase verá la lista de
+  /// participantes vacía siempre: el stream no se conecta con nadie.
+  final RoomEvents? _roomEvents;
 
   SettingsStore get store => _store;
   EventLog get log => _log;
@@ -115,6 +124,33 @@ class SessionController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Conecta el stream de participantes de la sala [code].
+  ///
+  /// El relay emite `PeerJoined`/`PeerLeft`/`FloorGranted`/`FloorReleased` por
+  /// `WatchRoom`, pero nadie lo pedía: la tarjeta de participantes se quedaba
+  /// siempre en "tú" aunque hubiera más gente. Si el relay no tiene gRPC, el
+  /// stream falla y se silencia (el plano de control funciona igual por REST).
+  Future<void> _observeRoom(String host, String code) async {
+    final events = _roomEvents;
+    if (events == null) return;
+    try {
+      await events.watch(code, host: host);
+    } catch (e) {
+      // Un fallo del stream no debe tumbar la conexión de audio: la sesión es
+      // lo importante. Se registra y se sigue.
+      _log.warn('Sin observación de participantes: $e');
+    }
+  }
+
+  /// Deja de observar la sala (al desconectar o reiniciar).
+  Future<void> _stopObserving() async {
+    try {
+      await _roomEvents?.stop();
+    } catch (_) {
+      // Silenciar: parar la observación nunca debe romper una desconexión.
+    }
+  }
+
   Future<bool> hostServer({String? roomCode}) async {
     final profile = _server;
     if (profile.host.isEmpty) {
@@ -142,6 +178,9 @@ class SessionController extends ChangeNotifier {
       _roomCode = code;
       _sessionId = sid;
       _engine.setSessionId(sid);
+      // Observar la sala recién creada: sin esto la lista de participantes
+      // nunca recibe eventos, aunque el relay los esté emitiendo.
+      await _observeRoom(profile.host, code);
       _log.success('Sala $code lista (session_id=$sid). Esperando peers…');
       _updateServerProfile(roomCode: code);
       _mode = ConnectionMode.server;
@@ -251,6 +290,9 @@ class SessionController extends ChangeNotifier {
   Future<void> disconnect() async {
     _ticker?.cancel();
     _ticker = null;
+    // Dejar de observar la sala: si no, el stream sigue abierto tras colgar y
+    // la siguiente conexión se encuentra eventos de la sala anterior.
+    await _stopObserving();
     try {
       await _engine.close();
     } catch (e) {
@@ -266,8 +308,8 @@ class SessionController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Vuelve a idle para permitir una nueva conexión.
   Future<void> reset() async {
+    await _stopObserving();
     await disconnect();
     _state = SessionState.idle;
     _mode = null;

@@ -35,6 +35,7 @@ void main() {
       RoomApi(),
       EventLog(),
       SettingsStore(),
+      RoomEvents(),
     );
     await controller.init();
 
@@ -121,6 +122,7 @@ void main() {
         RoomApi(),
         EventLog(),
         SettingsStore(),
+        RoomEvents(),
       );
       await controller.init();
 

@@ -194,15 +194,31 @@ Future<void> _audioWorkerMain(List<Object?> args) async {
   if (usePlugins) {
     try {
       recorder = AudioRecorder();
+      // `hasPermission` ya pide el permiso si no está concedido (`request`
+      // vale `true` por defecto en el paquete `record`). Lo que faltaba era
+      // avisar cuando se deniega: sin esto el PTT "funcionaba" pero no se
+      // transmitía nada, y el usuario no tenía forma de saber por qué.
       if (await recorder.hasPermission()) {
         micStream = await recorder.startStream(RecordConfig(
           encoder: AudioEncoder.pcm16bits,
           sampleRate: sampleRate,
           numChannels: channels,
         ));
+      } else {
+        // Sin micrófono no hay comunicación, y el usuario tiene que saberlo
+        // para poder arreglarlo en Ajustes.
+        mainPort.send({
+          't': 'error',
+          'v': 'Sin permiso de micrófono. Habilítalo en Ajustes del sistema '
+              'para poder hablar.',
+        });
       }
-    } catch (_) {
+    } catch (e) {
       micStream = null;
+      mainPort.send({
+        't': 'error',
+        'v': 'No se pudo abrir el micrófono: $e',
+      });
     }
   }
 

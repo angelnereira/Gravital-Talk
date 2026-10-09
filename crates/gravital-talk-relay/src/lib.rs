@@ -18,9 +18,11 @@
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
+pub mod band_all;
 pub mod config;
 #[cfg(feature = "grpc")]
 pub mod grpc;
+pub mod http_client;
 pub mod metrics;
 pub mod observability;
 pub mod rate_limit;

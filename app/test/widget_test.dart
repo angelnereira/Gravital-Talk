@@ -18,6 +18,7 @@ void main() {
       RoomApi(),
       log,
       SettingsStore(),
+      RoomEvents(),
     );
     await controller.init();
 

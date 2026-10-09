@@ -24,11 +24,19 @@ Future<void> main() async {
   final rest = RoomApi();
   final RoomControlApi roomApi = FallbackRoomApi(grpc: GrpcRoomApi(), rest: rest);
 
-  final controller = SessionController(engine, roomApi, log, store);
-  await controller.init();
-
   // Estado de los participantes, alimentado por `WatchRoom` del relay.
+  // Se crea ANTES del controller, que es quien suscribe y desuscribe el stream
+  // según el ciclo de vida de la conexión.
   final roomEvents = RoomEvents();
+
+  final controller = SessionController(
+    engine,
+    roomApi,
+    log,
+    store,
+    roomEvents,
+  );
+  await controller.init();
 
   // Onboarding solo la primera vez.
   final prefs = await SharedPreferences.getInstance();
