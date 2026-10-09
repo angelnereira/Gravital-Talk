@@ -12,3 +12,6 @@ GeneratedPluginRegistrant.java
 key.properties
 **/*.keystore
 **/*.jks
+
+# Libs nativas: salida de build, ya viajan dentro del APK.
+app/src/main/jniLibs/

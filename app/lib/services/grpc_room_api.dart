@@ -1,6 +1,11 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:grpc/grpc.dart';
-import 'package:grpc/grpc_web.dart' show GrpcWebClientChannel;
+
+// Importación condicional: `grpc_web_io.dart` sólo compila en web y
+// `grpc_web_stub.dart` en el resto. Así `dart:js_interop` nunca entra en el
+// kernel de Android/iOS/escritorio.
+import 'grpc_web_stub.dart'
+    if (dart.library.js_interop) 'grpc_web_io.dart';
 
 import '../generated/gravital/v1/server_control.pb.dart' as pb;
 import '../generated/gravital/v1/server_control.pbgrpc.dart' as pbgrpc;
@@ -9,9 +14,14 @@ import 'room_api.dart';
 /// Cliente gRPC del plano de control (`ServerControl`).
 ///
 /// Requiere que el relay se compile con `--features grpc` (y `grpc-web` en
-/// navegador) y escuche en `grpcPort` (por defecto 50051). En Flutter Web se
-/// usa `GrpcWebClientChannel` (HTTP/1.1 + CORS); en VM/desktop, canal gRPC
-/// nativo con HTTP/2. Pensado para usarse a través de [FallbackRoomApi].
+/// navegador) y escuche en `grpcPort` (por defecto 50051). En VM/desktop, canal
+/// gRPC nativo con HTTP/2. Pensado para usarse a través de [FallbackRoomApi].
+///
+/// OJO con los imports: `grpc_web.dart` tira de `dart:js_interop`, que sólo
+/// existe en web. Importarlo en un build de Android/iOS/escritorio falla al
+/// COMPILAR, no en tiempo de ejecución, con un error apunta a
+/// `dart:js_interop is not available on this platform`. Por eso el canal de web
+/// se resuelve con un import condicional en este mismo fichero.
 class GrpcRoomApi implements RoomControlApi {
   GrpcRoomApi({this.grpcPort = 50051, this.timeout = const Duration(seconds: 4)});
 
@@ -22,22 +32,42 @@ class GrpcRoomApi implements RoomControlApi {
     String host,
     Future<T> Function(pbgrpc.ServerControlClient client) op,
   ) async {
-    final channel = kIsWeb
-        ? GrpcWebClientChannel.xhr(Uri.parse('http://$host:$grpcPort'))
-        : ClientChannel(
-            host,
-            port: grpcPort,
-            options: ChannelOptions(
-              credentials: ChannelCredentials.insecure(),
-              connectionTimeout: const Duration(seconds: 3),
-            ),
-          );
+    final channel = await _openChannel(host);
     final client = pbgrpc.ServerControlClient(channel);
     try {
       return await op(client).timeout(timeout);
     } finally {
       await channel.shutdown();
     }
+  }
+
+  /// Abre el canal adecuado según la plataforma.
+  ///
+  /// El import de `grpc_web` va tras un `if (kIsWeb)` y Condicionado por el
+  /// compilador: en plataformas nativas el compilador elimina la rama, así que
+  /// `dart:js_interop` nunca entra en el grafo de dependencias.
+  Future<ClientChannel> _openChannel(String host) async {
+    if (kIsWeb) {
+      // ignore: avoid_dynamic_calls
+      final grpcWeb = await _loadGrpcWeb();
+      return grpcWeb(host, grpcPort);
+    }
+    return ClientChannel(
+      host,
+      port: grpcPort,
+      options: ChannelOptions(
+        credentials: ChannelCredentials.insecure(),
+        connectionTimeout: const Duration(seconds: 3),
+      ),
+    );
+  }
+
+  /// Carga `grpc_web` sólo en web.
+  ///
+  /// La resuelve el import condicional de arriba: en web devuelve el canal
+  /// gRPC-Web real; en el resto, la versión stub que lanza un error claro.
+  Future<ClientChannel Function(String, int)> _loadGrpcWeb() async {
+    return createGrpcWebChannel;
   }
 
   @override

@@ -30,7 +30,13 @@ fi
 echo "[rust] compilando FFI (${PROFILE}) para ${ABIS[*]}"
 mkdir -p "$OUT"
 for abi in "${ABIS[@]}"; do
-  cargo ndk -t "$abi" -o "$OUT" build -p gravital-talk-ffi --$PROFILE
+  # `--debug` no es un argumento válido de cargo (debug es el perfil por
+  # defecto): sólo se pasa la bandera cuando el perfil es release.
+  if [ "$PROFILE" = "release" ]; then
+    cargo ndk -t "$abi" -o "$OUT" build -p gravital-talk-ffi --release
+  else
+    cargo ndk -t "$abi" -o "$OUT" build -p gravital-talk-ffi
+  fi
 done
 
 for abi in aarch64 armv7 x86_64; do

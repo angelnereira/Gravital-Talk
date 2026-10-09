@@ -134,6 +134,52 @@ eventos de PTT remoto observados, y **frecuencia + RMS + saturación del PCM rec
 Requiere `--frame-ms 10` con PCM: el tope duro `MAX_PAYLOAD_SIZE` (1176 B) no admite un
 frame PCM de 20 ms (1920 B). Ver la nota de `[Unreleased]` en `CHANGELOG.md`.
 
+## REGLA: cada cambio deja un APK instalable en `outputs/`
+
+Obligatorio después de tocar Dart o el FFI. El repo debe tener siempre la última versión
+instalable, para poder probar cualquier cambio sin compilar nada.
+
+```bash
+./scripts/build-apk.sh           # release unsigned (por defecto)
+./scripts/build-apk.sh debug     # con símbolos
+```
+
+El script compila las libs nativas para las 3 ABIs, construye el APK y lo deja en
+`outputs/android/<perfil>/` con su `LATEST.txt`. Para probarlo:
+
+```bash
+LATEST=$(cat outputs/android/release/LATEST.txt)
+adb install -r "outputs/android/release/$LATEST"
+adb shell am start -n dev.gravitaltalk.gravital_talk_app/.MainActivity
+```
+
+Requisitos que la máquina de desarrollo necesita una sola vez:
+
+```bash
+rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+cargo install cargo-ndk --locked
+```
+
+Detalles que ahorran tiempo:
+
+- El APK de **release** (~75 MB, AOT) es el útil para instalar. El **debug** pesa
+  ~184 MB porque incluye `kernel_blob.bin` sin comprimir; sólo para depurar.
+- El APK release queda **sin firmar**: se firma al publicar, no en desarrollo.
+- `ANDROID_NDK_HOME` se detecta solo, pero sus nombres no son estables: el script coge el
+  más reciente por versión.
+- Un cambio sólo de Dart no necesita recompilar las libs nativas, pero el script lo hace
+  igual para que el APK siempre sea coherente.
+- Los `.so` generados (`app/android/app/src/main/jniLibs/`) **no** se commitean: son salida
+  de build y ya viajan dentro del APK. El `.gitignore` de `app/android` los excluye.
+
+### Error que ya ha mordido: `dart:js_interop`
+
+`main.dart` no puede importar nada que tire de `grpc_web.dart`: ese paquete usa
+`dart:js_interop`, que no existe fuera del navegador. El fallo es al **compilar** para
+Android/iOS/escritorio y el error apunta a la cadena de imports, no a la causa. Los imports
+de gRPC-Web viven en `grpc_web_io.dart` y llegan por import condicional desde
+`grpc_web_stub.dart`. Si ves `dart:js_interop is not available on this platform`, es esto.
+
 ## Testing por capa
 
 - **core** → property tests con `proptest` (roundtrip encode/decode) en `tests/prop_decode.rs`;

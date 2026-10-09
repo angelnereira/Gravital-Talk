@@ -4,7 +4,40 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
 
 ## [Unreleased]
 
+### Fixed
+
+**La app Flutter no compilaba para Android, iOS ni escritorio**
+- `main.dart` importaba `grpc_room_api.dart` incondicionalamente, y ese fichero importaba
+  `grpc_web.dart`, que tira de `dart:js_interop` (sólo existe en web). El fallo es al
+  COMPILAR, con un error que apunta a la cadena de imports y no a la causa:
+  `Dart library 'dart:js_interop' is not available on this platform`.
+- Se separa en `grpc_web_io.dart` (canal gRPC-Web real, sólo web) y
+  `grpc_web_stub.dart` (error descriptivo en el resto), unidos por import condicional.
+- Consecuencia: la app llevaba tiempo siendo sólo construible para navegador. Cualquier
+  build para móvil o escritorio fallaba, y el workflow `flutter-android.yml` de CI no
+  podía pasar.
+
+**`scripts/flutter-android-libs.sh` fallaba con cualquier perfil**
+- Pasaba `--$PROFILE` a cargo, y cargo no acepta `--debug` (es el perfil por defecto):
+  fallaba con `unexpected argument '--debug' found`. Ahora sólo se pasa `--release`.
+
 ### Added
+
+**`scripts/build-apk.sh` y la regla del APK en `outputs/`**
+- Compila las libs nativas para las 3 ABIs, construye el APK y lo deja en
+  `outputs/android/<perfil>/` con su `LATEST.txt`. Es la regla de desarrollo: el repo
+  mantiene siempre la última versión instalable, para probar cada cambio sin compilar.
+- Detecta el NDK por versión en vez de asumir un nombre fijo.
+- APK release sin firmar (se firma al publicar, no en desarrollo): 73 MB con AOT y
+  tree-shaking de iconos, frente a los 184 MB del debug.
+- Regla documentada en `AGENTS.md`, incluido el error de `dart:js_interop` para no tener
+  que volver a diagnosticarlo.
+
+### Changed
+
+- `app/android/.gitignore`: los `.so` generados ya no son candidatos a commit; viajan
+  dentro del APK.
+
 
 **Harness de auditoría end-to-end (`gs-audit`)**
 - Nuevo crate `crates/gravital-talk-audit` (binario `gs-audit`, nunca publicado) que verifica que el audio **realmente** cruza el protocolo, no sólo que llegan datagramas.
