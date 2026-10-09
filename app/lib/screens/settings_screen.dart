@@ -39,68 +39,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
         sections: [
           SettingsSection(
-            title: const Text('Audio y protocolo'),
+            title: const Text('Calidad de audio'),
             tiles: [
-              _dropdownTile<int>(
-                context,
-                title: 'Sample rate',
-                value: s.sampleRate,
-                values: AudioLimits.sampleRates,
-                label: (v) => '$v Hz',
-                onChanged: (v) => c.updateSettings(s.copyWith(sampleRate: v)),
-              ),
-              _dropdownTile<int>(
-                context,
-                title: 'Canales',
-                value: s.channels,
-                values: AudioLimits.channels,
-                label: (v) => v == 1 ? 'Mono' : 'Estéreo',
-                onChanged: (v) => c.updateSettings(s.copyWith(channels: v)),
-              ),
-              _dropdownTile<int>(
-                context,
-                title: 'Frame',
-                value: s.frameDurationMs,
-                values: AudioLimits.frameDurationsMs,
-                label: (v) => '$v ms',
-                onChanged: (v) => c.updateSettings(s.copyWith(frameDurationMs: v)),
-              ),
-              _dropdownTile<int>(
-                context,
-                title: 'Jitter buffer',
-                value: s.jitterBufferMs,
-                values: AudioLimits.jitterBufferMs,
-                label: (v) => '$v ms',
-                onChanged: (v) => c.updateSettings(s.copyWith(jitterBufferMs: v)),
-              ),
-              _dropdownTile<int>(
-                context,
-                title: 'MTU',
-                value: s.mtu,
-                values: AudioLimits.mtus,
-                label: (v) => '$v bytes',
-                onChanged: (v) => c.updateSettings(s.copyWith(mtu: v)),
-              ),
-              _dropdownTile<int>(
-                context,
-                title: 'Bitrate máximo',
-                value: s.maxBitrate,
-                values: const [24000, 32000, 48000, 64000, 96000, 128000],
-                label: (v) => '${(v / 1000).toStringAsFixed(0)} kbps',
-                onChanged: (v) => c.updateSettings(s.copyWith(maxBitrate: v)),
-              ),
-              _dropdownTile<AudioCodec>(
-                context,
-                title: 'Codec',
-                value: s.codec,
-                values: AudioCodec.values,
-                label: (v) => v.label,
-                onChanged: (v) => c.updateSettings(s.copyWith(codec: v)),
+              SettingsTile(
+                title: const Text('Se ajusta solo'),
+                description: const Text(
+                    'Codec (Opus), sample rate, frame y bitrate se negocian en el '
+                    'handshake. Cambiarlos a mano puede romper la compatibilidad '
+                    'con otros dispositivos.'),
+                trailing: const Icon(Icons.auto_fix_high, size: 18),
+                onPressed: null,
               ),
               SettingsTile(
                 title: const Text('Muestras por frame'),
                 description: Text(
-                    '${s.samplesPerFrame} muestras interleaved (${s.sampleRate} Hz · ${s.channels} ch)'),
+                    '${AppSettings.defaults.samplesPerFrame} muestras (${AppSettings.defaults.frameDurationMs} ms)'),
                 trailing: const Icon(Icons.straighten, size: 18),
                 onPressed: null,
               ),

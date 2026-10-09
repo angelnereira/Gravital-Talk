@@ -54,6 +54,13 @@ class AppSettings {
     this.themeMode = AppThemeMode.system,
   });
 
+  /// Valores que usa la app cuando nadie ha configurado nada.
+  ///
+  /// Existen porque los ajustes dejaron de exponer estos campos: la negociación
+  /// los decide en el handshake. Queda la constante para poder mostrarlos como
+  /// información, que es distinto de dejarlos configurables.
+  static const defaults = AppSettings();
+
   final int sampleRate;
   final int channels;
   final int frameDurationMs;

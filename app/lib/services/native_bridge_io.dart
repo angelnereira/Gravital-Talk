@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
 
+import '../models/reachability.dart';
 import '../models/session.dart';
 import 'ffi_common.dart';
 
@@ -118,6 +119,10 @@ typedef _ErrorLastD = Pointer<Utf8> Function();
 typedef _ClearC = Void Function();
 typedef _ClearD = void Function();
 typedef _DiscoverStunC = Int32 Function(Uint16, Pointer<Utf8>, UintPtr);
+typedef _ReachC = Int32 Function(Uint16, Pointer<Int32>);
+typedef _PreferredPortC = Int32 Function(Uint16, Pointer<Uint16>);
+typedef _ReachD = int Function(int, Pointer<Int32>);
+typedef _PreferredPortD = int Function(int, Pointer<Uint16>);
 typedef _DiscoverStunD = int Function(int, Pointer<Utf8>, int);
 
 /// Envoltorio tipado de `libgravital_talk_ffi` (ABI C v1).
@@ -148,6 +153,8 @@ class NativeBridge {
             'gs_session_recv_audio_timeout'),
         _sessionClose = lib
             .lookupFunction<_HandleC, _HandleD>('gs_session_close'),
+        _sessionReopen =
+            lib.lookupFunction<_HandleC, _HandleD>('gs_session_reopen'),
         _sessionState = lib
             .lookupFunction<_StateC, _StateD>('gs_session_state'),
         _sessionId = lib
@@ -173,6 +180,10 @@ class NativeBridge {
         _errorClear = lib.lookupFunction<_ClearC, _ClearD>('gs_error_clear'),
         _discoverPublicAddr = lib.lookupFunction<_DiscoverStunC, _DiscoverStunD>(
             'gs_discover_public_addr'),
+        _diagnoseReachability =
+            lib.lookupFunction<_ReachC, _ReachD>('gs_diagnose_reachability'),
+        _preferredHostPort =
+            lib.lookupFunction<_PreferredPortC, _PreferredPortD>('gs_preferred_host_port'),
         _ping = lib.lookupFunction<_IntC, _IntD>('gs_ping');
 
   final Pointer<Utf8> Function() version;
@@ -188,6 +199,7 @@ class NativeBridge {
   final _RecvAudioD _recvAudio;
   final _RecvAudioTimeoutD _recvAudioTimeout;
   final _HandleD _sessionClose;
+  final _HandleD _sessionReopen;
   final _StateD _sessionState;
   final _SessionIdD _sessionId;
   final _SetSessionIdD _setSessionId;
@@ -201,6 +213,8 @@ class NativeBridge {
   final _ErrorLastD _errorLast;
   final _ClearD _errorClear;
   final _DiscoverStunD _discoverPublicAddr;
+  final _ReachD _diagnoseReachability;
+  final _PreferredPortD _preferredHostPort;
   final _IntD _ping;
 
   /// Versión SemVer de la librería nativa.
@@ -313,6 +327,35 @@ class NativeBridge {
       calloc.free(cfg);
       calloc.free(addr);
       calloc.free(outHandle);
+    }
+  }
+
+  /// Diagnóstica si este dispositivo puede recibir invitados de fuera.
+  ///
+  /// Es la comprobación que evita el fallo silencioso: un anfitrión detrás de
+  /// CGNAT mostraría un QR que nunca funciona. Devuelve `null` si no se pudo
+  /// determinar (STUN no respondió), que la UI trata como "prueba y avisa".
+  NetworkReachability? diagnoseReachability(int localPort) {
+    final out = calloc<Int32>();
+    try {
+      final st = _diagnoseReachability(localPort, out);
+      if (st != GsStatus.ok) return null;
+      return NetworkReachability.fromCode(out.value);
+    } finally {
+      calloc.free(out);
+    }
+  }
+
+  /// Puerto que dedica Gravital Talk al anfitrión según la política.
+  ///
+  /// `preferred` de 0 = el que sea más rápido y sencillo (9000 si está libre).
+  int preferredHostPort(int preferred) {
+    final out = calloc<Uint16>();
+    try {
+      _check(_preferredHostPort(preferred, out));
+      return out.value;
+    } finally {
+      calloc.free(out);
     }
   }
 
@@ -455,6 +498,16 @@ class NativeSession {
       calloc.free(buf);
       calloc.free(len);
     }
+  }
+
+  /// Rearma la sesión cerrada para poder emparejar de nuevo.
+  ///
+  /// Es el requisito de "cualquiera de los dos cierra y vuelve a solicitar el
+  /// emparejamiento". Sin esto, `close()` deja el handle inservible y sólo cabe
+  /// destruirlo y recrearlo, perdiendo la configuración de la sala.
+  void reopen() {
+    if (_destroyed) return;
+    _bridge._check(_bridge._sessionReopen(_handle));
   }
 
   /// Cierra la sesión (envía CLOSE).

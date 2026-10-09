@@ -1,0 +1,317 @@
+import 'package:flutter/material.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:provider/provider.dart';
+
+import '../core/states.dart';
+import '../core/tokens.dart';
+import '../models/session.dart';
+import '../services/pairing_uri.dart';
+import '../screens/session_screen.dart';
+import '../services/session_controller.dart';
+import '../widgets/common.dart';
+
+/// Pantalla única de emparejamiento.
+///
+/// Sustituye a `ServerSetupScreen` y `P2pSetupScreen`, que entre las dos
+/// pedían ocho campos de red antes de poder decir "holo". Aquí hay dos acciones
+/// y ningún campo de red:
+///
+/// - **Crear sala**: bindea un puerto, publica el endpoint por STUN, genera el
+///   código y espera. Si la red no puede recibir conexiones, lo dice *antes* de
+///   que el invitado lo intente.
+/// - **Unirse**: escanea el QR o teclea el código. Si el QR trae el endpoint
+///   completo (formato nuevo), se rellena solo.
+///
+/// La topología ya no es una decisión del usuario: anfitrión escucha, invitado
+/// conecta. Que cruce internet o se quede en la LAN es consecuencia.
+class PairingScreen extends StatefulWidget {
+  const PairingScreen({super.key});
+
+  @override
+  State<PairingScreen> createState() => _PairingScreenState();
+}
+
+class _PairingScreenState extends State<PairingScreen> {
+  var _joining = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.watch<SessionController>();
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Conectar'),
+        actions: [
+          if (c.isLive)
+            Padding(
+              padding: const EdgeInsets.only(right: Spacing.md),
+              child: Center(child: StatusBadge(c.state)),
+            ),
+        ],
+      ),
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.all(Spacing.lg),
+          children: [
+            // El aviso de modo demo va primero: sin motor nativo nada de lo que
+            // sigue funciona, y el usuario debe saberlo antes de pulsar.
+            if (c.engineKind == EngineKind.demo) ...[
+              const WarningBanner(
+                message: 'Sin librería nativa: el audio es una simulación. '
+                    'Compila libgravital_talk_ffi para hablar de verdad.',
+              ),
+              const SizedBox(height: Spacing.lg),
+            ],
+            if (c.error != null) ...[
+              ErrorBanner(
+                message: c.error!,
+                onRetry: c.busy ? null : () => _join(c),
+                onDismiss: c.clearError,
+              ),
+              const SizedBox(height: Spacing.md),
+            ],
+            if (_joining) ...[
+              LoadingStates.centered(message: 'Conectando…'),
+            ] else if (c.isLive) ...[
+              _connectedCard(c),
+            ] else ...[
+              _createCard(c),
+              const SizedBox(height: Spacing.lg),
+              _joinCard(c),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Crear ────────────────────────────────────────────────────────────────
+
+  Widget _createCard(SessionController c) {
+    return SectionCard(
+      title: 'Crear sala',
+      subtitle: 'Comparte el QR o el código. El otro se une solo.',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          FilledButton.icon(
+            onPressed: c.busy
+                ? null
+                : () async {
+                    final ok = await c.hostServer();
+                    if (!ok || !c.isLive) return;
+                  },
+            icon: const Icon(Icons.add_link),
+            label: const Text('Crear sala y compartir'),
+          ),
+          if (c.roomCode != null && c.roomCode!.isNotEmpty) ...[
+            const SizedBox(height: Spacing.lg),
+            // El QR codifica el endpoint COMPLETO, no sólo el código: si no,
+            // el invitado seguiría teniendo que teclear el host.
+            QrPanel(
+              code: _pairingUri(c).toUri(),
+              caption: _pairingUri(c).toHumanReadable(),
+            ),
+            const SizedBox(height: Spacing.lg),
+            // Y el código legible, para leerlo por teléfono.
+            Text(
+              c.roomCode!,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 3,
+                  ),
+            ),
+            const SizedBox(height: Spacing.xs),
+            Text(
+              'Léelo en voz alta si el QR no funciona',
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  // ── Unirse ───────────────────────────────────────────────────────────────
+
+  Widget _joinCard(SessionController c) {
+    final code = c.server.roomCode;
+    return SectionCard(
+      title: 'Unirse',
+      subtitle: 'Escanea el QR o escribe el código que te pasen.',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          LabeledField(
+            label: 'Código de sala',
+            controller: _codeController(c),
+            hint: 'GRVT-2847',
+          ),
+          const SizedBox(height: Spacing.sm),
+          FilledButton.icon(
+            onPressed: c.busy ? null : () => _join(c),
+            icon: const Icon(Icons.login),
+            label: const Text('Unirse'),
+          ),
+          const SizedBox(height: Spacing.sm),
+          OutlinedButton.icon(
+            onPressed: c.busy ? null : () => _scanQr(context, c),
+            icon: const Icon(Icons.qr_code_scanner),
+            label: const Text('Escanear QR'),
+          ),
+          if (code.isNotEmpty) ...[
+            const SizedBox(height: Spacing.md),
+            Text(
+              'El servidor se toma del QR cuando lo escaneas.',
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// Controlador del campo de código.
+  ///
+  /// Se crea una vez y se sincroniza con el perfil guardado: recrearlo en cada
+  /// `build` perdería lo que el usuario está tecleando.
+  TextEditingController? _codeCtl;
+  TextEditingController _codeController(SessionController c) {
+    return _codeCtl ??= TextEditingController(text: c.server.roomCode);
+  }
+
+  // ── Conectado ────────────────────────────────────────────────────────────
+
+  Widget _connectedCard(SessionController c) {
+    return SectionCard(
+      title: 'Sesión activa',
+      subtitle: c.roomCode != null ? 'Sala ${c.roomCode}' : 'P2P directo',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          FilledButton.icon(
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const SessionScreen()),
+            ),
+            icon: const Icon(Icons.mic),
+            label: const Text('Hablar'),
+          ),
+          const SizedBox(height: Spacing.sm),
+          OutlinedButton.icon(
+            onPressed: c.busy ? null : () => _confirmClose(context, c),
+            icon: const Icon(Icons.call_end, color: Colors.red),
+            label: Text('Finalizar',
+                style: TextStyle(color: Theme.of(context).colorScheme.error)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Acciones ─────────────────────────────────────────────────────────────
+
+  Future<void> _join(SessionController c) async {
+    // El código se toma del campo; el perfil se actualiza antes de conectar
+    // para que el controlador lo vea.
+    final raw = _codeCtl?.text.trim() ?? '';
+    if (raw.isEmpty) {
+      c.reportError('Escribe el código de la sala.');
+      return;
+    }
+
+    // Si lo que se pegó es un QR completo, se rellena todo desde él.
+    final parsed = PairingUri.tryParse(raw);
+    c.updateServerProfile(c.server.copyWith(
+      roomCode: parsed?.room ?? raw.toUpperCase(),
+    ));
+    if (parsed != null && parsed.host.isNotEmpty) {
+      c.updateServerProfile(c.server.copyWith(
+        host: parsed.host,
+        udpPort: parsed.udpPort ?? c.server.udpPort,
+      ));
+    }
+
+    setState(() => _joining = true);
+    final ok = await c.joinServer();
+    if (!mounted) return;
+    setState(() => _joining = false);
+    if (ok && c.isLive) {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => const SessionScreen()),
+      );
+    }
+  }
+
+  Future<void> _scanQr(BuildContext context, SessionController c) async {
+    final raw = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetCtx) => SizedBox(
+        height: 420,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(Spacing.md),
+              child: Text('Escanea el QR de la sala',
+                  style: Theme.of(sheetCtx).textTheme.titleMedium),
+            ),
+            Expanded(
+              child: MobileScanner(
+                controller: MobileScannerController(
+                  formats: const [BarcodeFormat.qrCode],
+                ),
+                onDetect: (capture) {
+                  final value =
+                      capture.barcodes.isEmpty ? null : capture.barcodes.first.rawValue;
+                  if (value != null && value.trim().isNotEmpty) {
+                    Navigator.of(sheetCtx).pop(value.trim());
+                  }
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (raw == null || !mounted) return;
+
+    final parsed = PairingUri.tryParse(raw);
+    if (parsed == null) {
+      c.reportError('Ese QR no es de Gravital Talk.');
+      return;
+    }
+    // Un QR con el endpoint completo rellena host y código de una vez.
+    c.updateServerProfile(c.server.copyWith(
+      host: parsed.host.isNotEmpty ? parsed.host : c.server.host,
+      roomCode: parsed.room,
+      udpPort: parsed.udpPort ?? c.server.udpPort,
+    ));
+    _codeCtl?.text = parsed.room;
+    setState(() {});
+  }
+
+  Future<void> _confirmClose(BuildContext context, SessionController c) async {
+    final ok = await ConfirmDialog.show(
+      context,
+      title: 'Finalizar sesión',
+      message: 'Se cortará el audio en curso. Podréis volver a emparejar.',
+      confirmLabel: 'Finalizar',
+      destructive: true,
+    );
+    if (!ok) return;
+    await c.disconnect();
+  }
+
+  PairingUri _pairingUri(SessionController c) => PairingUri(
+        host: c.server.host,
+        room: c.roomCode ?? '',
+        udpPort: c.server.udpPort,
+        token: c.server.token,
+      );
+}

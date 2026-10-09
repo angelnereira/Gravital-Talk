@@ -10,8 +10,7 @@ import '../services/session_controller.dart';
 import '../widgets/active_session_card.dart';
 import '../widgets/common.dart';
 import 'about_screen.dart';
-import 'p2p_setup_screen.dart';
-import 'server_setup_screen.dart';
+import 'pairing_screen.dart';
 import 'settings_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -76,11 +75,10 @@ class _HomeScreenState extends State<HomeScreen> {
           ModeCard(
             icon: Icons.dns_outlined,
             color: scheme.primary,
-            title: 'Servidor (sala)',
-            subtitle:
-                'Terminal central: crea o únete a una sala vía relay con código',
+            title: 'Conectar',
+            subtitle: 'Crea una sala o únete con QR o código',
             onTap: () => Navigator.push(context,
-                ForwardRoute(builder: (_) => const ServerSetupScreen())),
+                ForwardRoute(builder: (_) => const PairingScreen())),
           )
               .animate(delay: 120.ms)
               .fadeIn(duration: 300.ms)
@@ -89,10 +87,10 @@ class _HomeScreenState extends State<HomeScreen> {
           ModeCard(
             icon: Icons.device_hub_outlined,
             color: const Color(0xFF00A97F),
-            title: 'P2P directo',
-            subtitle: 'Conexión directa entre dos dispositivos, sin relay',
+            title: 'Cómo funciona',
+            subtitle: 'QR o código de 6 dígitos, sin configurar la red',
             onTap: () => Navigator.push(context,
-                ForwardRoute(builder: (_) => const P2pSetupScreen())),
+                QuickRoute(builder: (_) => const AboutScreen())),
           )
               .animate(delay: 220.ms)
               .fadeIn(duration: 300.ms)
