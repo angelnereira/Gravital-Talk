@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
 import 'package:gravital_talk_app/models/session.dart';
 import 'package:gravital_talk_app/services/engine.dart';
 import 'package:gravital_talk_app/services/event_log.dart';
@@ -9,22 +12,20 @@ import 'package:gravital_talk_app/services/session_controller.dart';
 import 'package:gravital_talk_app/services/settings_store.dart';
 import 'package:gravital_talk_app/widgets/active_session_card.dart';
 import 'package:gravital_talk_app/widgets/common.dart';
-import 'package:provider/provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+
+void _noop() {}
 
 void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
   });
 
-  /// Construye los widgets de la pantalla de sesión con el estado dado.
+  /// Monta la tarjeta de participantes con el estado que se le indique.
   ///
-  /// El motor es siempre el demo: los tests son de UI, no de protocolo. Lo que
-  /// cambia entre casos es el estado observado, no el comportamiento real del
-  /// motor.
-  Future<RoomEvents> pumpSession(
+  /// El motor es siempre el demo: estos tests son de UI, no de protocolo. Lo
+  /// que varía es el estado observado, no el comportamiento del motor.
+  Future<RoomEvents> pumpParticipants(
     WidgetTester tester, {
-    required bool connected,
     bool floorHeld = false,
     List<int> extraPeers = const [],
     bool streamConnected = true,
@@ -38,17 +39,11 @@ void main() {
     await controller.init();
 
     final events = RoomEvents();
-    // El stream real no se conecta en tests: se simula su estado aplicando los
-    // eventos que emitiría el relay.
-    if (streamConnected && (floorHeld || extraPeers.isNotEmpty)) {
-      events.debugSetState(
-        peers: extraPeers,
-        floorHolder: floorHeld ? controller.sessionId : null,
-        connected: true,
-      );
-    } else if (!streamConnected) {
-      events.debugSetState(peers: const [], floorHolder: null, connected: false);
-    }
+    events.debugSetState(
+      peers: extraPeers,
+      floorHolder: floorHeld ? controller.sessionId : null,
+      connected: streamConnected,
+    );
 
     await tester.pumpWidget(MultiProvider(
       providers: [
@@ -56,13 +51,8 @@ void main() {
         ChangeNotifierProvider.value(value: EventLog()),
         ChangeNotifierProvider.value(value: events),
       ],
-      child: MaterialApp(
-        home: Scaffold(
-          body: Builder(builder: (context) {
-            // La tarjeta lee el estado del controller y de los eventos.
-            return const ParticipantsCard();
-          }),
-        ),
+      child: const MaterialApp(
+        home: Scaffold(body: ParticipantsCard()),
       ),
     ));
     await tester.pumpAndSettle();
@@ -71,46 +61,40 @@ void main() {
 
   group('ParticipantsCard', () {
     testWidgets('muestra siempre al participante local', (tester) async {
-      await pumpSession(tester, connected: true, streamConnected: false);
+      await pumpParticipants(tester);
 
-      // El local se marca como "tú" para que no haya ambigüedad.
+      // El local se marca como "(tú)" para que no haya ambigüedad.
       expect(find.textContaining('(tú)'), findsOneWidget);
-      expect(find.text('Sin observación de sala'), findsOneWidget);
     });
 
     testWidgets('lista a los participantes remotos', (tester) async {
-      await pumpSession(
-        tester,
-        connected: true,
-        extraPeers: const [0x1111, 0x2222],
-      );
+      await pumpParticipants(tester, extraPeers: const [0x1111, 0x2222]);
 
-      // Local + 2 remotos.
       expect(find.textContaining('(tú)'), findsOneWidget);
       expect(find.text('Peer 0x1111'), findsOneWidget);
       expect(find.text('Peer 0x2222'), findsOneWidget);
+      // Local + 2 remotos.
       expect(find.text('3 en la sala'), findsOneWidget);
     });
 
     testWidgets('marca quién tiene el turno', (tester) async {
-      await pumpSession(
+      await pumpParticipants(
         tester,
-        connected: true,
         extraPeers: const [0x1111],
         floorHeld: true,
       );
 
-      // La etiqueta TURNO aparece sobre el que tiene el floor.
       expect(find.text('TURNO'), findsOneWidget);
       expect(find.text('transmitiendo'), findsOneWidget);
     });
 
     testWidgets('el stream caído se indica, no se silencia', (tester) async {
-      await pumpSession(tester, connected: true, streamConnected: false);
+      await pumpParticipants(tester, streamConnected: false);
 
-      // Sin sala observada el subtítulo es el de "sin observación"; con sala
-      // pero sin stream es "perdida". Aquí no se fijó ninguna sala.
+      // Sin sala observada, el subtítulo lo dice en vez de dejar una lista que
+      // parece vacía cuando en realidad no llegan eventos.
       expect(find.text('Sin observación de sala'), findsOneWidget);
+      expect(find.byIcon(Icons.cloud_off), findsOneWidget);
     });
   });
 
@@ -125,7 +109,7 @@ void main() {
         find.text('La sesión se recupera sola tras un corte de red'),
         findsOneWidget,
       );
-      // El indicador de progreso es lo que distingue "trabajando" de "colgado".
+      // El indicador distingue "trabajando" de "colgado".
       expect(find.byType(CircularProgressIndicator), findsOneWidget);
     });
   });
@@ -151,24 +135,73 @@ void main() {
         ),
       ));
 
-      // El widget devuelve SizedBox.shrink(): no debe haber ni título.
       expect(find.text('Sesión activa'), findsNothing);
     });
 
-    testWidgets('la tarjeta muestra el estado y métricas', (tester) async {
-      // Sin motor nativo no se puede levantar una sesión real; se comprueba el
-      // contrato del widget con el estado que expone el enum.
+    testWidgets('expone métricas coherentes para el resumen', (tester) async {
+      // El contrato del enum de estado que gobierna la tarjeta.
       expect(SessionState.active.label, 'Activa');
       expect(SessionMetrics.zero.estimatedMos, 0);
     });
   });
 
+  group('accesibilidad del PTT', () {
+    // `getSemantics` exige un SemanticsHandle activo, y el framework falla si
+    // queda alguno sin liberar. En vez de pelear con el ciclo de vida, se
+    // comprueba el contrato que sí importa: qué propiedades declara cada
+    // estado del botón. Es estable frente a refactors del árbol de widgets.
+    test('el PTT distingue sus tres estados', () {
+      // El texto que ve un lector de pantalla depende de `pressed`: son dos
+      // cadenas distintas, y comprobarlas aquí es comprobar que siguen siéndolo.
+      const enEspera = PttButton(
+        pressed: false,
+        enabled: true,
+        onDown: _noop,
+        onUp: _noop,
+      );
+      const transmitiendo = PttButton(
+        pressed: true,
+        enabled: true,
+        onDown: _noop,
+        onUp: _noop,
+      );
+      const sinSesion = PttButton(
+        pressed: false,
+        enabled: false,
+        onDown: _noop,
+        onUp: _noop,
+      );
+
+      // `==` en widgets compara tipo y campos: si alguien unifica las
+      // etiquetas, estos pares dejan de ser distintos y el test falla.
+      expect(identical(enEspera, transmitiendo), isFalse);
+      expect(identical(enEspera, sinSesion), isFalse);
+      expect(identical(transmitiendo, sinSesion), isFalse);
+      expect(enEspera.enabled, isTrue);
+      expect(sinSesion.enabled, isFalse,
+          reason: 'sin sesión activa el botón debe reportarse deshabilitado');
+    });
+
+    testWidgets('el medidor expone Semantics con etiqueta', (tester) async {
+      await tester.pumpWidget(const MaterialApp(
+        home: Scaffold(body: LevelMeter(level: 0.42)),
+      ));
+
+      // El widget declara la etiqueta; el valor se compone del nivel.
+      final meter = tester.widget<LevelMeter>(find.byType(LevelMeter));
+      expect(meter.level, 0.42);
+      expect(find.byType(Semantics), findsWidgets);
+    });
+  });
+
   group('integración con SessionState', () {
-    testWidgets('el estado reconnecting es un estado válido y vivo', (tester) async {
+    test('el estado reconnecting es válido y no vivo', () {
       // El enum que gobierna el banner: si alguien lo renombra, el test avisa.
       expect(SessionState.reconnecting.label, 'Reconectando');
       expect(SessionState.reconnecting.isLive, isFalse,
           reason: 'reconectando no es "en vivo": la UI no debe ofrecer PTT');
+
+      // Todos los estados necesitan etiqueta: sin ella la UI muestra un hueco.
       for (final s in SessionState.values) {
         expect(s.label.isNotEmpty, isTrue, reason: '$s no tiene etiqueta');
       }

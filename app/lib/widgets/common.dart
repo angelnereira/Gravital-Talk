@@ -473,7 +473,22 @@ class PttButton extends StatelessWidget {
       duration: const Duration(milliseconds: 900),
       from: 1.0,
       to: 1.04,
-      child: button,
+      // Semántica del botón central de la app. Sin esto, un lector de pantalla
+      // no comunica qué hace el gesto ni si está deshabilitado, y el botón
+      // queda inutilizable sin vista.
+      child: Semantics(
+        button: true,
+        enabled: enabled,
+        label: pressed
+            ? 'Transmitiendo. Suelta para dejar de hablar'
+            : 'Mantén pulsado para hablar',
+        hint: peerSpeaking
+            ? 'El otro participante está transmitiendo'
+            : null,
+        // Sin `excludeSemantics`: el texto del botón se fusiona en la etiqueta
+        // en lugar de ocultarse, que es lo que un lector de pantalla necesita.
+        child: button,
+      ),
     );
   }
 }
@@ -488,15 +503,23 @@ class LevelMeter extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return LinearPercentIndicator(
-      percent: level.clamp(0.0, 1.0),
-      animation: true,
-      animationDuration: 120,
-      lineHeight: 8,
-      barRadius: const Radius.circular(8),
-      backgroundColor: scheme.surfaceContainerHighest,
-      progressColor:
-          transmitting ? GravitalColors.pttActive : scheme.primary,
+    return Semantics(
+      // El nivel es informativo, no un control: se anuncia su valor para que
+      // un usuario sin vista sepa si el micrófono está captando.
+      label: 'Nivel de micrófono',
+      value: '${(level.clamp(0.0, 1.0) * 100).round()}%',
+      child: ExcludeSemantics(
+        child: LinearPercentIndicator(
+          percent: level.clamp(0.0, 1.0),
+          animation: true,
+          animationDuration: 120,
+          lineHeight: 8,
+          barRadius: const Radius.circular(8),
+          backgroundColor: scheme.surfaceContainerHighest,
+          progressColor:
+              transmitting ? GravitalColors.pttActive : scheme.primary,
+        ),
+      ),
     );
   }
 }
