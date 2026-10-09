@@ -732,13 +732,13 @@ pub unsafe extern "C" fn gs_diagnose_reachability(local_port: u16, out_code: *mu
         }
     };
 
-    let code = match runtime.block_on(discover_public_addr(local_port)) {
-        Ok(addr) => {
-            let reachability = reach::diagnose(addr.ip());
-            reachability as i32
-        }
-        Err(_) => reach::Reachability::Unknown as i32,
-    };
+    // `map_or` en vez de un `match`: el caso de error es el mismo para todos
+    // los fallos de red, y no hace falta distinguirlos.
+    let code = runtime
+        .block_on(discover_public_addr(local_port))
+        .map_or(reach::Reachability::Unknown as i32, |addr| {
+            reach::diagnose(addr.ip()) as i32
+        });
     unsafe { *out_code = code };
     GsStatus::GS_OK
 }
