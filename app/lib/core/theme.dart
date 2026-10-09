@@ -1,45 +1,30 @@
 import 'package:flutter/material.dart';
 
+import 'palette.dart';
 import 'tokens.dart';
 
-/// Paleta y tema Material 3 de Gravital Talk.
+/// Tema Material 3 de Gravital Talk.
 ///
 /// El tema claro y el oscuro comparten la misma estructura de superficies para
-/// que una pantalla nueva herede ambos sin trabajo extra: si sólo defines
-/// `light()`, el oscuro queda con los valores por defecto de Material y los
-/// contrastes se resienten.
+/// que una pantalla nueva herede ambos sin trabajo extra.
+///
+/// La diferencia con la versión anterior: aquí **no** se usa `ColorScheme.fromSeed`.
+/// `fromSeed` genera paletas tonales algorítmicas, que es justo lo que hacía que
+/// la app se viera como cualquier otra. Los valores salen de `GravitalPalette`.
 class GravitalTheme {
-  /// Color semilla del esquema (azul Gravital).
-  static const seed = Color(0xFF3D5AFE);
-
-  /// Color de acento para estados positivos (conectado, MOS alto).
-  static const accent = Color(0xFF00E5A0);
-
-  /// Color de PTT activo (transmitiendo).
-  static const pttActive = Color(0xFFFF3D00);
-
-  /// Color de error.
-  static const danger = Color(0xFFFF5252);
-
-  /// Colores compartidos por ambos esquemas.
-  static const online = Color(0xFF00C853);
-  static const offline = Color(0xFF9E9E9E);
-
   static ThemeData light() => _base(Brightness.light);
   static ThemeData dark() => _base(Brightness.dark);
 
   static ThemeData _base(Brightness brightness) {
-    final scheme = ColorScheme.fromSeed(
-      seedColor: seed,
-      brightness: brightness,
-    );
-
+    final scheme = brightness == Brightness.light
+        ? _lightScheme()
+        : _darkScheme();
     final text = _textTheme(brightness);
 
     return ThemeData(
       useMaterial3: true,
-      colorScheme: scheme,
       brightness: brightness,
+      colorScheme: scheme,
       splashFactory: InkSparkle.splashFactory,
       visualDensity: VisualDensity.adaptivePlatformDensity,
       textTheme: text,
@@ -47,19 +32,23 @@ class GravitalTheme {
 
       appBarTheme: AppBarTheme(
         centerTitle: false,
-        elevation: Elevations.flat,
-        scrolledUnderElevation: Elevations.card,
+        elevation: GravitalElevation.flat,
+        scrolledUnderElevation: GravitalElevation.overlay,
         backgroundColor: scheme.surface,
         foregroundColor: scheme.onSurface,
+        // La barra se vuelve opaca al hacer scroll. Sin `surfaceTint` 
+        // Material añade un velo de color que con el teal se ve sucio.
+        surfaceTintColor: Colors.transparent,
       ),
 
       cardTheme: CardThemeData(
-        elevation: Elevations.flat,
+        elevation: GravitalElevation.flat,
         margin: EdgeInsets.zero,
         color: scheme.surfaceContainerLow,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(Radii.xl),
-          side: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.6)),
+          // Borde en lugar de sombra: es lo que da el aspecto de "equipo".
+          side: BorderSide(color: scheme.outlineVariant),
         ),
       ),
 
@@ -95,13 +84,16 @@ class GravitalTheme {
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(Radii.lg),
           ),
-          textStyle: text.labelLarge?.copyWith(fontWeight: FontWeight.w700),
+          textStyle: text.labelLarge?.copyWith(
+            fontWeight: GravitalType.titleWeight,
+          ),
         ),
       ),
 
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
           minimumSize: const Size.fromHeight(HitSizes.minTouch),
+          side: BorderSide(color: scheme.outline),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(Radii.lg),
           ),
@@ -119,7 +111,7 @@ class GravitalTheme {
 
       navigationBarTheme: NavigationBarThemeData(
         height: 64,
-        elevation: Elevations.card,
+        elevation: GravitalElevation.overlay,
         labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
         backgroundColor: scheme.surfaceContainer,
       ),
@@ -154,27 +146,95 @@ class GravitalTheme {
       dialogTheme: DialogThemeData(
         backgroundColor: scheme.surfaceContainerLow,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(Radii.xl)),
+          borderRadius: BorderRadius.circular(Radii.xl),
+        ),
       ),
+
+      // Resplandor al pulsar: muy contenido. Por defecto Material lo hace
+      // enorme y con esta paleta parece plástico.
+      splashColor: scheme.primary.withValues(alpha: 0.08),
+      highlightColor: scheme.primary.withValues(alpha: 0.04),
     );
   }
 
-  /// Tipografía compacta y legible.
-  ///
-  /// Se mantiene `fontSize` entero para evitar renders borrosos en pantallas
-  /// de densidad fraccionaria.
+  /// Esquema claro, escrito a mano.
+  static ColorScheme _lightScheme() {
+    return const ColorScheme.light(
+      primary: GravitalPalette.brand,
+      onPrimary: Colors.white,
+      primaryContainer: Color(0xFFCCFBF1),
+      onPrimaryContainer: GravitalPalette.brandDark,
+      secondary: GravitalPalette.online,
+      tertiary: GravitalPalette.transmit,
+      error: GravitalPalette.danger,
+      surface: GravitalPalette.surfaceLight,
+      onSurface: GravitalPalette.onSurfaceLight,
+      onSurfaceVariant: GravitalPalette.onSurfaceVariantLight,
+      surfaceContainerLowest: Colors.white,
+      surfaceContainerLow: GravitalPalette.surfaceContainerLight,
+      surfaceContainer: GravitalPalette.surfaceContainerHighLight,
+      surfaceContainerHigh: Color(0xFFDFE7EC),
+      surfaceContainerHighest: Color(0xFFD4DEE5),
+      outline: GravitalPalette.outlineLight,
+      outlineVariant: Color(0xFFDCE4EA),
+    );
+  }
+
+  /// Esquema oscuro, escrito a mano.
+  static ColorScheme _darkScheme() {
+    return const ColorScheme.dark(
+      // En oscuro el teal sube de luminancia para mantener el contraste.
+      primary: GravitalPalette.brandLight,
+      onPrimary: Color(0xFF00332F),
+      primaryContainer: Color(0xFF115E59),
+      onPrimaryContainer: Color(0xFFCCFBF1),
+      secondary: Color(0xFF4ADE80),
+      tertiary: GravitalPalette.transmitLight,
+      error: Color(0xFFF87171),
+      surface: GravitalPalette.surfaceDark,
+      onSurface: GravitalPalette.onSurfaceDark,
+      onSurfaceVariant: GravitalPalette.onSurfaceVariantDark,
+      surfaceContainerLowest: Color(0xFF060B10),
+      surfaceContainerLow: GravitalPalette.surfaceContainerDark,
+      surfaceContainer: GravitalPalette.surfaceContainerHighDark,
+      surfaceContainerHigh: Color(0xFF243444),
+      surfaceContainerHighest: Color(0xFF2E4053),
+      outline: GravitalPalette.outlineDark,
+      outlineVariant: Color(0xFF22303E),
+    );
+  }
+
+  /// Tipografía: pesos y tracking, no tamaños.
   static TextTheme _textTheme(Brightness brightness) {
     final base = Typography.material2021().black;
     final onSurface = brightness == Brightness.dark
-        ? const Color(0xFFECEFF4)
-        : const Color(0xFF1A1C1E);
+        ? GravitalPalette.onSurfaceDark
+        : GravitalPalette.onSurfaceLight;
 
-    return base.apply(bodyColor: onSurface, displayColor: onSurface).copyWith(
-      headlineSmall: base.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
-      titleLarge: base.titleLarge?.copyWith(fontWeight: FontWeight.w700),
-      titleMedium: base.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-      labelLarge: base.labelLarge?.copyWith(fontWeight: FontWeight.w600),
-      labelSmall: base.labelSmall?.copyWith(letterSpacing: 0.4),
+    return base.apply(
+      bodyColor: onSurface,
+      displayColor: onSurface,
+    ).copyWith(
+      headlineSmall: base.headlineSmall?.copyWith(
+        fontWeight: GravitalType.headlineWeight,
+        letterSpacing: -0.5,
+      ),
+      titleLarge: base.titleLarge?.copyWith(
+        fontWeight: GravitalType.headlineWeight,
+        letterSpacing: -0.2,
+      ),
+      titleMedium: base.titleMedium?.copyWith(
+        fontWeight: GravitalType.titleWeight,
+      ),
+      labelLarge: base.labelLarge?.copyWith(
+        fontWeight: GravitalType.titleWeight,
+      ),
+      labelSmall: base.labelSmall?.copyWith(
+        fontWeight: GravitalType.labelWeight,
+        letterSpacing: GravitalType.labelTracking,
+      ),
+      // Métricas en tabular: cifras alineadas, sin bailoteo al actualizarse.
+      bodyMedium: base.bodyMedium?.copyWith(fontFeatures: GravitalType.numericFeatures),
     );
   }
 

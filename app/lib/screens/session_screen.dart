@@ -142,6 +142,10 @@ class SessionScreen extends StatelessWidget {
                     pressed: c.pttActive,
                     enabled: c.isLive,
                     peerSpeaking: c.peerPttActive,
+                    // El anillo se llena con el nivel real del micro. Sin esto
+                    // el "indicador" sería un círculo vacío con buenas
+                    // intenciones.
+                    level: c.micLevel,
                     onDown: c.pttDown,
                     onUp: c.pttUp,
                   ),
@@ -159,7 +163,7 @@ class SessionScreen extends StatelessWidget {
                       style: Theme.of(context).textTheme.labelSmall?.copyWith(
                           fontWeight: FontWeight.w700,
                           color: c.pttActive
-                              ? GravitalColors.pttActive
+                              ? GravitalColors.transmit
                               : scheme.onSurfaceVariant),
                     ),
                   ],

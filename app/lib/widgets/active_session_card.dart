@@ -115,7 +115,7 @@ class ActiveSessionCard extends StatelessWidget {
                       icon: Icons.speed,
                       color: m.rttMs < 60
                           ? theme.colorScheme.onPrimaryContainer
-                          : GravitalColors.pttActive,
+                          : GravitalColors.transmit,
                     ),
                   ),
                 ],

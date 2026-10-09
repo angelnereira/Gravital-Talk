@@ -1,9 +1,9 @@
-import 'package:animate_do/animate_do.dart';
 import 'package:flutter/material.dart';
 import 'package:percent_indicator/linear_percent_indicator.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:provider/provider.dart';
 
+import '../core/palette.dart';
 import '../core/tokens.dart';
 import '../models/session.dart';
 import '../services/event_log.dart';
@@ -398,7 +398,16 @@ class EventLogView extends StatelessWidget {
   }
 }
 
-/// Botón PTT grande con estados (pulso animado al transmitir).
+/// Botón PTT: el anillo de señal de la marca.
+///
+/// Es la pieza más distintiva de la app, así que es donde se concentra la
+/// identidad. Antes era un círculo con gradiente radial —que es lo que hace
+/// cualquier botón circular de cualquier tutorial—. Ahora es un **anillo que se
+/// llena con el nivel de audio**, como un indicador de "en el aire" de equipo de
+/// radiodifusión.
+///
+/// El color también significa algo: ámbar al transmitir (convención real de
+/// broadcast), no naranja por elección estética.
 class PttButton extends StatelessWidget {
   const PttButton({
     super.key,
@@ -407,90 +416,161 @@ class PttButton extends StatelessWidget {
     required this.onDown,
     required this.onUp,
     this.peerSpeaking = false,
+    this.level = 0,
   });
 
   final bool pressed;
   final bool enabled;
   final VoidCallback onDown;
   final VoidCallback onUp;
+
+  /// El otro participante está transmitiendo.
   final bool peerSpeaking;
+
+  /// Nivel de audio actual, 0..1. Rellena el anillo.
+  final double level;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final base = pressed ? GravitalColors.pttActive : scheme.primary;
+
+    // Ámbar al transmitir. El resto del tiempo, el color de marca.
+    final signalColor = pressed
+        ? GravitalColors.transmit
+        : (peerSpeaking ? scheme.tertiary : scheme.primary);
+    final fill = level.clamp(0.0, 1.0);
+
     final button = GestureDetector(
       onTapDown: enabled ? (_) => onDown() : null,
       onTapUp: enabled ? (_) => onUp() : null,
       onTapCancel: enabled ? onUp : null,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        height: 132,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          gradient: RadialGradient(
-            colors: [
-              base.withValues(alpha: pressed ? 1 : 0.85),
-              base.withValues(alpha: pressed ? 0.75 : 0.55),
-            ],
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: base.withValues(alpha: 0.45),
-              blurRadius: pressed ? 42 : 18,
-              spreadRadius: pressed ? 6 : 0,
-            ),
-          ],
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              peerSpeaking ? Icons.hearing : Icons.mic,
-              color: Colors.white,
-              size: 34,
-            ),
-            const SizedBox(height: 6),
-            Text(
-              pressed ? 'TRANSMITIENDO' : 'MANTÉN PARA HABLAR',
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.w800,
-                fontSize: 11,
-                letterSpacing: 1.1,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-
-    // Pulso continuo mientras se transmite (animate_do).
-    return Pulse(
-      animate: pressed,
-      infinite: true,
-      duration: const Duration(milliseconds: 900),
-      from: 1.0,
-      to: 1.04,
-      // Semántica del botón central de la app. Sin esto, un lector de pantalla
-      // no comunica qué hace el gesto ni si está deshabilitado, y el botón
-      // queda inutilizable sin vista.
       child: Semantics(
         button: true,
         enabled: enabled,
         label: pressed
             ? 'Transmitiendo. Suelta para dejar de hablar'
             : 'Mantén pulsado para hablar',
-        hint: peerSpeaking
-            ? 'El otro participante está transmitiendo'
-            : null,
-        // Sin `excludeSemantics`: el texto del botón se fusiona en la etiqueta
-        // en lugar de ocultarse, que es lo que un lector de pantalla necesita.
-        child: button,
+        hint: peerSpeaking ? 'El otro participante está transmitiendo' : null,
+        child: SizedBox(
+          width: HitSizes.pttButton,
+          height: HitSizes.pttButton,
+          child: CustomPaint(
+            painter: _PttRingPainter(
+              level: fill,
+              color: signalColor,
+              trackColor: scheme.outlineVariant,
+              glow: pressed,
+            ),
+            child: Center(
+              child: Padding(
+                // El contenido respeta el grosor del anillo.
+                padding: const EdgeInsets.all(Spacing.xl),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      peerSpeaking && !pressed ? Icons.hearing : Icons.mic,
+                      color: signalColor,
+                      size: 34,
+                    ),
+                    const SizedBox(height: Spacing.sm),
+                    Text(
+                      pressed ? 'TRANSMITIENDO' : 'PULSA PARA HABLAR',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: enabled ? signalColor : scheme.outline,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 10,
+                        letterSpacing: 0.8,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
       ),
     );
+
+    return AnimatedScale(
+      scale: pressed ? 1.04 : 1.0,
+      duration: GravitalMotion.instant,
+      curve: Curves.easeOut,
+      child: button,
+    );
   }
+}
+
+/// Pinta el anillo de señal del botón PTT.
+///
+/// Tres capas, en este orden:
+/// 1. la pista (círculo vacío),
+/// 2. el arco que representa el nivel de audio,
+/// 3. el resplandor, sólo al transmitir.
+///
+/// Se hace con `CustomPaint` en vez de apilar widgets porque un arco
+/// parcial no es composable con formas estándar, y porque pintar un arco es
+/// considerablemente más barato que animar la visibilidad de veinte
+/// segmentos.
+class _PttRingPainter extends CustomPainter {
+  const _PttRingPainter({
+    required this.level,
+    required this.color,
+    required this.trackColor,
+    required this.glow,
+  });
+
+  final double level;
+  final Color color;
+  final Color trackColor;
+  final bool glow;
+
+  /// Grosor del anillo.
+  static const _stroke = 10.0;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = (size.shortestSide - _stroke) / 2;
+
+    // 1. Pista.
+    final track = Paint()
+      ..color = trackColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = _stroke
+      ..strokeCap = StrokeCap.round;
+    canvas.drawCircle(center, radius, track);
+
+    // 2. Arco de nivel. Empieza arriba (-90 grados) y gira en sentido horario.
+    if (level > 0.01) {
+      final arc = Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = _stroke
+        ..strokeCap = StrokeCap.round;
+      canvas.drawArc(
+        Rect.fromCircle(center: center, radius: radius),
+        -90 * 3.141592653589793 / 180,
+        2 * 3.141592653589793 * level,
+        false,
+        arc,
+      );
+    }
+
+    // 3. Resplandor al transmitir. Se pinta ANTES del contenido: si fuera
+    // después lo taparía.
+    if (glow) {
+      final halo = Paint()
+        ..color = color.withValues(alpha: 0.18)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 18);
+      canvas.drawCircle(center, radius, halo);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_PttRingPainter old) =>
+      old.level != level || old.color != color || old.glow != glow;
 }
 
 /// Barra de nivel de micrófono animada (percent_indicator).
@@ -517,16 +597,21 @@ class LevelMeter extends StatelessWidget {
           barRadius: const Radius.circular(8),
           backgroundColor: scheme.surfaceContainerHighest,
           progressColor:
-              transmitting ? GravitalColors.pttActive : scheme.primary,
+              transmitting ? GravitalColors.transmit : scheme.primary,
         ),
       ),
     );
   }
 }
 
+/// Colores semánticos usados por los widgets.
+///
+/// Apuntan a `GravitalPalette` en vez de repetir los valores: antes cada widget
+/// tenía su propia copia del "verde de conectado", y cada copia se había
+/// desviado un poco.
 class GravitalColors {
-  static const pttActive = Color(0xFFFF3D00);
-  static const online = Color(0xFF00C853);
+  static const transmit = GravitalPalette.transmit;
+  static const online = GravitalPalette.online;
 
   const GravitalColors._();
 }
@@ -637,7 +722,7 @@ class ParticipantsCard extends StatelessWidget {
                     height: 32,
                     decoration: BoxDecoration(
                       color: p.hasFloor
-                          ? GravitalColors.pttActive.withValues(alpha: 0.15)
+                          ? GravitalColors.transmit.withValues(alpha: 0.15)
                           : theme.colorScheme.surfaceContainerHighest,
                       shape: BoxShape.circle,
                     ),
@@ -647,7 +732,7 @@ class ParticipantsCard extends StatelessWidget {
                           : (p.isLocal ? Icons.person : Icons.people),
                       size: 16,
                       color: p.hasFloor
-                          ? GravitalColors.pttActive
+                          ? GravitalColors.transmit
                           : theme.colorScheme.onSurfaceVariant,
                     ),
                   ),
@@ -667,7 +752,7 @@ class ParticipantsCard extends StatelessWidget {
                           p.statusLabel,
                           style: theme.textTheme.labelSmall?.copyWith(
                             color: p.hasFloor
-                                ? GravitalColors.pttActive
+                                ? GravitalColors.transmit
                                 : theme.colorScheme.onSurfaceVariant,
                           ),
                         ),
@@ -681,7 +766,7 @@ class ParticipantsCard extends StatelessWidget {
                         vertical: Spacing.xxs,
                       ),
                       decoration: BoxDecoration(
-                        color: GravitalColors.pttActive,
+                        color: GravitalColors.transmit,
                         borderRadius: BorderRadius.circular(Radii.pill),
                       ),
                       child: Text(
