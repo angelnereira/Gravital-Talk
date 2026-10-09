@@ -37,6 +37,9 @@ hmac              = { workspace = true }
 rand_core         = { workspace = true }
 
 [dev-dependencies]
+# Sólo para el test de conformidad: los vectores canónicos del RFC 6238 usan
+# HMAC-SHA1. La producción usa SHA-256 (ver `pairing.rs`).
+sha1 = "0.10"
 tokio              = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync", "macros", "io-util", "test-util"] }
 tracing-subscriber = { workspace = true }
 proptest           = { workspace = true }
