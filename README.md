@@ -204,21 +204,45 @@ Gravital Talk conecta dos dispositivos **sin necesidad de un servidor intermedia
 
 ### Cómo funciona
 
+Quien crea la sala **es** el punto de encuentro: su dispositivo dedica un puerto, publica su IP
+pública por STUN y comparte el destino en un QR. No hay nada que desplegar.
+
 ```
-Persona A — "Crear llamada"
-  1. Crea sesión UDP en puerto efímero
-  2. Obtiene IP LAN vía ConnectivityManager
+Persona A — "Crear sala y compartir"
+  1. Dedica un puerto local para Gravital Talk (9000 si está libre)
+  2. Genera código de sala (XXXX-NNNN) y un secreto (PSK de Noise)
   3. Consulta IP pública vía STUN (stun.l.google.com:19302)
-  4. Genera URI:  gravital-talk://pair?v=1&lan=192.168.1.5:48271&pub=203.0.113.45:48271
-  5. Muestra QR + código de texto  GRVT-A3F2
+  4. Genera URI:  gravital-talk://pair?v=1&host=203.0.113.45&udp=9000&room=GRVT-A3F2
+  5. Muestra QR + el código en texto
   6. Llama handshake_open() — acepta el primer cliente de cualquier IP
 
-Persona B — "Unirse a llamada" → escanea QR
-  1. Parsea URI → obtiene lan, pub, relay
-  2. Intenta LAN directa           (timeout 2 s)  — funciona en misma WiFi
-  3. Intenta IP pública vía STUN   (timeout 5 s)  — funciona en ~85 % de redes
-  4. Intenta relay como fallback   (timeout 10 s) — funciona siempre si hay relay
-  5. Primer éxito → handshake completo → PTT activo
+Persona B — "Unirse" → escanea QR (o teclea el código)
+  1. Parsea URI → obtiene host, puerto y código
+  2. Conecta directo a ese endpoint y completa el handshake
+  3. PTT activo — y el anfitrión es un participante más, no un servidor
+
+Cierre: cualquiera de los dos cierra y vuelve a emparejar cuando quiera.
+```
+
+El anfitrión **administra** la sala (la creó y conoce el secreto) pero habla y escucha igual que los
+demás. No es un servidor del que dependan los otros participantes.
+
+### Cuándo NO funciona directo
+
+Un solo caso, y merece saberse antes de culpar a la app: si el anfitrión está en **red móvil**, su
+operador le asigna una IP compartida (CGNAT, RFC 6598) y nadie de fuera puede conectarse a él. La app
+lo detecta con STUN y avisa *antes* de que compartas el QR, con dos salidas: reenviar el puerto en el
+router, o usar ese dispositivo como invitado en vez de como anfitrión.
+
+En los demás casos —misma WiFi, WiFi con puerto reenviado, IP pública— funciona sin configurar nada.
+
+### Modo sala (relay)
+
+El relay existe y funciona para quien quiera una sala permanente con varios participantes, pero **ya
+no es necesario para crear una sala**. Se configura aparte:
+
+```bash
+gs relay --bind 0.0.0.0 --udp-port 9000
 ```
 
 ### Formato del URI QR

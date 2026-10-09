@@ -34,6 +34,26 @@ class PairingScreen extends StatefulWidget {
 class _PairingScreenState extends State<PairingScreen> {
   var _joining = false;
 
+  /// Aviso de alcanzabilidad, o `null` si no hay nada que decir.
+  ///
+  /// Se consulta al crear la sala, no al entrar: el anfitrión necesita saber si
+  /// los demás podrán alcanzarlo *antes* de compartir el QR. Si no, el fallo
+  /// llega cuando el invitado ya ha escaneado.
+  String? _reachability;
+
+  /// Diagnostica la red y guarda el aviso que corresponda.
+  Future<void> _checkReachability(SessionController c) async {
+    try {
+      final reach = await c.diagnoseReachability();
+      if (!mounted) return;
+      setState(() => _reachability = reach?.warning);
+    } catch (_) {
+      // Un fallo del diagnóstico nunca debe impedir crear la sala: es un aviso,
+      // no un requisito.
+      if (mounted) setState(() => _reachability = null);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = context.watch<SessionController>();
@@ -98,20 +118,29 @@ class _PairingScreenState extends State<PairingScreen> {
             onPressed: c.busy
                 ? null
                 : () async {
-                    final ok = await c.hostServer();
-                    if (!ok || !c.isLive) return;
+                    await c.createRoom();
+                    if (mounted) await _checkReachability(c);
                   },
             icon: const Icon(Icons.add_link),
             label: const Text('Crear sala y compartir'),
           ),
           if (c.roomCode != null && c.roomCode!.isNotEmpty) ...[
             const SizedBox(height: Spacing.lg),
-            // El QR codifica el endpoint COMPLETO, no sólo el código: si no,
-            // el invitado seguiría teniendo que teclear el host.
+            // El QR codifica el endpoint COMPLETO (IP pública + puerto), así
+            // que escanearlo conecta sin teclear nada. Se muestra en cuanto la
+            // sala existe, no tras conectar: el anfitrión necesita algo que
+            // compartir desde el primer segundo.
             QrPanel(
               code: _pairingUri(c).toUri(),
               caption: _pairingUri(c).toHumanReadable(),
             ),
+            // Aviso de alcanzabilidad ANTES de compartir: si este dispositivo
+            // no puede recibir conexiones, el QR no servirá de nada y el
+            // invitado se enteraría después de escanearlo.
+            if (_reachability != null) ...[
+              const SizedBox(height: Spacing.lg),
+              WarningBanner(message: _reachability!),
+            ],
             const SizedBox(height: Spacing.lg),
             // Y el código legible, para leerlo por teléfono.
             Text(
@@ -238,7 +267,11 @@ class _PairingScreenState extends State<PairingScreen> {
     }
 
     setState(() => _joining = true);
-    final ok = await c.joinServer();
+    // Conexión directa al endpoint del anfitrión. Sin relay de por medio: los
+    // dos dispositivos se hablan, que es lo que el protocolo siempre hizo.
+    final endpoint = parsed?.host ?? c.server.host;
+    final port = parsed?.udpPort ?? c.server.udpPort;
+    final ok = await c.joinEndpoint(endpoint, port);
     if (!mounted) return;
     setState(() => _joining = false);
     if (ok && c.isLive) {

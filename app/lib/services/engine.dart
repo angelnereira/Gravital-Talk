@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 
 import '../models/connection.dart';
+import '../models/reachability.dart';
 import '../models/session.dart';
 import 'audio_pump.dart';
 import 'native_bridge.dart';
@@ -41,6 +42,21 @@ abstract class SessionEngine {
   Future<int> localPort();
   Future<int> sessionId();
 
+  /// Descubre la IP pública de esta sesión vía STUN.
+  ///
+  /// Es lo que va en el QR: sin ella, el invitado tendría que teclear la
+  /// dirección a mano. Devuelve `null` si STUN no responde.
+  Future<String?> discoverPublicEndpoint();
+
+  /// Diagnostica si este dispositivo puede recibir invitados de fuera.
+  ///
+  /// Es la comprobación que evita el fallo silencioso: sin ella, un anfitrión
+  /// detrás de CGNAT muestra un QR que nunca va a funcionar y nadie entiende
+  /// por qué.
+  ///
+  /// `null` si no se pudo determinar (sin red, sin STUN, o motor demo).
+  Future<NetworkReachability?> diagnoseReachability();
+
   /// Nivel de micrófono 0..1 para el VU meter.
   double get micLevel;
 
@@ -51,6 +67,20 @@ abstract class SessionEngine {
 /// Motor nativo: habla con `libgravital_talk_ffi` (Rust real).
 class FfiSessionEngine implements SessionEngine {
   FfiSessionEngine(this._bridge);
+
+  @override
+  Future<String?> discoverPublicEndpoint() async {
+    final session = _session;
+    if (session == null) return null;
+    return _bridge.discoverPublicAddress(session.localPort());
+  }
+
+  @override
+  Future<NetworkReachability?> diagnoseReachability() async {
+    final session = _session;
+    if (session == null) return null;
+    return session.diagnoseReachability();
+  }
 
   final NativeBridge _bridge;
   NativeSession? _session;
@@ -346,6 +376,19 @@ class DemoSessionEngine implements SessionEngine {
 
   @override
   double get micLevel => _micLevel;
+
+  // El motor demo no tiene red real. Devuelve un endpoint ficticio para que la
+  // UI se pueda recorrer de punta a punta: sin él, la pantalla de crear sala
+  // no puede mostrar QR y no hay forma de probar el flujo.
+  //
+  // Es deliberadamente obvio que es falso: la IP es de documentación. Quien lo
+  // ve en la pantalla no puede confundirlo con una dirección real.
+  @override
+  Future<String?> discoverPublicEndpoint() async => '203.0.113.7:40000';
+
+  @override
+  Future<NetworkReachability?> diagnoseReachability() async =>
+      NetworkReachability.lanOnly;
 
   @override
   Future<void> close() async {

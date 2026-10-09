@@ -330,22 +330,6 @@ class NativeBridge {
     }
   }
 
-  /// Diagnóstica si este dispositivo puede recibir invitados de fuera.
-  ///
-  /// Es la comprobación que evita el fallo silencioso: un anfitrión detrás de
-  /// CGNAT mostraría un QR que nunca funciona. Devuelve `null` si no se pudo
-  /// determinar (STUN no respondió), que la UI trata como "prueba y avisa".
-  NetworkReachability? diagnoseReachability(int localPort) {
-    final out = calloc<Int32>();
-    try {
-      final st = _diagnoseReachability(localPort, out);
-      if (st != GsStatus.ok) return null;
-      return NetworkReachability.fromCode(out.value);
-    } finally {
-      calloc.free(out);
-    }
-  }
-
   /// Puerto que dedica Gravital Talk al anfitrión según la política.
   ///
   /// `preferred` de 0 = el que sea más rápido y sencillo (9000 si está libre).
@@ -508,6 +492,25 @@ class NativeSession {
   void reopen() {
     if (_destroyed) return;
     _bridge._check(_bridge._sessionReopen(_handle));
+  }
+
+  /// Diagnóstica si este dispositivo puede recibir invitados de fuera.
+  ///
+  /// Usa el puerto local real de la sesión, porque STUN asocia la IP pública a
+  /// ese puerto: diagnosticar con otro puerto diría la verdad sobre otro socket.
+  ///
+  /// Devuelve `null` si no se pudo determinar (STUN no respondió), que la UI
+  /// trata como "prueba y avisa" en vez de asumir que todo va bien.
+  NetworkReachability? diagnoseReachability() {
+    _ensureAlive();
+    final out = calloc<Int32>();
+    try {
+      final st = _bridge._diagnoseReachability(localPort(), out);
+      if (st != GsStatus.ok) return null;
+      return NetworkReachability.fromCode(out.value);
+    } finally {
+      calloc.free(out);
+    }
   }
 
   /// Cierra la sesión (envía CLOSE).

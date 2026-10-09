@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 
 import '../models/connection.dart';
+import '../models/reachability.dart';
 import '../models/session.dart';
 import 'engine.dart';
 import 'event_log.dart';
@@ -49,6 +50,9 @@ class SessionController extends ChangeNotifier {
   String? _roomCode;
   int _sessionId = 0;
   int _localPort = 0;
+
+  /// Endpoint público del anfitrión, para el QR.
+  String _publicEndpoint = '';
   Duration _elapsed = Duration.zero;
   ConnectionMode? _mode;
   ConnectionRole? _role;
@@ -65,6 +69,13 @@ class SessionController extends ChangeNotifier {
   bool get peerPttActive => _peerPtt;
   bool get busy => _busy;
   String? get error => _error;
+
+  /// Diagnostica si este dispositivo puede recibir invitados de fuera.
+  Future<NetworkReachability?> diagnoseReachability() =>
+      _engine.diagnoseReachability();
+
+  /// Endpoint que el anfitrión comparte (IP pública + puerto).
+  String get publicEndpoint => _publicEndpoint;
   String? get roomCode => _roomCode;
   int get sessionId => _sessionId;
   int get localPort => _localPort;
@@ -150,6 +161,127 @@ class SessionController extends ChangeNotifier {
       // Silenciar: parar la observación nunca debe romper una desconexión.
     }
   }
+
+  /// Crea una sala **sin relay**: este dispositivo es el punto de encuentro.
+  ///
+  /// Es el flujo que debe funcionar por defecto, y el que estaba roto. Antes
+  /// "crear sala" exigía configurar la dirección de un servidor
+  /// (`Configura la dirección del servidor`), lo que es absurdo: quien crea la
+  /// sala ES el servidor. El resultado era que no se podía crear ninguna sala
+  /// sin desplegar un relay primero.
+  ///
+  /// Lo que hace, en orden:
+  /// 1. Dedica un puerto local para Gravital Talk.
+  /// 2. Genera un código de sala y un secreto (token PSK de Noise).
+  /// 3. Descubre su IP pública por STUN, que es lo que va en el QR.
+  /// 4. Se queda aceptando al primer cliente que llegue (cualquier IP).
+  ///
+  /// El anfitrión es **un participante más**: administra la sala, pero habla y
+  /// escucha como los demás. No es un servidor del que dependen los otros para
+  /// existir.
+  ///
+  /// Devuelve `false` y fija el error si no se puede binder el puerto.
+  Future<bool> createRoom() => _guard(() async {
+    final profile = _server;
+    await _engine.createSession(_settings, bindPort: profile.udpPort);
+
+    // El token es el secreto de la sala. Se genera aquí, no se configura: un
+    // usuario no debería tener que inventarse un secreto criptográfico.
+    final token = _generateRoomToken();
+    await _engine.setRoomToken(token);
+
+    final code = _generateRoomCode();
+    _roomCode = code;
+    _sessionId = _randomSessionId();
+    _engine.setSessionId(_sessionId);
+    _updateServerProfile(roomCode: code);
+    _server = _server.copyWith(roomCode: code, token: token);
+    _store.saveServerProfile(_server);
+
+    _mode = ConnectionMode.server;
+    _role = ConnectionRole.host;
+    _startTicker();
+    notifyListeners();
+
+    // La IP pública puede tardar o fallar (sin red, sin STUN). No bloquea la
+    // creación: la sala existe igual, sólo que el QR llevará la LAN.
+    final endpoint = await _engine.discoverPublicEndpoint();
+    _publicEndpoint = endpoint ?? _lanFallbackEndpoint();
+    _log.success(
+      'Sala $code lista en $_publicEndpoint (session_id=$_sessionId). '
+      'Esperando peers…',
+    );
+
+    // Acepta al primer cliente de cualquier IP: es el modo emparejamiento.
+    await _engine.acceptAny();
+    _onConnected('Sala creada · eres un participante más');
+  });
+
+  /// Se une a una sala conectándose directo al endpoint del anfitrión.
+  ///
+  /// `host:port` viene del QR. Si el QR sólo traía el código, se usa el host
+  /// configurado a mano.
+  Future<bool> joinEndpoint(String host, int port) {
+    // La validación va ANTES de `_guard`. Dentro, un `return` temprano no
+    // aborta: el cierre completa con normalidad y `_guard` devuelve `true`, así
+    // que la app creería que se conectó. Es el mismo patrón que usa
+    // `hostServer`, y por algo está fuera.
+    if (_server.roomCode.isEmpty) {
+      _fail('Indica el código de la sala');
+      return Future.value(false);
+    }
+    return _guard(() async {
+      final profile = _server;
+      final code = profile.roomCode;
+
+      await _engine.createSession(_settings);
+      if (profile.token.isNotEmpty) {
+        await _engine.setRoomToken(profile.token);
+      }
+      _roomCode = code;
+      _mode = ConnectionMode.server;
+      _role = ConnectionRole.join;
+      _startTicker();
+      notifyListeners();
+
+      await _engine.connect(host, port);
+      _onConnected('Conectado a la sala $code');
+    });
+  }
+
+  /// Genera un código de sala legible (`XXXX-NNNN`).
+  ///
+  /// Formato deliberado sin caracteres ambiguos: ni I ni O ni 0 ni 1, para que
+  /// se pueda leer en voz alta sin que nadie se confunda.
+  String _generateRoomCode() {
+    const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+    const digits = '23456789';
+    final rng = Random();
+    String pick(String from, int n) =>
+        List.generate(n, (_) => from[rng.nextInt(from.length)]).join();
+    return '${pick(letters, 4)}-${pick(digits, 4)}';
+  }
+
+  /// Secreto de la sala: 6 palabras-base de un alfabeto amplio.
+  ///
+  /// Suficiente entropía para que no se pueda adivinar, y al ser el PSK de
+  /// Noise basta con conocerlo. Se muestra en el QR, así que el usuario no tiene
+  /// que recordarlo.
+  String _generateRoomToken() {
+    const alphabet =
+        'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    final rng = Random();
+    return List.generate(22, (_) => alphabet[rng.nextInt(alphabet.length)])
+        .join();
+  }
+
+  int _randomSessionId() => Random().nextInt(0x7FFFFFFF) + 1;
+
+  /// Endpoint de emergencia si STUN no responde.
+  ///
+  /// La LAN sirve para el caso más común (los dos en la misma wifi), y es
+  /// mejor que un QR vacío.
+  String _lanFallbackEndpoint() => 'red-local:$_localPort';
 
   Future<bool> hostServer({String? roomCode}) async {
     final profile = _server;

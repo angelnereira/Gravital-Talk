@@ -21,6 +21,32 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
 
 ### Fixed
 
+**"Crear sala" fallaba pidiendo un servidor que no necesita**
+- `hostServer()` exigía `profile.host`, así que crear una sala sin relay desplegado
+  devolvía *"Configura la dirección del servidor"*. Pero quien crea la sala ES el
+  punto de encuentro: el error hacía imposible el caso de uso principal sin
+  desplegar infraestructura primero.
+- Nuevo `SessionController.createRoom()`: dedica un puerto, genera código de sala
+  (`XXXX-NNNN`, sin I/O ni 0/1) y secreto (PSK de Noise), descubre la IP pública
+  por STUN y acepta al primer cliente de cualquier IP.
+- Nuevo `joinEndpoint(host, port)`: conexión directa al endpoint del QR, sin relay.
+- El anfitrión es **un participante más**, no un servidor: habla y escucha igual
+  (verificado con test).
+- La validación de `joinEndpoint` va antes de `_guard`: dentro, un `return` temprano
+  no aborta y la app creía haberse conectado. Lo detectó el test.
+
+### Added
+
+**Diagnóstico de alcanzabilidad conectado a la app**
+- `SessionEngine.diagnoseReachability()` y `NativeSession.diagnoseReachability()`:
+  el núcleo lo calculaba y la app no lo pedía. Ahora la pantalla de crear sala
+  avisa **antes** de compartir el QR si el dispositivo está tras CGNAT (red
+  móvil), que es el único caso en el que el emparejamiento directo no funciona.
+- El motor demo devuelve un endpoint ficticio obvio (`203.0.113.7`), para poder
+  recorrer el flujo de punta a punta sin hardware.
+
+### Fixed
+
 **La app Flutter no compilaba para Android, iOS ni escritorio**
 - `main.dart` importaba `grpc_room_api.dart` incondicionalamente, y ese fichero importaba
   `grpc_web.dart`, que tira de `dart:js_interop` (sólo existe en web). El fallo es al

@@ -1,3 +1,4 @@
+import '../models/reachability.dart';
 import '../models/session.dart';
 import 'ffi_common.dart';
 
@@ -64,6 +65,7 @@ class NativeSession {
   List<int>? recvAudioTimeout({int maxBytes = 8192, int timeoutMs = 250}) =>
       _unavailable();
   void close() => _unavailable();
+  void reopen() => _unavailable();
   SessionState state() => _unavailable();
   int sessionId() => _unavailable();
   int localPort() => _unavailable();
@@ -72,6 +74,7 @@ class NativeSession {
   void pttRelease() => _unavailable();
   bool peerPttActive() => _unavailable();
   void destroy() => _unavailable();
+  NetworkReachability? diagnoseReachability() => _unavailable();
 
   Never _unavailable() =>
       throw UnsupportedError('FFI no disponible en esta plataforma');
