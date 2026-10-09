@@ -60,7 +60,11 @@ tasks.register<Exec>("buildRustLibs") {
     outputs.dir(genLibs)
     val cmd = mutableListOf(
         "bash",
-        file("../../scripts/flutter-android-libs.sh").absolutePath,
+        // Desde `app/android/app/` hay que subir TRES niveles para llegar a la
+        // raíz del repo. Con dos (`../../scripts/`) apuntaba a `app/scripts/`,
+        // que no existe: bash moría con exit 127 (command not found) y el
+        // build fallaba sin ninguna pista de qué faltaba.
+        file("../../../scripts/flutter-android-libs.sh").absolutePath,
     )
     commandLine(cmd)
     enabled = ndkDirs.isDirectory || !System.getenv("ANDROID_NDK_HOME").isNullOrEmpty()

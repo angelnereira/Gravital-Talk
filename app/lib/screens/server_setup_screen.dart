@@ -10,6 +10,7 @@ import '../core/routes.dart';
 import '../core/tokens.dart';
 import '../models/connection.dart';
 import '../services/session_controller.dart';
+import '../services/pairing_uri.dart';
 import '../services/validation.dart';
 import '../widgets/common.dart';
 import 'session_screen.dart';
@@ -212,15 +213,40 @@ class _ServerSetupScreenState extends State<ServerSetupScreen> {
             ),
           ],
           if (hosting && c.roomCode != null && c.roomCode!.isNotEmpty) ...[
-            const SizedBox(height: 16),
+            const SizedBox(height: Spacing.lg),
             SectionCard(
-              title: 'Comparte este código',
+              title: 'Comparte esta sala',
               subtitle: hosting
-                  ? 'Los peers se unen con el código o escaneando el QR'
+                  ? 'Escanean el QR y se rellena solo: servidor, sala y token'
                   : null,
-              child: QrPanel(
-                code: c.roomCode!,
-                caption: 'Room code Gravital Talk',
+              // El QR codifica el destino COMPLETO, no sólo el código. Anto
+                  // sólo llevaba `GRVT-2847`, así que un peer en otra red tenía
+                  // que teclear igualmente el host y los puertos: el QR
+                  // ahorraba el código pero no la dirección.
+              child: Column(
+                children: [
+                  QrPanel(
+                    code: _pairingUri(c).toUri(),
+                    caption: _pairingUri(c).toHumanReadable(),
+                  ),
+                  const SizedBox(height: Spacing.md),
+                  // El código legible sigue ahí: una persona puede leerlo por
+                  // teléfono, y ningún escáner es 100 % fiable.
+                  Text(
+                    c.roomCode!,
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 2,
+                        ),
+                  ),
+                  Text(
+                    'o léelo en voz alta',
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                  ),
+                ],
               ),
             ),
           ],
@@ -265,6 +291,19 @@ class _ServerSetupScreenState extends State<ServerSetupScreen> {
     );
   }
 
+  /// URI de emparejamiento con los datos que el anfitrión tiene ahora mismo.
+  ///
+  /// Se construye desde el formulario, no desde la sala remota: si el usuario
+  /// cambió el host o el puerto a mano, el QR debe reflejarlo. Generarlo desde
+  /// el servidor daría un QR que no coincide con lo que se ve en pantalla.
+  PairingUri _pairingUri(SessionController c) => PairingUri(
+        host: _host.text.trim(),
+        room: c.roomCode ?? _roomCode.text.trim().toUpperCase(),
+        udpPort: int.tryParse(_udpPort.text),
+        obsPort: int.tryParse(_obsPort.text),
+        token: _token.text.trim(),
+      );
+
   /// Escáner de QR real (mobile_scanner) que rellena el código de sala.
   Future<void> _scanQr(BuildContext ctx) async {
     final code = await showModalBottomSheet<String>(
@@ -298,13 +337,45 @@ class _ServerSetupScreenState extends State<ServerSetupScreen> {
       ),
     );
     if (!ctx.mounted || code == null) return;
-    setState(() => _roomCode.text = code.toUpperCase());
+
+    // El QR puede traer sólo el código (formato antiguo) o el destino completo.
+    // En el segundo caso se rellenan también host y puertos: un QR que te
+    // ahorra el código pero no la dirección ha resuelto la parte fácil.
+    final pairing = PairingUri.tryParse(code);
+    setState(() {
+      if (pairing != null) {
+        _roomCode.text = pairing.room;
+        if (pairing.host.isNotEmpty) {
+          _host.text = pairing.host;
+          _hostError = null;
+        }
+        if (pairing.udpPort != null) {
+          _udpPort.text = '${pairing.udpPort}';
+        }
+        if (pairing.obsPort != null) {
+          _obsPort.text = '${pairing.obsPort}';
+        }
+        if (pairing.token != null && pairing.token!.isNotEmpty) {
+          _token.text = pairing.token!;
+        }
+      } else {
+        // No es un QR reconocible: se muestra tal cual para que el usuario
+        // decida, en vez de descartarlo en silencio.
+        _roomCode.text = code.toUpperCase();
+      }
+    });
+
+    final completo = pairing != null && pairing.isComplete;
     toastification.show(
       context: ctx,
-      type: ToastificationType.success,
-      title: const Text('Sala escaneada'),
-      description: Text(code),
-      autoCloseDuration: const Duration(seconds: 2),
+      type: completo ? ToastificationType.success : ToastificationType.warning,
+      title: Text(completo ? 'Sala escaneada' : 'Código escaneado'),
+      description: Text(
+        completo
+            ? 'Servidor y sala rellenados. Pulsa Unirse.'
+            : 'Falta el servidor: el QR sólo traía el código.',
+      ),
+      autoCloseDuration: const Duration(seconds: 3),
     );
   }
 
