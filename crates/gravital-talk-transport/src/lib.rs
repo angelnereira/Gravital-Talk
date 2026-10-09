@@ -8,6 +8,7 @@
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
+pub mod address_book;
 pub mod congestion;
 pub mod discovery;
 pub mod error;

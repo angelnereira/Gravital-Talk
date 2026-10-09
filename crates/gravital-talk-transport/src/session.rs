@@ -14,6 +14,7 @@
 //!
 //! Tras el handshake, todo el audio se cifra con ChaCha20-Poly1305.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
@@ -44,6 +45,7 @@ use tokio::sync::Mutex;
 use tokio::time::{timeout, Instant};
 use x25519_dalek::{EphemeralSecret, PublicKey};
 
+use crate::address_book::AddressBook;
 use crate::congestion::CongestionController;
 use crate::error::TransportError;
 use crate::fec::{FecDecoder, FecEncoder, FecParity};
@@ -133,7 +135,12 @@ pub struct Session {
     metrics: Arc<Metrics>,
     jitter: Arc<JitterBuffer>,
     config: Config,
-    peer: Mutex<Option<SocketAddr>>,
+    /// Agenda de peers conocidos. En P2P hay uno solo; en sala (relay) puede
+    /// haber varios, y el audio se reenvía a todos los que no son el emisor.
+    ///
+    /// El primero registrado es el peer principal: en sala es el host, que
+    /// arbitra el floor control.
+    book: Mutex<AddressBook>,
     session_id: AtomicU32,
     tx_sequence: AtomicU32,
     /// Contador exclusivo para frames de audio (no se comparte con FEC ni control).
@@ -167,8 +174,13 @@ pub struct Session {
     room_token: std::sync::Mutex<Option<Vec<u8>>>,
     /// Modo de handshake efectivo (1 = Legacy, 2 = Noise, otro = Auto).
     handshake_mode: AtomicU8,
-    /// Ventana anti-replay de secuencias de paquete (activa con claves).
-    replay: Mutex<ReplayWindow>,
+    /// Ventanas anti-replay indexadas por dirección de origen.
+    ///
+    /// En P2P hay una sola entrada. En sala hay una por participante, porque
+    /// cada uno mantiene su propio contador `tx_sequence`: con una ventana
+    /// compartida, el audio legítimo de un peer se descartaría como duplicado
+    /// del de otro.
+    replay_by_peer: Mutex<HashMap<SocketAddr, ReplayWindow>>,
     /// Señal de cancelación: se activa en `close()` para interrumpir loops bloqueantes.
     closed: AtomicBool,
 }
@@ -198,7 +210,7 @@ impl Session {
             metrics: Arc::new(Metrics::new()),
             jitter: Arc::new(JitterBuffer::new(jitter_depth)),
             config,
-            peer: Mutex::new(None),
+            book: Mutex::new(AddressBook::new()),
             session_id: AtomicU32::new(0),
             tx_sequence: AtomicU32::new(0),
             audio_tx_seq: AtomicU32::new(0),
@@ -216,7 +228,7 @@ impl Session {
             preset_session_id: AtomicU32::new(0),
             room_token: std::sync::Mutex::new(None),
             handshake_mode: AtomicU8::new(handshake_mode_byte),
-            replay: Mutex::new(ReplayWindow::new()),
+            replay_by_peer: Mutex::new(HashMap::new()),
             closed: AtomicBool::new(false),
         }
     }
@@ -327,32 +339,44 @@ impl Session {
     /// ControlResume es el indicador inmediato para el peer (mostrar "alguien habla").
     pub async fn ptt_press(&self) -> Result<(), TransportError> {
         self.ptt_active.store(true, Ordering::Release);
-        let peer = *self.peer.lock().await;
-        if let Some(p) = peer {
+        let targets = self.broadcast_targets().await;
+        if !targets.is_empty() {
             let sid = self.session_id();
             // SSRC local = session_id como proxy (sin SSRC dedicado aún)
             let mut ssrc_buf = [0u8; 4];
             ssrc_buf.copy_from_slice(&sid.to_be_bytes());
-            self.send_control(MessageType::FloorRequest, sid, &ssrc_buf, p)
-                .await?;
-            self.send_control(MessageType::ControlResume, sid, &[], p)
-                .await?;
+            for p in targets {
+                self.send_control(MessageType::FloorRequest, sid, &ssrc_buf, p)
+                    .await?;
+                self.send_control(MessageType::ControlResume, sid, &[], p)
+                    .await?;
+            }
         }
         Ok(())
+    }
+
+    /// Destinos de un envío de control o audio: todos los peers conocidos.
+    ///
+    /// En P2P devuelve el único peer, así que el comportamiento 1:1 no cambia.
+    /// En sala devuelve todos los participantes, que es lo que permite N-a-N.
+    async fn broadcast_targets(&self) -> Vec<SocketAddr> {
+        self.book.lock().await.all()
     }
 
     /// Desactiva PTT: limpia el flag local y envía FloorRelease + ControlPause.
     pub async fn ptt_release(&self) -> Result<(), TransportError> {
         self.ptt_active.store(false, Ordering::Release);
-        let peer = *self.peer.lock().await;
-        if let Some(p) = peer {
+        let targets = self.broadcast_targets().await;
+        if !targets.is_empty() {
             let sid = self.session_id();
             let mut ssrc_buf = [0u8; 4];
             ssrc_buf.copy_from_slice(&sid.to_be_bytes());
-            self.send_control(MessageType::FloorRelease, sid, &ssrc_buf, p)
-                .await?;
-            self.send_control(MessageType::ControlPause, sid, &[], p)
-                .await?;
+            for p in targets {
+                self.send_control(MessageType::FloorRelease, sid, &ssrc_buf, p)
+                    .await?;
+                self.send_control(MessageType::ControlPause, sid, &[], p)
+                    .await?;
+            }
         }
         Ok(())
     }
@@ -404,13 +428,25 @@ impl Session {
         self.transport.local_addr()
     }
 
+    /// Número de peers conocidos de la sesión.
+    ///
+    /// Siempre 1 en P2P; en sala crece con cada handshake válido.
+    pub async fn peer_count(&self) -> usize {
+        self.book.lock().await.len()
+    }
+
+    /// Direcciones de los peers conocidos, en orden de registro.
+    pub async fn peers(&self) -> Vec<SocketAddr> {
+        self.book.lock().await.all()
+    }
+
     /// Ejecuta el handshake criptográfico 4-way.
     pub async fn handshake(
         &self,
         role: SessionRole,
         peer: SocketAddr,
     ) -> Result<(), TransportError> {
-        *self.peer.lock().await = Some(peer);
+        self.book.lock().await.insert(peer);
 
         {
             let event = match role {
@@ -537,6 +573,143 @@ impl Session {
             .transition(SessionEvent::StartAccept)
             .map_err(|_| TransportError::InvalidState("cannot start open handshake"))?;
 
+        self.accept_loop().await
+    }
+
+    /// Acepta un peer nuevo en una sesión ya establecida (modo sala).
+    ///
+    /// Registro continuo de peers adicionales mientras la sesión esté activa.
+    ///
+    /// Debe invocarse desde la misma tarea que consume el socket de audio, NO
+    /// en paralelo: dos tareas leyendo el mismo `Transport` se reparten los
+    /// datagramas y se roban audio. Por eso el trabajo real ocurre en
+    /// `recv_audio`, que detecta un handshake entrante de una dirección nueva y
+    /// promueve al peer allí mismo. Este método queda como reintento perezoso
+    /// para cuando no hay tráfico de audio que dispare la detección.
+    ///
+    /// Sin tráfico no hay peert yet: un participante nuevo siempre manda su
+    /// `ClientHello`, y ese paquete pasa por `recv_audio`.
+    pub async fn accept_additional_peer(&self) -> Result<bool, TransportError> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(TransportError::PeerClosed("session closed"));
+        }
+        let st = self.state.lock().await.state();
+        if st != SessionState::Active {
+            return Err(TransportError::InvalidState("session not active"));
+        }
+
+        let allow_noise = cfg!(feature = "noise")
+            && matches!(
+                self.handshake_mode(),
+                HandshakeMode::Auto | HandshakeMode::Noise
+            );
+        let allow_legacy = !matches!(self.handshake_mode(), HandshakeMode::Noise);
+        let (first, peer) = match self
+            .wait_first_handshake_packet(None, allow_noise, allow_legacy)
+            .await
+        {
+            Ok(v) => v,
+            Err(TransportError::PeerClosed(_)) => {
+                return Err(TransportError::PeerClosed("session closed"))
+            }
+            Err(_) => return Ok(false),
+        };
+
+        match first {
+            FirstHandshake::Noise(msg1) => {
+                self.handshake_noise_server_after_hello1(peer, msg1).await?;
+            }
+            FirstHandshake::Legacy(hello) => {
+                self.handshake_server_after_hello(peer, hello).await?;
+            }
+        }
+        Ok(true)
+    }
+
+    /// Detecta si un datagrama entrante es el inicio del handshake de un peer
+    /// nuevo (modo sala).
+    ///
+    /// Sólo tiene sentido con la sesión ya activa y desde una dirección que no
+    /// está en la agenda: en P2P no hay peers nuevos, y en sala un `ClientHello`
+    /// de un conocido es un reenvío del relay, no una petición de entrada.
+    fn peek_new_peer(&self, view: &PacketView<'_>, from: SocketAddr) -> Option<FirstHandshake> {
+        if self.closed.load(Ordering::Acquire) {
+            return None;
+        }
+        let code = view.header().msg_type;
+        if code != MessageType::HandshakeClientHello.code()
+            && code != MessageType::HandshakeNoiseHello1.code()
+        {
+            return None;
+        }
+
+        // La dirección de origen no viaja en el header: la aporta el recv.
+        let known = {
+            let book = self.book.try_lock();
+            match book {
+                Ok(b) => b.contains(from),
+                Err(_) => return None,
+            }
+        };
+        if known {
+            return None;
+        }
+        // Sólo en sala: en P2P el handshake ya ocurrió y no hay más peers.
+        // `session_id` distinto de 0 indica modo sala (relay).
+        if self.session_id.load(Ordering::Acquire) == 0 {
+            return None;
+        }
+
+        if code == MessageType::HandshakeNoiseHello1.code() {
+            return Some(FirstHandshake::Noise(view.payload().to_vec()));
+        }
+        match view
+            .payload()
+            .get(..4)
+            .and_then(|b| b.try_into().ok())
+            .map(u32::from_be_bytes)
+        {
+            Some(0) => Some(FirstHandshake::Legacy(
+                ClientHello::decode(view.payload()).ok()?,
+            )),
+            _ => None,
+        }
+    }
+
+    /// Promueve a un peer ya detectado dentro del lazo de recepción.
+    ///
+    /// `first` y `peer` provienen del datagrama que `recv_audio` ya consumió, de
+    /// modo que no hay lectura adicional aquí: el resto del handshake sí consume
+    /// del socket, pero desde la misma tarea propietaria.
+    async fn promote_peer(
+        &self,
+        first: FirstHandshake,
+        peer: SocketAddr,
+    ) -> Result<(), TransportError> {
+        self.book.lock().await.insert(peer);
+        let result = match first {
+            FirstHandshake::Noise(msg1) => {
+                self.handshake_noise_server_after_hello1(peer, msg1).await
+            }
+            FirstHandshake::Legacy(hello) => self.handshake_server_after_hello(peer, hello).await,
+        };
+        match result {
+            Ok(()) => {
+                let n = self.book.lock().await.len();
+                tracing::info!(peers = n, ?peer, "peer promovido en la sala");
+                Ok(())
+            }
+            Err(e) => {
+                // El peer no llegó a completar: sacarlo de la agenda para no
+                // enviarle audio que no puede descifrar.
+                self.book.lock().await.remove(peer);
+                Err(e)
+            }
+        }
+    }
+
+    /// Loop de reintento del handshake de servidor abierto.
+    async fn accept_loop(&self) -> Result<(), TransportError> {
         // Loop de reintento: acepta hasta completar o que close() sea llamado.
         // Cada intento tiene 30 s de timeout; si falla se reinicia el handshake
         // (state: Closed → Reconnecting → Handshaking) para que un segundo
@@ -572,7 +745,7 @@ impl Session {
                     let _ = sm.transition(SessionEvent::Reconnect);
                     let _ = sm.transition(SessionEvent::StartAccept);
                     drop(sm);
-                    *self.peer.lock().await = None;
+                    self.book.lock().await.clear();
                 }
             }
         }
@@ -1260,7 +1433,8 @@ impl Session {
     // ── Handshake servidor abierto (acepta cualquier cliente) ───────────────
 
     /// Igual que `handshake_server` pero acepta el primer mensaje válido
-    /// (Noise o `ClientHello`) de cualquier dirección. Fija `self.peer`.
+    /// (Noise o `ClientHello`) de cualquier dirección. El peer queda registrado
+    /// en la agenda.
     async fn handshake_server_any(&self) -> Result<(), TransportError> {
         let allow_noise = cfg!(feature = "noise")
             && matches!(
@@ -1272,8 +1446,10 @@ impl Session {
             .wait_first_handshake_packet(None, allow_noise, allow_legacy)
             .await?;
 
-        // Fijar peer antes de proceder — desde aquí todo el tráfico va a esa dirección.
-        *self.peer.lock().await = Some(peer);
+        // Registrar el peer antes de proceder: desde aquí el tráfico se envía
+        // a esa dirección. En sala pueden registrarse más participantes
+        // después, mediante `register_peer`.
+        self.book.lock().await.insert(peer);
 
         match first {
             FirstHandshake::Noise(msg1) => {
@@ -1293,11 +1469,10 @@ impl Session {
                 return Err(TransportError::InvalidState("not active"));
             }
         }
-        let peer = self
-            .peer
-            .lock()
-            .await
-            .ok_or(TransportError::InvalidState("no peer"))?;
+        let targets = self.broadcast_targets().await;
+        if targets.is_empty() {
+            return Err(TransportError::InvalidState("no peer"));
+        }
 
         // audio_tx_seq es el contador exclusivo de frames de audio.  Se embebe
         // en los 4 primeros bytes del plaintext cifrado para que el jitter buffer
@@ -1349,15 +1524,21 @@ impl Session {
         let n = PacketBuilder::new(header, &wire_payload)
             .encode(&mut buf)
             .map_err(TransportError::Protocol)?;
-        let sent = self.transport.send_to(&buf[..n], peer).await?;
-        self.metrics.counters.record_sent(sent as u64);
-
-        // FEC: alimentar con el payload original (sin prefijo) usando audio_seq
-        // para que el seq_base del grupo sea contiguo con el jitter buffer.
-        let parity = self.fec_enc.lock().await.push(audio_seq, payload);
-        if let Some(parity) = parity {
-            let _ = self.send_fec_parity(parity, peer, sid).await;
+        let mut sent_total = 0u64;
+        let mut parity = {
+            let mut enc = self.fec_enc.lock().await;
+            enc.push(audio_seq, payload)
+        };
+        for p in targets {
+            let sent = self.transport.send_to(&buf[..n], p).await?;
+            sent_total += sent as u64;
+            // La paridad FEC se envía al mismo destino que el frame, para que
+            // cada peer pueda recuperar sus propias pérdidas.
+            if let Some(par) = parity.take() {
+                let _ = self.send_fec_parity(par, p, sid).await;
+            }
         }
+        self.metrics.counters.record_sent(sent_total);
 
         Ok(())
     }
@@ -1440,12 +1621,25 @@ impl Session {
             .await;
 
             match recv_res {
-                Ok(Ok((n, _))) => {
+                Ok(Ok((n, from))) => {
                     self.metrics.counters.record_received(n as u64);
                     if let Ok(view) = PacketView::decode(&buf[..n]) {
                         self.last_rx
                             .store(self.micros_since_epoch(), Ordering::Release);
-                        self.dispatch_packet(view, &buf[..n]).await?;
+                        // Un segundo participante puede pedir entrar en la sala
+                        // con un ClientHello/NoiseHello1. Aquí se promueve
+                        // porque este lazo es el único dueño del socket: si dos
+                        // tareas leyeran el mismo `Transport`, compartirían los
+                        // datagramas y se robarían audio.
+                        if let Some(first) = self.peek_new_peer(&view, from) {
+                            if self.promote_peer(first, from).await.is_err() {
+                                // Un handshake fallido no rompe la sesión: el
+                                // peer simplemente no se une.
+                                tracing::debug!(?from, "handshake de peer nuevo fallido");
+                            }
+                            continue;
+                        }
+                        self.dispatch_packet(view, &buf[..n], from).await?;
                     } else {
                         self.metrics.counters.record_integrity_error();
                     }
@@ -1465,7 +1659,7 @@ impl Session {
         )
         .await;
 
-        let (n, _from) = match recv_res {
+        let (n, from) = match recv_res {
             Ok(r) => r?,
             Err(_) => {
                 let st = self.state.lock().await.state();
@@ -1488,7 +1682,16 @@ impl Session {
         };
         self.last_rx
             .store(self.micros_since_epoch(), Ordering::Release);
-        self.dispatch_packet(view, &buf[..n]).await
+        // Misma detección que en `recv_audio`: un `ClientHello` desde una
+        // dirección nueva promueve a ese peer en la sala. Compartir la lógica en
+        // un helper evita que los dos lazos se comporten distinto.
+        if let Some(first) = self.peek_new_peer(&view, from) {
+            if self.promote_peer(first, from).await.is_err() {
+                tracing::debug!(?from, "handshake de peer nuevo fallido");
+            }
+            return Ok(());
+        }
+        self.dispatch_packet(view, &buf[..n], from).await
     }
 
     /// Despacha un paquete ya decodificado a su manejador correspondiente.
@@ -1496,15 +1699,38 @@ impl Session {
         &self,
         view: PacketView<'_>,
         raw_buf: &[u8],
+        from: SocketAddr,
     ) -> Result<(), TransportError> {
+        // El audio entrante se acepta de cualquier peer conocido: en sala son
+        // varios y todos deben poder oírse. Un datagrama de una dirección
+        // desconocida se ignora para no procesar ruido de red.
+        {
+            let book = self.book.lock().await;
+            if !book.contains(from) {
+                tracing::trace!(?from, "dropping datagram from unknown peer");
+                return Ok(());
+            }
+        }
+
         // Anti-replay: una vez establecidas las claves, cada secuencia sólo se
         // acepta una vez (ventana deslizante). Protege contra reinyección de
         // datagramas capturados y paquetes duplicados.
+        //
+        // La ventana es por emisor, no compartida: cada participante tiene su
+        // propio `tx_sequence`, así que una ventana común descartaría audio
+        // legítimo de los demás peers de la sala.
         if self.decrypt_key.lock().await.is_some() {
             let seq = view.header().sequence;
-            if !self.replay.lock().await.check_and_mark(seq) {
+            let accepted = {
+                let mut windows = self.replay_by_peer.lock().await;
+                windows
+                    .entry(from)
+                    .or_insert_with(ReplayWindow::new)
+                    .check_and_mark(seq)
+            };
+            if !accepted {
                 self.metrics.counters.record_replay_drop();
-                tracing::trace!(seq, "dropping replayed/stale packet");
+                tracing::trace!(seq, ?from, "dropping replayed/stale packet");
                 return Ok(());
             }
         }
@@ -1565,11 +1791,11 @@ impl Session {
                 }
             }
             Ok(MessageType::Heartbeat) => {
-                let peer = self.peer.lock().await;
-                if let Some(p) = *peer {
-                    self.send_control(MessageType::HeartbeatAck, self.session_id(), &[], p)
-                        .await?;
-                }
+                // Se responde al emisor (`from`), no al peer principal: en sala
+                // cada participante mantiene viva su propia ruta.
+                let sid = self.session_id();
+                self.send_control(MessageType::HeartbeatAck, sid, &[], from)
+                    .await?;
             }
             Ok(MessageType::HeartbeatAck) => {}
             Ok(MessageType::AudioFec) => {
@@ -1634,20 +1860,14 @@ impl Session {
                 // En modo P2P optimista, conceder el floor inmediatamente si no
                 // estamos transmitiendo nosotros. El árbitro real está en el relay.
                 if !self.ptt_active.load(Ordering::Acquire) {
-                    let peer = *self.peer.lock().await;
-                    if let Some(p) = peer {
-                        let ssrc = self.session_id();
-                        let mut payload_buf = [0u8; 4];
-                        payload_buf.copy_from_slice(&ssrc.to_be_bytes());
-                        let _ = self
-                            .send_control(
-                                MessageType::FloorGrant,
-                                self.session_id(),
-                                &payload_buf,
-                                p,
-                            )
-                            .await;
-                    }
+                    // El FloorGrant va al peer que lo pidió, no al principal:
+                    // en sala hay varios participantes pidiendo turno.
+                    let ssrc = self.session_id();
+                    let mut payload_buf = [0u8; 4];
+                    payload_buf.copy_from_slice(&ssrc.to_be_bytes());
+                    let _ = self
+                        .send_control(MessageType::FloorGrant, ssrc, &payload_buf, from)
+                        .await;
                 }
             }
             Ok(MessageType::FloorGrant) => {
@@ -1696,27 +1916,34 @@ impl Session {
         *self.encrypt_key.lock().await = None;
         *self.decrypt_key.lock().await = None;
 
-        let peer = *self.peer.lock().await;
-        if let Some(p) = peer {
+        // Avisar a todos los peers conocidos: en sala el CLOSE debe llegar a cada
+        // participante, no solo al principal.
+        for p in self.broadcast_targets().await {
             let _ = self
                 .send_control(MessageType::Close, self.session_id(), &[], p)
                 .await;
         }
         let mut sm = self.state.lock().await;
         let _ = sm.transition(SessionEvent::Close);
-        let _ = sm.transition(SessionEvent::Close);
         drop(sm);
+        self.book.lock().await.clear();
+        self.replay_by_peer.lock().await.clear();
         Ok(())
     }
 
+    /// Envía un heartbeat a cada peer conocido.
+    ///
+    /// En sala esto es lo que mantiene viva la ruta en el relay: `evict_idle`
+    /// borra las rutas sin tráfico tras `session_ttl_secs` (300 s), y con PTT
+    /// hay intervalos largos en silencio.
     async fn send_heartbeat(&self) -> Result<(), TransportError> {
-        let peer = *self.peer.lock().await;
-        let peer = match peer {
-            Some(p) => p,
-            None => return Ok(()),
-        };
-        self.send_control(MessageType::Heartbeat, self.session_id(), &[], peer)
-            .await
+        let sid = self.session_id();
+        for peer in self.broadcast_targets().await {
+            let _ = self
+                .send_control(MessageType::Heartbeat, sid, &[], peer)
+                .await;
+        }
+        Ok(())
     }
 
     async fn check_liveness(&self) -> Result<(), TransportError> {
