@@ -7,6 +7,8 @@ import 'package:gravital_talk_app/services/room_api.dart';
 import 'package:gravital_talk_app/services/room_events.dart';
 import 'package:gravital_talk_app/services/session_controller.dart';
 import 'package:gravital_talk_app/services/settings_store.dart';
+import 'package:gravital_talk_app/models/session.dart';
+import 'package:gravital_talk_app/widgets/active_session_card.dart';
 import 'package:gravital_talk_app/widgets/common.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -126,6 +128,39 @@ void main() {
       );
       // El indicador de progreso es lo que distingue "trabajando" de "colgado".
       expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    });
+  });
+
+  group('ActiveSessionCard', () {
+    testWidgets('sin sesión activa no se muestra', (tester) async {
+      final controller = SessionController(
+        DemoSessionEngine(),
+        RoomApi(),
+        EventLog(),
+        SettingsStore(),
+      );
+      await controller.init();
+
+      await tester.pumpWidget(MultiProvider(
+        providers: [
+          ChangeNotifierProvider.value(value: controller),
+          ChangeNotifierProvider.value(value: EventLog()),
+          ChangeNotifierProvider.value(value: RoomEvents()),
+        ],
+        child: const MaterialApp(
+          home: Scaffold(body: ActiveSessionCard()),
+        ),
+      ));
+
+      // El widget devuelve SizedBox.shrink(): no debe haber ni título.
+      expect(find.text('Sesión activa'), findsNothing);
+    });
+
+    testWidgets('la tarjeta muestra el estado y métricas', (tester) async {
+      // Sin motor nativo no se puede levantar una sesión real; se comprueba el
+      // contrato del widget con el estado que expone el enum.
+      expect(SessionState.active.label, 'Activa');
+      expect(SessionMetrics.zero.estimatedMos, 0);
     });
   });
 

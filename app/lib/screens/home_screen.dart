@@ -4,14 +4,13 @@ import 'package:provider/provider.dart';
 
 import '../core/states.dart';
 import '../core/tokens.dart';
-import '../models/connection.dart';
 import '../models/session.dart';
 import '../services/session_controller.dart';
+import '../widgets/active_session_card.dart';
 import '../widgets/common.dart';
 import 'about_screen.dart';
 import 'p2p_setup_screen.dart';
 import 'server_setup_screen.dart';
-import 'session_screen.dart';
 import 'settings_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -70,14 +69,8 @@ class _HomeScreenState extends State<HomeScreen> {
               .slideY(begin: 0.08, end: 0),
           const SizedBox(height: 16),
           if (c.isLive) ...[
-            FilledButton.icon(
-              onPressed: () => Navigator.push(context,
-                  MaterialPageRoute(builder: (_) => const SessionScreen())),
-              icon: const Icon(Icons.mic),
-              label: Text(
-                  'Ir a la sesión activa · ${c.roomCode ?? (c.mode == ConnectionMode.p2p ? 'P2P' : '')}'),
-            ),
-            const SizedBox(height: 16),
+            const ActiveSessionCard(),
+            const SizedBox(height: Spacing.lg),
           ],
           ModeCard(
             icon: Icons.dns_outlined,
