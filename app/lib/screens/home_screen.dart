@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
 
+import '../core/states.dart';
+import '../core/tokens.dart';
 import '../models/connection.dart';
 import '../models/session.dart';
 import '../services/session_controller.dart';
@@ -245,6 +247,13 @@ class _Hero extends StatelessWidget {
               ),
             ],
           ),
+          if (controller.engineKind == EngineKind.demo) ...[
+            const SizedBox(height: Spacing.md),
+            const WarningBanner(
+              message: 'Sin librería nativa: el audio es una simulación. '
+                  'Compila libgravital_talk_ffi para hablar de verdad.',
+            ),
+          ],
         ],
       ),
     );

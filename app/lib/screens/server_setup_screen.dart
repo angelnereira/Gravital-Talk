@@ -5,6 +5,8 @@ import 'package:provider/provider.dart';
 import 'package:toastification/toastification.dart';
 
 import '../core/constants.dart';
+import '../core/states.dart';
+import '../core/tokens.dart';
 import '../models/connection.dart';
 import '../services/session_controller.dart';
 import '../widgets/common.dart';
@@ -156,8 +158,12 @@ class _ServerSetupScreenState extends State<ServerSetupScreen> {
             ),
           ),
           if (c.error != null) ...[
-            const SizedBox(height: 12),
-            _ErrorBanner(message: c.error!),
+            const SizedBox(height: Spacing.md),
+            ErrorBanner(
+              message: c.error!,
+              onRetry: c.busy ? null : () => _connect(c),
+              onDismiss: () => c.clearError(),
+            ),
           ],
           if (hosting && c.roomCode != null && c.roomCode!.isNotEmpty) ...[
             const SizedBox(height: 16),
@@ -289,34 +295,6 @@ class _HostNote extends StatelessWidget {
                   .bodySmall
                   ?.copyWith(color: scheme.onSurfaceVariant),
             ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ErrorBanner extends StatelessWidget {
-  const _ErrorBanner({required this.message});
-
-  final String message;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: scheme.errorContainer,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        children: [
-          Icon(Icons.error_outline, color: scheme.onErrorContainer, size: 18),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(message,
-                style: TextStyle(color: scheme.onErrorContainer)),
           ),
         ],
       ),

@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../core/constants.dart';
+import '../core/states.dart';
+import '../core/tokens.dart';
 import '../models/connection.dart';
 import '../services/session_controller.dart';
 import '../widgets/common.dart';
@@ -147,15 +149,11 @@ class _P2pSetupScreenState extends State<P2pSetupScreen> {
             ),
           ),
           if (c.error != null) ...[
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: scheme.errorContainer,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Text(c.error!,
-                  style: TextStyle(color: scheme.onErrorContainer)),
+            const SizedBox(height: Spacing.md),
+            ErrorBanner(
+              message: c.error!,
+              onRetry: c.busy ? null : () => _connect(c),
+              onDismiss: () => c.clearError(),
             ),
           ],
           const SizedBox(height: 20),

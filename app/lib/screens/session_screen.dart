@@ -19,6 +19,26 @@ class SessionScreen extends StatelessWidget {
     return h > 0 ? '$h:$m:$s' : '$m:$s';
   }
 
+  /// Confirma antes de cortar: se pierde el audio en curso y no hay vuelta
+  /// atrás. Sin confirmación, un toque accidental en plena conversación
+  /// descuelga la sesión.
+  Future<void> _confirmEndSession(
+    BuildContext context,
+    SessionController c,
+  ) async {
+    final ok = await ConfirmDialog.show(
+      context,
+      title: 'Finalizar sesión',
+      message: 'Se cortará el audio en curso y se perderá la conexión. '
+          'Tendrás que emparejar de nuevo.',
+      confirmLabel: 'Finalizar',
+      destructive: true,
+    );
+    if (!ok || !context.mounted) return;
+    await c.reset();
+    if (context.mounted) Navigator.pop(context);
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = context.watch<SessionController>();
@@ -215,10 +235,7 @@ class SessionScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 20),
                 OutlinedButton.icon(
-                  onPressed: () async {
-                    await c.reset();
-                    if (context.mounted) Navigator.pop(context);
-                  },
+                  onPressed: () => _confirmEndSession(context, c),
                   icon: const Icon(Icons.call_end, color: Colors.red),
                   label: const Text('Finalizar sesión',
                       style: TextStyle(color: Colors.red)),

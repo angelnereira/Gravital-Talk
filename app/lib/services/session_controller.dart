@@ -97,6 +97,15 @@ class SessionController extends ChangeNotifier {
   // ── Modo servidor (sala) ────────────────────────────────────────────────
 
   /// Host: crea la sala en el relay y espera clientes.
+  /// Descarta el error visible.
+  ///
+  /// Sin esto, un error se quedaba en pantalla hasta el siguiente intento de
+  /// conexión: el usuario no podía ignorarlo y volver a ajustar los campos.
+  void clearError() {
+    _error = null;
+    notifyListeners();
+  }
+
   Future<bool> hostServer({String? roomCode}) async {
     final profile = _server;
     if (profile.host.isEmpty) {
