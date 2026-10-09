@@ -6,6 +6,7 @@ import '../core/states.dart';
 import '../core/tokens.dart';
 import '../models/connection.dart';
 import '../services/session_controller.dart';
+import '../services/validation.dart';
 import '../widgets/common.dart';
 import 'session_screen.dart';
 
@@ -48,6 +49,9 @@ class _P2pSetupScreenState extends State<P2pSetupScreen> {
     super.dispose();
   }
 
+  /// Error del campo del peer, mostrado en línea.
+  String? _peerError;
+
   void _persist(SessionController c) {
     c.updateP2pProfile(P2pProfile(
       host: _host.text.trim(),
@@ -57,6 +61,16 @@ class _P2pSetupScreenState extends State<P2pSetupScreen> {
   }
 
   Future<void> _connect(SessionController c) async {
+    // El peer sólo hace falta al unirse: al crear sala se espera a cualquiera.
+    if (_role == ConnectionRole.join) {
+      final peerError = validateHost(_host.text, fieldName: 'el peer');
+      if (peerError != null) {
+        setState(() => _peerError = peerError.message);
+        c.reportError(peerError.message);
+        return;
+      }
+    }
+
     _persist(c);
     final ok =
         _role == ConnectionRole.host ? await c.hostP2p() : await c.joinP2p();
@@ -134,6 +148,12 @@ class _P2pSetupScreenState extends State<P2pSetupScreen> {
                 ] else ...[
                   LabeledField(
                     label: 'IP o host del peer',
+                    errorText: _peerError,
+                    onChanged: (_) {
+                      if (_peerError != null) {
+                        setState(() => _peerError = null);
+                      }
+                    },
                     controller: _host,
                     hint: '192.168.1.42',
                     keyboardType: TextInputType.url,

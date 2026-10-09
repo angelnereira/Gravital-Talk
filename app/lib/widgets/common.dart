@@ -127,6 +127,8 @@ class LabeledField extends StatelessWidget {
     this.obscure = false,
     this.suffix,
     this.validator,
+    this.errorText,
+    this.onChanged,
   });
 
   final String label;
@@ -137,6 +139,12 @@ class LabeledField extends StatelessWidget {
   final Widget? suffix;
   final String? Function(String?)? validator;
 
+  /// Mensaje de error del campo, para mostrarlo en línea.
+  final String? errorText;
+
+  /// Se invoca al cambiar el texto, para poder limpiar el error anterior.
+  final ValueChanged<String>? onChanged;
+
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -146,7 +154,15 @@ class LabeledField extends StatelessWidget {
         keyboardType: keyboardType,
         obscureText: obscure,
         validator: validator,
-        decoration: InputDecoration(labelText: label, hintText: hint, suffix: suffix),
+        onChanged: onChanged,
+        autovalidateMode: AutovalidateMode.disabled,
+        decoration: InputDecoration(
+          labelText: label,
+          hintText: hint,
+          suffix: suffix,
+          errorText: errorText,
+          errorMaxLines: 2,
+        ),
       ),
     );
   }

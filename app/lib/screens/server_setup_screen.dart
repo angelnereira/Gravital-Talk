@@ -9,6 +9,7 @@ import '../core/states.dart';
 import '../core/tokens.dart';
 import '../models/connection.dart';
 import '../services/session_controller.dart';
+import '../services/validation.dart';
 import '../widgets/common.dart';
 import 'session_screen.dart';
 
@@ -49,6 +50,13 @@ class _ServerSetupScreenState extends State<ServerSetupScreen> {
     super.dispose();
   }
 
+  /// Error del campo de host, para mostrarlo bajo el campo y no en un banner
+  /// lejano.
+  String? _hostError;
+
+  /// Error del campo de código de sala.
+  String? _codeError;
+
   void _persist(SessionController c) {
     c.updateServerProfile(ServerProfile(
       host: _host.text.trim(),
@@ -61,6 +69,25 @@ class _ServerSetupScreenState extends State<ServerSetupScreen> {
   }
 
   Future<void> _connect(SessionController c) async {
+    // Validación local primero: un error de tecleo no debería llegar al
+    // handshake y devolver un mensaje genérico del transporte.
+    final hostError = validateHost(_host.text, fieldName: 'el servidor');
+    if (hostError != null) {
+      _hostError = hostError.message;
+      c.reportError(hostError.message);
+      setState(() {});
+      return;
+    }
+    if (_role == ConnectionRole.join) {
+      final codeError = validateRoomCode(_roomCode.text);
+      if (codeError != null) {
+        _codeError = codeError.message;
+        c.reportError(codeError.message);
+        setState(() {});
+        return;
+      }
+    }
+
     _persist(c);
     final ok = _role == ConnectionRole.host
         ? await c.hostServer()
@@ -97,7 +124,13 @@ class _ServerSetupScreenState extends State<ServerSetupScreen> {
               ),
             ],
             selected: {_role},
-            onSelectionChanged: (s) => setState(() => _role = s.first),
+            onSelectionChanged: (s) {
+              setState(() {
+                _role = s.first;
+                _hostError = null;
+                _codeError = null;
+              });
+            },
           ),
           const SizedBox(height: 16),
           SectionCard(
@@ -112,6 +145,12 @@ class _ServerSetupScreenState extends State<ServerSetupScreen> {
                   controller: _host,
                   hint: 'relay.ejemplo.com o 192.168.1.10',
                   keyboardType: TextInputType.url,
+                  errorText: _hostError,
+                  onChanged: (_) {
+                    if (_hostError != null) {
+                      setState(() => _hostError = null);
+                    }
+                  },
                 ),
                 Row(
                   children: [
@@ -137,6 +176,12 @@ class _ServerSetupScreenState extends State<ServerSetupScreen> {
                     label: 'Código de sala',
                     controller: _roomCode,
                     hint: 'GRVT-2847',
+                    errorText: _codeError,
+                    onChanged: (_) {
+                      if (_codeError != null) {
+                        setState(() => _codeError = null);
+                      }
+                    },
                     suffix: _canScanQr
                         ? IconButton(
                             icon: const Icon(Icons.qr_code_scanner),

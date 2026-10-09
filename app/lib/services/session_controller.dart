@@ -97,6 +97,15 @@ class SessionController extends ChangeNotifier {
   // ── Modo servidor (sala) ────────────────────────────────────────────────
 
   /// Host: crea la sala en el relay y espera clientes.
+  /// Publica un error de validación local sin tocar la sesión.
+  ///
+  /// Antes una validación local no tenía dónde mostrarse si la pantalla aún no
+  /// había llamado a `_guard`, que es quien fija `_error`.
+  void reportError(String message) {
+    _error = message;
+    notifyListeners();
+  }
+
   /// Descarta el error visible.
   ///
   /// Sin esto, un error se quedaba en pantalla hasta el siguiente intento de
