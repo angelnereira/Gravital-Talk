@@ -4,6 +4,21 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
 
 ## [Unreleased]
 
+### Changed
+
+**Los binarios salen de git**
+- Los APKs se commiteaban en `outputs/` en cada push. Cada uno pesa ~72 MB y el
+  historial había acumulado 11 builds: **772 MB** de binarios, con el aviso
+  GH001 de GitHub. El clon tardaba minutos y el repo crecía sin límite.
+- `outputs/` pasa al `.gitignore` (con excepción para su `README.md` y su
+  `.gitignore`). Se conservan en disco el APK actual y el anterior para
+  rollback, ya fuera de git.
+- `build-outputs.yml`: los cuatro jobs (Android, Linux, macOS, Windows) ya
+  subían el binario como artefacto del run y además lo commiteaban. Se quita el
+  commit; el artefacto pasa a ser la vía única de descarga.
+- El historial de `main` y de las ramas se reescribió para eliminar `outputs/`
+  (por eso los nuevos SHAs no se parecen a los antiguos y el push fue forzado).
+
 ### Added
 
 **Contrato de emparejamiento con código TOTP (`gravital_talk_transport::pairing`)**
