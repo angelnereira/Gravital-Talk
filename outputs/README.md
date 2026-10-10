@@ -1,7 +1,30 @@
 # Outputs — Builds distribuibles de Gravital Talk
 
-Este directorio contiene los binarios y APKs construidos automáticamente
-por CI en cada push que afecta al código compilable.
+Este directorio contiene los binarios y APKs construidos localmente con
+`./scripts/build-apk.sh` o por CI. **Los binarios no se versionan en git**:
+viven en disco durante el desarrollo y se publican como ficheros descargables
+en el release [Builds](https://github.com/angelnereira/Gravital-Talk/releases/tag/builds).
+
+## Descargar para probar en el móvil
+
+El release `builds` mantiene dos ficheros con nombres fijos, así que el enlace
+para bajar desde el móvil no cambia nunca:
+
+| Fichero | Para qué |
+|---|---|
+| `gravital-talk-latest.apk` | El último build. Este es el que hay que instalar. |
+| `gravital-talk-previous.apk` | El anterior, para volver atrás si algo va mal. |
+
+```
+https://github.com/angelnereira/Gravital-Talk/releases/download/builds/gravital-talk-latest.apk
+```
+
+Va sin firmar: Android pide permiso para instalar desde fuentes desconocidas.
+Se firma al publicar, no durante el desarrollo.
+
+El workflow (`build-outputs.yml`) actualiza ese release solo en cada build:
+antes de subir el APK nuevo, el actual pasa a `previous.apk` y los ficheros
+viejos se borran. En el release nunca hay más de dos.
 
 ## Estructura
 

@@ -104,13 +104,51 @@ jobs:
       # El binario NO se commitea. Commitear un APK de ~72 MB en cada push
       # dejo el historial en 772 MB (11 builds) y GitHub avisa con GH001; el
       # repo queda pesado para clonar y acaba chocando con limites de tamano.
-      # El APK se sube como artefacto del run, que es donde se descarga.
+      #
+      # Se sube al release "Builds" con nombres fijos: asi el enlace para
+      # descargar desde el movil no cambia nunca. Antes de subir el nuevo,
+      # el actual pasa a `gravital-talk-previous.apk` para tener uno al que
+      # volver si algo va mal; los mas antiguos se borran solos, que es la
+      # forma de no acumular 11 APKs como paso antes.
       - name: Upload APK as artifact
         uses: actions/upload-artifact@v4
         with:
           name: android-debug-${{ github.sha }}
           path: outputs/android/debug/${{ env.APK_FILENAME }}
           retention-days: 30
+
+      - name: Upload APK to the Builds release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          APK="outputs/android/debug/${APK_FILENAME}"
+          TAG=builds
+
+          # El release puede no existir todavia; si no, se crea.
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "Builds" \
+              --notes "Builds de prueba. Descarga gravital-talk-latest.apk en el movil."
+          fi
+
+          # Bajar el APK actual antes de sobrescribirlo: sera el de rollback.
+          if gh release view "$TAG" --json assets \
+               --jq '.assets[].name' | grep -q '^gravital-talk-latest.apk$'; then
+            gh release download "$TAG" --pattern 'gravital-talk-latest.apk' \
+              --output rollback.apk --clobber
+            gh release upload "$TAG" 'rollback.apk#gravital-talk-previous.apk' --clobber
+          fi
+
+          # Subir el nuevo como actual.
+          gh release upload "$TAG" "${APK}#gravital-talk-latest.apk" --clobber
+
+          # No dejar restos: el release solo guarda los dos ficheros.
+          gh release view "$TAG" --json assets --jq '.assets[].name' \
+            | grep -vE '^(gravital-talk-latest|gravital-talk-previous)\.apk$' \
+            | while read -r old; do
+                echo "Descartando ${old}"
+                gh release delete-asset "$TAG" "$old" --yes
+              done
 
       - name: Build summary
         run: |

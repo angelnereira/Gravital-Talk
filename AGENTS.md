@@ -145,13 +145,30 @@ instalable, para poder probar cualquier cambio sin compilar nada.
 ```
 
 El script compila las libs nativas para las 3 ABIs, construye el APK y lo deja en
-`outputs/android/<perfil>/` con su `LATEST.txt`. Para probarlo:
+`outputs/android/<perfil>/` con su `LATEST.txt`. Para probarlo en local:
 
 ```bash
 LATEST=$(cat outputs/android/release/LATEST.txt)
 adb install -r "outputs/android/release/$LATEST"
 adb shell am start -n dev.gravitaltalk.gravital_talk_app/.MainActivity
 ```
+
+**Las builds no se versionan en git** (`outputs/` está en el `.gitignore`), así que el APK
+de un commit concreto sólo existe en la máquina que lo construyó. Para que se pueda
+descargar desde el móvil, el CI lo publica en el release `builds` con dos nombres fijos:
+
+| Fichero | Para qué |
+|---|---|
+| `gravital-talk-latest.apk` | El último build. Este es el que hay que instalar. |
+| `gravital-talk-previous.apk` | El anterior, para volver atrás si algo va mal. |
+
+```
+https://github.com/angelnereira/Gravital-Talk/releases/download/builds/gravital-talk-latest.apk
+```
+
+El release los actualiza el workflow: el actual pasa a `previous.apk` antes de subir el
+nuevo y los antiguos se borran, así nunca se acumulan. Un build local no se sube solo:
+para publicarlo hay que subirlo a mano con `gh release upload`.
 
 Requisitos que la máquina de desarrollo necesita una sola vez:
 
