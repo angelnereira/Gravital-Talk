@@ -69,16 +69,23 @@ abstract final class GravitalPalette {
   /// Fondo base. Casi negro, con matiz azul frío.
   static const surfaceDark = Color(0xFF070B10);
 
-  /// Superficie elevada (tarjetas). Δlum 1.30x vs fondo.
+  /// Superficie elevada (tarjetas). ΔL* 22.3 vs fondo.
   ///
-  /// Es el que hace el trabajo: es el que separa la tarjeta del fondo.
-  static const surfaceContainerDark = Color(0xFF1C2733);
+  /// El valor que estaba aquí (`#1C2733`) sólo llegaba a ΔL* 12.2, por debajo
+  /// del umbral (~20) en el que dos superficies se leen como objetos
+  /// distintos. Se midió con ΔL* de CIELAB y no con ratio WCAG precisamente
+  /// por eso: el ratio WCAG predice legibilidad de texto, no separación de
+  /// superficies, y por eso el cambio anterior apenas se notó.
+  ///
+  /// Las tarjetas tienen que ser **gris medio**, no oscuras sobre oscuras.
+  /// Es lo que hace la referencia de Pixel.
+  static const surfaceContainerDark = Color(0xFF303D4B);
 
-  /// Superficie aún más elevada (diálogos, hojas). Δlum 1.16x.
-  static const surfaceContainerHighDark = Color(0xFF25323F);
+  /// Superficie aún más elevada (diálogos, hojas). ΔL* 25.4 vs fondo.
+  static const surfaceContainerHighDark = Color(0xFF3A4859);
 
-  /// Superficie de máximo nivel (chips, campos). Δlum 1.19x.
-  static const surfaceContainerHighestDark = Color(0xFF2E3E4C);
+  /// Superficie de máximo nivel (chips, campos). ΔL* 28.3 vs fondo.
+  static const surfaceContainerHighestDark = Color(0xFF445363);
 
   /// Borde de tarjeta. Blanco al 12 % sobre la tarjeta.
   ///
@@ -93,9 +100,9 @@ abstract final class GravitalPalette {
 
   /// Texto secundario en oscuro.
   ///
-  /// Subido respecto al `#9AAAB8` anterior: 8.33:1 sobre la tarjeta nueva. El
-  /// valor antiguo pasaba AA pero se leía apagado.
-  static const onSurfaceVariantDark = Color(0xFFB3C2D1);
+  /// Sobre la tarjeta nueva da 6.10:1. El fondo ahora es más claro, así que
+  /// este valor ha tenido que subir para mantener la separación.
+  static const onSurfaceVariantDark = Color(0xFFCBD7E2);
 
   // ── Superficies: modo claro ────────────────────────────────────────────
   //

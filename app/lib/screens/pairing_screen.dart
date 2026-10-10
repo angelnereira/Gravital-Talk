@@ -266,11 +266,22 @@ class _PairingScreenState extends State<PairingScreen> {
       ));
     }
 
-    setState(() => _joining = true);
-    // Conexión directa al endpoint del anfitrión. Sin relay de por medio: los
-    // dos dispositivos se hablan, que es lo que el protocolo siempre hizo.
-    final endpoint = parsed?.host ?? c.server.host;
+    // El destino sale del QR si lo trae; si no, del escrito a mano. Se comprueba
+    // que no esté vacío: `??` no captura la cadena vacía, y conectar a ""
+    // llega al motor nativo como argumento inválido (NativeException -2).
+    final scannedHost = parsed?.host.trim() ?? '';
+    final endpoint = scannedHost.isNotEmpty ? scannedHost : c.server.host.trim();
+    if (endpoint.isEmpty) {
+      c.reportError(
+        'El QR no lleva la dirección del anfitrión. Pídele que comparta el '
+        'código o vuelve a generarlo.',
+      );
+      setState(() => _joining = false);
+      return;
+    }
     final port = parsed?.udpPort ?? c.server.udpPort;
+
+    setState(() => _joining = true);
     final ok = await c.joinEndpoint(endpoint, port);
     if (!mounted) return;
     setState(() => _joining = false);
@@ -341,10 +352,44 @@ class _PairingScreenState extends State<PairingScreen> {
     await c.disconnect();
   }
 
-  PairingUri _pairingUri(SessionController c) => PairingUri(
-        host: c.server.host,
-        room: c.roomCode ?? '',
-        udpPort: c.server.udpPort,
-        token: c.server.token,
-      );
+  /// URI de emparejamiento con lo que el anfitrión debe compartir.
+  ///
+  /// El `host` sale de `publicEndpoint` —la IP pública que STUN vio para el
+  /// anfitrión— y no de `c.server.host`, que es la dirección del relay y está
+  /// vacía al crear una sala. Con el campo vacío el QR salía sin destino y el
+  /// invitado fallaba con "argumento inválido" al intentar conectar a "".
+  PairingUri _pairingUri(SessionController c) {
+    final endpoint = c.publicEndpoint;
+    final (host, port) = _splitEndpoint(endpoint, c.server.udpPort);
+    return PairingUri(
+      host: host,
+      room: c.roomCode ?? '',
+      udpPort: port,
+      token: c.server.token,
+    );
+  }
+
+  /// Parte un endpoint `ip:puerto` (o `[ipv6]:puerto`).
+  ///
+  /// Si el endpoint no trae puerto se devuelve el de por defecto.
+  (String, int) _splitEndpoint(String endpoint, int fallbackPort) {
+    final text = endpoint.trim();
+    if (text.isEmpty) return ('', fallbackPort);
+
+    // IPv6 va entre corchetes.
+    if (text.startsWith('[')) {
+      final end = text.indexOf(']');
+      if (end > 0) {
+        final host = text.substring(1, end);
+        final port = int.tryParse(text.substring(end + 2)) ?? fallbackPort;
+        return (host, port);
+      }
+    }
+
+    final idx = text.lastIndexOf(':');
+    if (idx <= 0 || idx == text.length - 1) return (text, fallbackPort);
+    final port = int.tryParse(text.substring(idx + 1));
+    if (port == null) return (text, fallbackPort);
+    return (text.substring(0, idx), port);
+  }
 }
