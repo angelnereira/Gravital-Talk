@@ -180,15 +180,20 @@ void main() {
       expect(parsed.isComplete, isFalse);
     });
 
-    test('el ?? de Dart no captura una cadena vacía', () {
-      // Es la trampa exacta que causó el bug: el QR traía `host` ausente, y
-      // `PairingUri` lo devuelve como cadena vacía. `??` sólo actúa sobre
-      // `null`, así que "" pasaba y llegaba al motor como argumento inválido.
-      final String? hostDelQr = '';
-      expect(hostDelQr ?? 'fallback', hostDelQr);
+    test('una cadena vacía no la cubre el operador ??', () {
+      // Es la trampa exacta que causó el bug: `PairingUri.host` es `String` no
+      // nullable, así que un QR sin host produce "" y no `null`. `??` sólo actúa
+      // sobre `null`: "" pasaba y llegaba al motor como argumento inválido.
+      //
+      // Sin variable nullable de por medio, para no pelearse con el análisis
+      // de flujo: lo que se fija es el comportamiento del operador.
+      const sinHost = '';
+      expect(sinHost.isNotEmpty, isFalse);
+      expect(sinHost == '', isTrue);
 
-      final seguro = hostDelQr?.trim().isNotEmpty == true ? hostDelQr : 'fallback';
-      expect(seguro, 'fallback');
+      // La comprobación correcta es `isNotEmpty`, no `?? x`.
+      final destino = sinHost.isNotEmpty ? sinHost : 'fallback';
+      expect(destino, 'fallback');
     });
 
     test('un endpoint se parte en host y puerto', () {

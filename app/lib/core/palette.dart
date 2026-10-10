@@ -67,7 +67,7 @@ abstract final class GravitalPalette {
   // Cada paso se midió con el ratio de contraste WCAG entre superficies:
 
   /// Fondo base. Casi negro, con matiz azul frío.
-  static const surfaceDark = Color(0xFF070B10);
+  static const surfaceDark = Color(0xFF050F0D);
 
   /// Superficie elevada (tarjetas). ΔL* 22.3 vs fondo.
   ///
@@ -79,13 +79,24 @@ abstract final class GravitalPalette {
   ///
   /// Las tarjetas tienen que ser **gris medio**, no oscuras sobre oscuras.
   /// Es lo que hace la referencia de Pixel.
-  static const surfaceContainerDark = Color(0xFF303D4B);
+  static const surfaceContainerDark = Color(0xFF2A423D);
 
   /// Superficie aún más elevada (diálogos, hojas). ΔL* 25.4 vs fondo.
-  static const surfaceContainerHighDark = Color(0xFF3A4859);
+  static const surfaceContainerHighDark = Color(0xFF3A5953);
 
   /// Superficie de máximo nivel (chips, campos). ΔL* 28.3 vs fondo.
-  static const surfaceContainerHighestDark = Color(0xFF445363);
+  static const surfaceContainerHighestDark = Color(0xFF456A63);
+
+  /// Borde de tarjeta. Blanco al 12 % sobre la tarjeta, tintado de teal.
+
+  /// Chroma de las superficies (color propio, 0-255).
+  ///
+  /// El problema que corrige: con las superficies en azul-gris neutro, el color
+  /// sólo vivía en los iconos y el texto, y la app se leía plana pese a tener
+  /// buen contraste. Material 3 resuelve esto con *surface tint*: cada nivel de
+  /// elevación arrastra un poco del tono de marca. Medido, la tarjeta pasa de
+  /// croma 20 a 24 sin perder separación (ΔL* sigue en 22.3).
+  static const surfaceChromaDark = 24;
 
   /// Borde de tarjeta. Blanco al 12 % sobre la tarjeta.
   ///
