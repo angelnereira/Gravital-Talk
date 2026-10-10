@@ -8,35 +8,132 @@ El modo de emparejamiento por QR/código resuelve esto: el host genera un códig
 
 ---
 
-## Estrategia de conectividad progresiva
+## Estrategia de conectividad
 
-```
-QR contiene: { lan_addr, public_addr, relay_url? }
+La invitación lleva **varias direcciones candidatas** del anfitrión y,
+opcionalmente, un servidor de encuentro. El invitado no las prueba en orden:
+sonda todas a la vez y conecta por la primera que contesta.
 
-Cliente intenta en orden:
-  1. LAN directa   → timeout 2 s   (~100% en misma WiFi)
-  2. Internet P2P  → timeout 5 s   (~85% con STUN, NAT cono)
-  3. Relay         → timeout 10 s  (100% si URL presente en QR)
-```
+| Situación | Camino | Qué hace falta |
+|---|---|---|
+| Misma red | Dirección local (`host`) | Nada |
+| Redes distintas, anfitrión alcanzable desde fuera (IP pública, puerto reenviado) | Dirección pública (`pub`) | Nada |
+| Redes distintas, ambos tras NAT | Dirección pública, tras perforar | Servidor de encuentro (`rv`) |
+| Los dos lados con NAT simétrico | Ninguno directo | Que el relay reenvíe el audio (no automático todavía) |
 
-Para NAT simétrico (corporate, CGNAT estricto) se requiere relay. El relay es opcional y se incluye en el QR solo si el host lo configura.
+Entre dos caminos que contestan se prefiere el local: se le dan 150 ms de
+margen frente a uno público que haya contestado antes.
 
 ---
 
 ## URI canónica del QR
 
 ```
-gravital-talk://pair?v=1&lan=192.168.1.5:49127&pub=203.0.113.45:49127&relay=relay.example.com:9000
+gravital-talk://pair?v=1&host=192.168.0.13&room=GRVT-A3F2&udp=40958&token=…&pub=203.0.113.45:40958&rv=relay.example.com:9000
 ```
 
 | Parámetro | Descripción | Obligatorio |
 |-----------|-------------|-------------|
 | `v` | Versión del formato (actualmente `1`) | Sí |
-| `lan` | IP local + puerto UDP de la sesión | Sí |
-| `pub` | IP pública + puerto (descubierta por STUN) | No |
-| `relay` | Host:port del relay (fallback) | No |
+| `host` | IP del anfitrión en su red local | Sí |
+| `room` | Código de sala legible (`XXXX-NNNN`) | Sí |
+| `udp` | Puerto UDP real del socket de la sala | Sí |
+| `token` | Secreto de la sala (PSK de Noise) | Sí en salas creadas por la app |
+| `pub` | `ip:puerto` público de **ese mismo socket**, visto por STUN | No |
+| `rv` | `host:puerto` del servidor de encuentro que usa el anfitrión | No |
 
-El QR se puede escanear con la cámara del teléfono o leer como texto. El código corto `GRVT-XXXX` es el handle en hex, útil para conexiones vía relay cuando se tiene el relay configurado.
+`pub` y `rv` son aditivos: un cliente anterior los ignora y conecta por
+`host:udp` como antes. `rv` viaja en la invitación para que el invitado no
+tenga que configurar nada: los dos tienen que registrarse en el mismo servidor.
+
+---
+
+## Perforación de NAT
+
+Implementado en `crates/gravital-talk-transport/src/rendezvous.rs` (protocolo
+y registro del servidor) y `session.rs` (`select_path`, `handshake_any` y el
+lazo de espera del anfitrión). El servidor corre dentro de `gs-relay`, en su
+puerto UDP.
+
+### Por qué hace falta un servidor
+
+Un NAT sólo deja entrar lo que responde a algo que salió antes. Para que el
+paquete del invitado entre, el anfitrión tiene que haber enviado uno hacia la
+dirección pública del invitado, y no tiene de dónde sacarla: el QR sólo viaja
+de anfitrión a invitado. El servidor de encuentro cubre ese hueco y nada más:
+**no reenvía audio y no conoce el token de la sala**.
+
+### Secuencia
+
+```
+Anfitrión (tras NAT A)        Servidor de encuentro        Invitado (tras NAT B)
+   │── REGISTER(clave) ──────────►│                                │
+   │◄── PEERS(tú=A, otros=[]) ────│                                │
+   │        (cada 250 ms)         │◄────────── REGISTER(clave) ────│
+   │                              │── PEERS(tú=B, otros=[A]) ─────►│
+   │── REGISTER ─────────────────►│                                │
+   │◄── PEERS(tú=A, otros=[B]) ───│                                │
+   │── PUNCH ──────────────────────────────── (abre NAT A hacia B) │
+   │◄─────────────────────────────────────────────────── PUNCH ────│
+   │── PUNCH_ACK ─────────────────────────────────────────────────►│
+   │◄══════════ handshake Noise y audio, directo ═════════════════►│
+```
+
+La clave de sala es `SHA-256("gravital-talk/rendezvous/v1\0" ‖ token)[..16]`:
+empareja a quienes tienen el mismo token sin revelarlo, y el prefijo la separa
+del PSK de Noise.
+
+### Formato
+
+Fuera del formato de paquete de Gravital Talk: son mensajes previos a la
+sesión y los contesta un servidor que no participa en ella.
+
+```
+"GTRV" (4) | versión (1) | tipo (1) | clave de sala (16) | cuerpo
+```
+
+| Tipo | Código | Sentido | Cuerpo |
+|---|---|---|---|
+| `REGISTER` | 1 | extremo → servidor | relleno hasta 128 B |
+| `PEERS` | 2 | servidor → extremo | dirección de quien pregunta, nº de peers (1), sus direcciones |
+| `PUNCH` | 3 | extremo → extremo | nonce (8) |
+| `PUNCH_ACK` | 4 | extremo → extremo | el mismo nonce |
+
+Una dirección es `familia (1: 4 ó 6) | IP (4 ó 16) | puerto (2, big-endian)`.
+
+### Defensas
+
+- **Sin amplificación.** `REGISTER` va rellenado a 128 B y `PEERS` nunca los
+  supera (4 peers IPv6 como mucho). Un `REGISTER` más corto no se contesta.
+- **Sólo se responde a quien pregunta.** El servidor no envía nada a los demás
+  registrados; se enteran en su siguiente `REGISTER`.
+- **Las sondas llevan la clave de la sala.** Un extremo no contesta `PUNCH` de
+  quien no la conoce.
+- **Acotado.** 4 peers por sala, registros de 30 s, tope de salas igual a
+  `max_sessions` del relay, y el limitador por IP del relay aplica antes.
+- Nada de esto autentica: quien conecta lo demuestra después, en el handshake
+  Noise con el token.
+
+### Límites conocidos
+
+- **NAT simétrico en los dos lados**: no hay perforación posible. Con uno
+  solo suele funcionar, porque el otro extremo aprende la dirección real del
+  `PUNCH` que le llega (siempre que su NAT no filtre por puerto).
+- **Routers que aceptan tráfico no solicitado en su IP pública** en vez de
+  descartarlo: conntrack da por buena la conexión entrante y al salir después
+  el equipo de dentro le cambia el puerto. Reproducible con
+  `PERMISSIVE_INPUT=1 scripts/nat-sim.sh`. El cortafuegos por defecto de un
+  router doméstico lo descarta y no ocurre.
+- **Sin relevo automático al relay** cuando la perforación falla.
+
+### Verificación
+
+| Qué | Dónde |
+|---|---|
+| Protocolo, registro y anti-amplificación | tests de `rendezvous.rs` |
+| Perforación con NAT cono, simétrico y filtrado por IP o por puerto (red simulada) | `crates/gravital-talk-transport/tests/nat_punch.rs` |
+| Servidor de encuentro del relay sobre UDP real | `crates/gravital-talk-relay/tests/rendezvous.rs` |
+| NAT real del kernel (namespaces + iptables), con control negativo | `make nat-sim` |
 
 ---
 

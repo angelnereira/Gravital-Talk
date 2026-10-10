@@ -1,0 +1,358 @@
+//! Perforación de NAT sobre una red simulada.
+//!
+//! La red de estos tests reproduce lo que hace un router doméstico: cada
+//! extremo sale por una dirección pública, y sólo le llega lo que viene de un
+//! destino al que él ha enviado antes. Con eso se puede comprobar, sin
+//! depender de ninguna red real, las tres cosas que importan:
+//!
+//! - que sin servidor de encuentro dos extremos tras NAT **no** conectan (el
+//!   control: si esto pasara, el simulador no estaría filtrando nada);
+//! - que con él sí, y que después circula audio cifrado;
+//! - qué pasa cuando un lado tiene NAT simétrico.
+
+#![cfg(feature = "noise")]
+
+use std::collections::{HashMap, HashSet};
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use async_trait::async_trait;
+use gravital_talk_transport::rendezvous::Registry;
+use gravital_talk_transport::{Config, Session, Transport, TransportError};
+use tokio::sync::mpsc;
+use tokio::time::timeout;
+
+type Datagram = (Vec<u8>, SocketAddr);
+
+/// Cómo asigna el NAT la dirección pública de un extremo.
+#[derive(Clone, Copy, PartialEq)]
+enum Mapping {
+    /// Sin NAT: la dirección pública es la propia (un servidor).
+    Open,
+    /// El mismo puerto público para cualquier destino (lo habitual en casa).
+    Cone,
+    /// Un puerto público distinto por destino (CGNAT estricto).
+    Symmetric,
+}
+
+/// Qué deja entrar el NAT.
+#[derive(Clone, Copy, PartialEq)]
+enum Filter {
+    /// Sólo de la IP **y puerto** a los que se envió antes.
+    PortRestricted,
+    /// De cualquier puerto de una IP a la que se envió antes.
+    AddressRestricted,
+}
+
+struct Node {
+    inbox: mpsc::UnboundedSender<Datagram>,
+    mapping: Mapping,
+    filter: Filter,
+    /// Dirección pública base (con `Symmetric`, sólo la IP es estable).
+    public: SocketAddr,
+    /// Destinos a los que este extremo ha enviado: lo que su NAT deja volver.
+    sent_to: HashSet<SocketAddr>,
+    /// Puertos públicos asignados por destino (sólo `Symmetric`).
+    ports: HashMap<SocketAddr, u16>,
+}
+
+/// "Internet": entrega datagramas aplicando el NAT de cada extremo.
+#[derive(Default)]
+struct Net {
+    nodes: Mutex<Vec<Node>>,
+}
+
+impl Net {
+    fn join(self: &Arc<Self>, public: &str, mapping: Mapping, filter: Filter) -> Arc<NatTransport> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let mut nodes = self.nodes.lock().unwrap();
+        nodes.push(Node {
+            inbox: tx,
+            mapping,
+            filter,
+            public: public.parse().unwrap(),
+            sent_to: HashSet::new(),
+            ports: HashMap::new(),
+        });
+        Arc::new(NatTransport {
+            net: self.clone(),
+            id: nodes.len() - 1,
+            inbox: tokio::sync::Mutex::new(rx),
+        })
+    }
+
+    fn deliver(&self, from: usize, bytes: &[u8], dest: SocketAddr) {
+        let mut nodes = self.nodes.lock().unwrap();
+
+        // Dirección con la que sale este datagrama.
+        let sender = &mut nodes[from];
+        sender.sent_to.insert(dest);
+        let source = match sender.mapping {
+            Mapping::Open | Mapping::Cone => sender.public,
+            Mapping::Symmetric => {
+                let next = sender.public.port() + 1 + sender.ports.len() as u16;
+                let port = *sender.ports.entry(dest).or_insert(next);
+                SocketAddr::new(sender.public.ip(), port)
+            }
+        };
+
+        // A quién pertenece la dirección de destino.
+        let target = nodes.iter().position(|n| match n.mapping {
+            Mapping::Open | Mapping::Cone => n.public == dest,
+            Mapping::Symmetric => {
+                n.public.ip() == dest.ip() && n.ports.values().any(|p| *p == dest.port())
+            }
+        });
+        let Some(target) = target else { return };
+        let node = &nodes[target];
+
+        let allowed = match (node.mapping, node.filter) {
+            (Mapping::Open, _) => true,
+            // Un NAT simétrico sólo acepta en cada puerto al destino para el
+            // que lo abrió.
+            (Mapping::Symmetric, _) => node.ports.get(&source) == Some(&dest.port()),
+            (Mapping::Cone, Filter::PortRestricted) => node.sent_to.contains(&source),
+            (Mapping::Cone, Filter::AddressRestricted) => {
+                node.sent_to.iter().any(|a| a.ip() == source.ip())
+            }
+        };
+        if allowed {
+            let _ = node.inbox.send((bytes.to_vec(), source));
+        }
+        drop(nodes);
+    }
+}
+
+struct NatTransport {
+    net: Arc<Net>,
+    id: usize,
+    inbox: tokio::sync::Mutex<mpsc::UnboundedReceiver<Datagram>>,
+}
+
+impl NatTransport {
+    fn public(&self) -> SocketAddr {
+        self.net.nodes.lock().unwrap()[self.id].public
+    }
+}
+
+#[async_trait]
+impl Transport for NatTransport {
+    async fn send(&self, _bytes: &[u8]) -> Result<usize, TransportError> {
+        Err(TransportError::InvalidState("sin peer por defecto"))
+    }
+
+    async fn send_to(&self, bytes: &[u8], dest: SocketAddr) -> Result<usize, TransportError> {
+        self.net.deliver(self.id, bytes, dest);
+        Ok(bytes.len())
+    }
+
+    async fn recv(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr), TransportError> {
+        let (data, from) = self
+            .inbox
+            .lock()
+            .await
+            .recv()
+            .await
+            .ok_or(TransportError::Closed)?;
+        buf[..data.len()].copy_from_slice(&data);
+        Ok((data.len(), from))
+    }
+
+    fn local_addr(&self) -> Result<SocketAddr, TransportError> {
+        Ok(self.public())
+    }
+
+    async fn close(&self) -> Result<(), TransportError> {
+        Ok(())
+    }
+}
+
+const SERVER: &str = "198.51.100.1:9000";
+const TOKEN: &str = "secreto-de-la-sala";
+
+/// Arranca un servidor de encuentro en la red simulada.
+fn spawn_rendezvous(net: &Arc<Net>) -> SocketAddr {
+    let transport = net.join(SERVER, Mapping::Open, Filter::PortRestricted);
+    let registry = Registry::new(64);
+    tokio::spawn(async move {
+        let mut buf = [0u8; 1500];
+        while let Ok((n, from)) = transport.recv(&mut buf).await {
+            if let Some(reply) = registry.handle(&buf[..n], from) {
+                let _ = transport.send_to(&reply, from).await;
+            }
+        }
+    });
+    SERVER.parse().unwrap()
+}
+
+fn session(transport: Arc<NatTransport>, rendezvous: Option<SocketAddr>) -> Arc<Session> {
+    let s = Session::new(
+        transport,
+        Config {
+            frame_duration_ms: 10,
+            ..Config::default()
+        },
+    );
+    s.set_room_token(Some(TOKEN.into()));
+    s.set_rendezvous(rendezvous);
+    Arc::new(s)
+}
+
+/// Anfitrión esperando + invitado conectando. Devuelve el resultado del
+/// invitado y, si conectó, las dos sesiones ya activas.
+async fn pair(
+    host_t: Arc<NatTransport>,
+    guest_t: Arc<NatTransport>,
+    rendezvous: Option<SocketAddr>,
+    candidates: Vec<SocketAddr>,
+) -> (Result<(), TransportError>, Arc<Session>, Arc<Session>) {
+    let host = session(host_t, rendezvous);
+    let guest = session(guest_t, rendezvous);
+    let accepting = {
+        let host = host.clone();
+        tokio::spawn(async move { host.handshake_open().await })
+    };
+    let joined = timeout(Duration::from_secs(20), guest.handshake_any(&candidates))
+        .await
+        .expect("el invitado no debe colgarse");
+    if joined.is_ok() {
+        timeout(Duration::from_secs(5), accepting)
+            .await
+            .expect("el anfitrión debe terminar")
+            .unwrap()
+            .expect("handshake del anfitrión");
+    } else {
+        host.close().await.ok();
+    }
+    (joined, host, guest)
+}
+
+/// Un frame de ida y otro de vuelta por el camino perforado.
+async fn assert_audio_flows(host: &Session, guest: &Session) {
+    let frame = vec![0x5Au8; 960];
+    guest.send_audio(&frame).await.expect("invitado envía");
+    let got = timeout(Duration::from_secs(3), host.recv_audio())
+        .await
+        .expect("el anfitrión debe recibir")
+        .expect("recv");
+    assert_eq!(&got.payload[..], &frame[..]);
+
+    host.send_audio(&frame).await.expect("anfitrión envía");
+    let got = timeout(Duration::from_secs(3), guest.recv_audio())
+        .await
+        .expect("el invitado debe recibir")
+        .expect("recv");
+    assert_eq!(&got.payload[..], &frame[..]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn sin_encuentro_dos_extremos_tras_nat_no_conectan() {
+    // El control. El invitado conoce la dirección pública del anfitrión (la
+    // traía la invitación), pero el NAT del anfitrión no ha enviado nada
+    // hacia él y descarta todo lo que llega.
+    let net = Arc::new(Net::default());
+    let host = net.join("203.0.113.1:40000", Mapping::Cone, Filter::PortRestricted);
+    let guest = net.join("203.0.113.2:50000", Mapping::Cone, Filter::PortRestricted);
+    let host_public = host.public();
+
+    let (joined, _, _) = pair(host, guest, None, vec![host_public]).await;
+    assert!(joined.is_err(), "no debería conectar: {joined:?}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn con_encuentro_se_perfora_y_circula_audio() {
+    let net = Arc::new(Net::default());
+    let server = spawn_rendezvous(&net);
+    let host = net.join("203.0.113.1:40000", Mapping::Cone, Filter::PortRestricted);
+    let guest = net.join("203.0.113.2:50000", Mapping::Cone, Filter::PortRestricted);
+    let host_public = host.public();
+
+    let (joined, host, guest) = pair(host, guest, Some(server), vec![host_public]).await;
+    joined.expect("debe conectar perforando");
+    assert_audio_flows(&host, &guest).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn el_invitado_aprende_la_direccion_del_servidor_de_encuentro() {
+    // La invitación sólo trae la dirección de red local del anfitrión, que
+    // desde fuera no lleva a ningún sitio. La pública llega por el servidor.
+    let net = Arc::new(Net::default());
+    let server = spawn_rendezvous(&net);
+    let host = net.join("203.0.113.1:40000", Mapping::Cone, Filter::PortRestricted);
+    let guest = net.join("203.0.113.2:50000", Mapping::Cone, Filter::PortRestricted);
+    let lan_only = "192.168.0.13:40000".parse().unwrap();
+
+    let (joined, host, guest) = pair(host, guest, Some(server), vec![lan_only]).await;
+    joined.expect("debe conectar por la dirección aprendida");
+    assert_audio_flows(&host, &guest).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn un_lado_simetrico_conecta_si_el_otro_no_filtra_por_puerto() {
+    // El anfitrión sale por un puerto distinto hacia cada destino: el que ve
+    // el servidor no sirve. Pero su sonda llega al invitado (que acepta
+    // cualquier puerto de una IP conocida) y de ella saca la dirección buena.
+    let net = Arc::new(Net::default());
+    let server = spawn_rendezvous(&net);
+    let host = net.join(
+        "203.0.113.1:40000",
+        Mapping::Symmetric,
+        Filter::PortRestricted,
+    );
+    let guest = net.join(
+        "203.0.113.2:50000",
+        Mapping::Cone,
+        Filter::AddressRestricted,
+    );
+
+    let (joined, host, guest) = pair(host, guest, Some(server), vec![]).await;
+    joined.expect("debe conectar aprendiendo la dirección de la sonda");
+    assert_audio_flows(&host, &guest).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn dos_lados_simetricos_no_conectan() {
+    // El límite conocido: ningún extremo puede predecir el puerto del otro.
+    // Aquí hace falta que el relay reenvíe el audio.
+    let net = Arc::new(Net::default());
+    let server = spawn_rendezvous(&net);
+    let host = net.join(
+        "203.0.113.1:40000",
+        Mapping::Symmetric,
+        Filter::PortRestricted,
+    );
+    let guest = net.join(
+        "203.0.113.2:50000",
+        Mapping::Symmetric,
+        Filter::PortRestricted,
+    );
+
+    let (joined, _, _) = pair(host, guest, Some(server), vec![]).await;
+    assert!(joined.is_err(), "no debería conectar: {joined:?}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn entre_un_camino_local_y_uno_publico_se_elige_el_local() {
+    // Sin NAT de por medio los dos caminos contestan; gana el de red local
+    // aunque el público vaya primero en la lista.
+    let net = Arc::new(Net::default());
+    let host = net.join("192.168.0.13:40000", Mapping::Open, Filter::PortRestricted);
+    let guest = net.join("192.168.0.20:50000", Mapping::Open, Filter::PortRestricted);
+    let lan = host.public();
+    let dead_public: SocketAddr = "203.0.113.9:1".parse().unwrap();
+
+    let host_s = session(host, None);
+    let guest_s = session(guest, None);
+    let accepting = {
+        let host_s = host_s.clone();
+        tokio::spawn(async move { host_s.handshake_open().await })
+    };
+    let chosen = guest_s
+        .select_path(&[dead_public, lan], Duration::from_secs(3))
+        .await
+        .expect("el camino local contesta");
+    assert_eq!(chosen, lan);
+    host_s.close().await.ok();
+    let _ = accepting.await;
+}

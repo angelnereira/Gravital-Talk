@@ -38,12 +38,45 @@ pub enum StunError {
 
     #[error("STUN resolve error: {0}")]
     Resolve(String),
+
+    #[error("transport error: {0}")]
+    Transport(String),
+}
+
+/// Descubre la dirección **local** (LAN) que usaría este dispositivo para
+/// salir a Internet.
+///
+/// No habla con nadie: crea un socket efímero, lo "conecta" a una IP pública
+/// y lee su dirección local. `connect` en UDP no envía nada, sólo hace que el
+/// kernel elija la interfaz de salida; `local_addr()` devuelve entonces la IP
+/// que tiene ese interfaz.
+///
+/// Existe porque cuando el descubrimiento por STUN no está disponible (o da la
+/// IP pública del router, que no siempre vuelve a entrar), dos dispositivos en
+/// la misma WiFi sólo se pueden conectar por la LAN. Sin esto, el QR se queda
+/// con un host de relleno con el que nadie puede conectar.
+pub async fn discover_local_addr() -> Result<SocketAddr, StunError> {
+    let sock = UdpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)).await?;
+    // 8.8.8.8:53 no recibe nada: sólo fuerza la selección de ruta.
+    match sock
+        .connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), 53))
+        .await
+    {
+        Ok(()) => Ok(sock.local_addr()?),
+        // Si no hay ruta (sin red), al menos devolvemos algo utilizable.
+        Err(_) => Ok(sock.local_addr()?),
+    }
 }
 
 /// Descubre la dirección IP pública del socket local UDP usando STUN.
 ///
 /// Crea un socket UDP efímero (si `local_port == 0`, usa puerto efímero)
 /// y envía un Binding Request a los servidores STUN de Google.
+///
+/// **`local_port` debe ser 0.** Pasarla el puerto de una sesión ya viva hace
+/// que el bind falle con "address already in use", porque el socket de la
+/// sesión lo ocupa. Es un error que ya ocurrió: el QR se quedaba con un host
+/// de relleno y nadie podía conectar. Ver el test de regresión.
 ///
 /// Retorna la `SocketAddr` pública tal como la ve el servidor STUN.
 pub async fn discover_public_addr(local_port: u16) -> Result<SocketAddr, StunError> {
@@ -85,6 +118,55 @@ pub async fn discover_public_addr(local_port: u16) -> Result<SocketAddr, StunErr
         }
     }
 
+    Err(StunError::Timeout)
+}
+
+/// Descubre la dirección pública **de un transporte ya abierto**.
+///
+/// Es la variante que sirve para publicar una dirección: un NAT asocia el
+/// puerto público a un socket concreto, así que preguntar desde otro socket
+/// (lo que hace [`discover_public_addr`]) da la IP correcta y un puerto que no
+/// es el de la sala.
+///
+/// Sólo se puede llamar mientras nadie más lee del transporte, es decir antes
+/// del handshake: las respuestas STUN llegan por el mismo socket que el resto
+/// del tráfico. Lo que llegue entretanto y no sea la respuesta se descarta.
+pub async fn discover_public_addr_on(
+    transport: &dyn crate::traits::Transport,
+) -> Result<SocketAddr, StunError> {
+    let transport_err = |e: crate::error::TransportError| StunError::Transport(e.to_string());
+    let mut buf = [0u8; 512];
+
+    for server in STUN_SERVERS {
+        // Sólo IPv4: el socket de la sesión se abre en IPv4, y a un servidor
+        // IPv6 no llegaría.
+        let lookup = timeout(Duration::from_secs(2), tokio::net::lookup_host(*server)).await;
+        let Ok(Ok(mut addrs)) = lookup else { continue };
+        let Some(server_addr) = addrs.find(SocketAddr::is_ipv4) else {
+            continue;
+        };
+
+        let tx_id = random_tx_id();
+        let request = build_binding_request(&tx_id);
+        transport
+            .send_to(&request, server_addr)
+            .await
+            .map_err(transport_err)?;
+
+        let exchange = async {
+            loop {
+                let (n, _from) = transport.recv(&mut buf).await.map_err(transport_err)?;
+                if let Some(addr) = parse_binding_response(&buf[..n], &tx_id) {
+                    return Ok::<_, StunError>(addr);
+                }
+            }
+        };
+        match timeout(Duration::from_millis(1200), exchange).await {
+            Ok(Ok(addr)) => return Ok(addr),
+            Ok(Err(e)) => return Err(e),
+            Err(_) => tracing::debug!("STUN {server} sin respuesta"),
+        }
+    }
     Err(StunError::Timeout)
 }
 
@@ -301,5 +383,38 @@ mod tests {
     fn short_packet_rejected() {
         let tx_id = [0u8; 12];
         assert!(parse_binding_response(&[0u8; 5], &tx_id).is_none());
+    }
+
+    #[tokio::test]
+    async fn descubrir_con_el_puerto_de_una_sesion_viva_falla_por_eaddrinuse() {
+        // Regresion: la app pasaba `session.local_port()` a `discover_public_addr`
+        // y eso crea un segundo socket en el MISMO puerto que ya ocupa la sesion.
+        // El bind falla con "address already in use" y el QR se queda con el
+        // host de relleno `red-local:0`, con el que nadie puede conectar.
+        //
+        // El socket de STUN tiene que ser efimero (puerto 0), no el de la sesion.
+        use tokio::net::UdpSocket;
+
+        let held = UdpSocket::bind("0.0.0.0:0").await.expect("bind previo");
+        let port = held.local_addr().expect("addr").port();
+
+        // Pasarle el puerto ocupado falla.
+        let r = tokio::time::timeout(Duration::from_secs(10), discover_public_addr(port))
+            .await
+            .expect("no deberia colgarse");
+        assert!(
+            r.is_err(),
+            "bindear un puerto ya ocupado deberia fallar, devolvio {:?}",
+            r.ok()
+        );
+
+        // Y con puerto 0 (efimero) si funciona: es la forma correcta.
+        let r = tokio::time::timeout(Duration::from_secs(15), discover_public_addr(0)).await;
+        drop(held);
+        match r {
+            Ok(Ok(addr)) => assert!(addr.port() > 0),
+            // Sin red no se puede probar el exito, solo que no reviente.
+            _ => eprintln!("sin acceso a STUN: se omite la comprobacion de exito"),
+        }
     }
 }

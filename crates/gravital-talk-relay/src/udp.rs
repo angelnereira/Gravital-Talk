@@ -44,6 +44,27 @@ pub async fn run(
             }
         }
 
+        // ── Encuentro: presentar a dos extremos para que perforen su NAT ──
+        // Va antes de decodificar porque estos mensajes no son paquetes de
+        // sesión: el relay sólo contesta a quien pregunta, con las direcciones
+        // de los demás registrados en su sala, y no reenvía nada.
+        if gravital_talk_transport::rendezvous::is_rendezvous(data) {
+            match router.rendezvous().handle(data, from) {
+                Some(reply) => {
+                    if let Ok(sent) = socket.send_to(&reply, from).await {
+                        router.metrics().packets_out.inc();
+                        router.metrics().bytes_out.inc_by(sent as u64);
+                    }
+                }
+                None => router
+                    .metrics()
+                    .dropped
+                    .with_label_values(&["rendezvous_rejected"])
+                    .inc(),
+            }
+            continue;
+        }
+
         let view = match PacketView::decode(data) {
             Ok(v) => v,
             Err(_) => {
