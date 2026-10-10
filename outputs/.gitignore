@@ -1,0 +1,18 @@
+# Los binarios de este directorio NO se versionan.
+#
+# La politica esta en el .gitignore de la raiz (ver ahi el bloque "Builds
+# distribuibles"). Este fichero es solo la excepcion que permite versionar el
+# README y a si mismo sin arrastrar los APKs.
+#
+# Motivo historico: aqui antes no se ignoraba nada y los binarios si se
+# rastraban a proposito. Eso lleno el historial de 772 MB (11 APKs de ~72 MB)
+# que ya no se pueden quitar sin reescribir todo el historial. A partir de
+# ahora los binarios se publican como artefactos del workflow de GitHub
+# Actions y como Releases, no como commits.
+*.apk
+*.exe
+linux/
+macos/
+windows/
+android/debug/
+android/release/*.apk

@@ -99,24 +99,13 @@ jobs:
           echo "Built: ${FILENAME}"
           ls -lh "outputs/android/debug/${FILENAME}"
 
-      # ── Commit + push outputs ─────────────────────────────────────────────
-      - name: Commit outputs to branch
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          git add outputs/android/
-
-          # Solo commitar si hay cambios reales.
-          if git diff --cached --quiet; then
-            echo "No new APK to commit."
-            exit 0
-          fi
-
-          git commit -m "build(android): ${APK_FILENAME} [skip ci]"
-          git push origin HEAD:${{ github.ref_name }}
-
-      - name: Upload APK as artifact (fallback)
+      # ── Publicar el APK ───────────────────────────────────────────────────
+      #
+      # El binario NO se commitea. Commitear un APK de ~72 MB en cada push
+      # dejo el historial en 772 MB (11 builds) y GitHub avisa con GH001; el
+      # repo queda pesado para clonar y acaba chocando con limites de tamano.
+      # El APK se sube como artefacto del run, que es donde se descarga.
+      - name: Upload APK as artifact
         uses: actions/upload-artifact@v4
         with:
           name: android-debug-${{ github.sha }}
@@ -178,26 +167,7 @@ jobs:
           echo "BIN_FILENAME=${FILENAME}" >> $GITHUB_ENV
           ls -lh "outputs/linux/x86_64/${FILENAME}"
 
-      - name: Commit outputs to branch
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          git add outputs/linux/
-
-          if git diff --cached --quiet; then
-            echo "No new binary to commit."
-            exit 0
-          fi
-
-          git commit -m "build(linux): ${BIN_FILENAME} [skip ci]"
-
-          # Retry con pull --rebase por si android-apk ya pusheó.
-          for i in 1 2 3 4; do
-            git pull --rebase origin ${{ github.ref_name }} || true
-            git push origin HEAD:${{ github.ref_name }} && break || sleep $((i * 4))
-          done
-
+      # El binario NO se commitea: ver la nota del job de Android.
       - name: Upload as artifact
         uses: actions/upload-artifact@v4
         with:
@@ -255,18 +225,7 @@ jobs:
 
           echo "BIN_FILENAME=${FILENAME}" >> $GITHUB_ENV
 
-      - name: Commit outputs to branch
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add outputs/macos/
-          if git diff --cached --quiet; then exit 0; fi
-          git commit -m "build(macos-${{ matrix.arch }}): ${BIN_FILENAME} [skip ci]"
-          for i in 1 2 3 4; do
-            git pull --rebase origin ${{ github.ref_name }} || true
-            git push origin HEAD:${{ github.ref_name }} && break || sleep $((i * 4))
-          done
-
+      # El binario NO se commitea: ver la nota del job de Android.
       - name: Upload as artifact
         uses: actions/upload-artifact@v4
         with:
@@ -310,19 +269,7 @@ jobs:
 
           echo "BIN_FILENAME=${FILENAME}" >> $GITHUB_ENV
 
-      - name: Commit outputs to branch
-        shell: bash
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add outputs/windows/
-          if git diff --cached --quiet; then exit 0; fi
-          git commit -m "build(windows): ${BIN_FILENAME} [skip ci]"
-          for i in 1 2 3 4; do
-            git pull --rebase origin ${{ github.ref_name }} || true
-            git push origin HEAD:${{ github.ref_name }} && break || sleep $((i * 4))
-          done
-
+      # El binario NO se commitea: ver la nota del job de Android.
       - name: Upload as artifact
         uses: actions/upload-artifact@v4
         with:

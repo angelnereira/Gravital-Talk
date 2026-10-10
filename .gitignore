@@ -44,3 +44,23 @@ dhat-heap.json
 criterion/
 sdks/python/gravital_talk/*.so
 sdks/python/.venv
+
+# Builds distribuibles
+#
+# Los binarios no van en git. Cada APK son ~72 MB y el historial guardaba los
+# 11 builds: 772 MB que ya no se pueden borrar sin reescribir el historial.
+# Un repo donde un clon tarda dos minutos no sirve para trabajar, y GitHub
+# avisa (GH001) y acaba rechazando ficheros grandes.
+#
+# Los binarios se distribuyen por GitHub Releases o se descargan desde el
+# dispositivo. El .gitignore NO es lo que evita que crezca: eso lo garantiza
+# el workflow, que sube el APK como artefacto del run en vez de commitearlo.
+outputs/
+
+# Salvo el README y el .gitignore del propio directorio, que sí conviene
+# versionar. Al excluir outputs/ como carpeta hay que reenlazar el directorio
+# antes de poder des-excluir su contenido.
+!outputs/
+outputs/*
+!outputs/README.md
+!outputs/.gitignore
