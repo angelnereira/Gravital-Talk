@@ -24,7 +24,16 @@ class Radii {
   static const double sm = 8;
   static const double md = 12;
   static const double lg = 14;
-  static const double xl = 28;
+
+  /// Radio de las tarjetas de vidrio.
+  ///
+  /// Grande a propósito: sobre fondo oscuro, el radio redondo es lo que hace
+  /// que una forma se lea como objeto, más que el color. Las tres referencias
+  /// que se usaron para el glass usan esquinas muy redondeadas.
+  static const double glass = 26;
+
+  /// Elementos pequeños: chips, tiles de métrica.
+  static const double chip = 18;
   static const double pill = 999;
 
   const Radii._();

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:toastification/toastification.dart';
 
+import 'core/glass.dart';
 import 'core/theme.dart';
 import 'models/connection.dart';
 import 'screens/home_screen.dart';
@@ -76,9 +77,11 @@ class _GravitalTalkAppState extends State<GravitalTalkApp> {
               AppThemeMode.light => ThemeMode.light,
               AppThemeMode.dark => ThemeMode.dark,
             },
-            home: _showOnboarding
-                ? OnboardingScreen(onDone: _finishOnboarding)
-                : const HomeScreen(),
+            home: GravitalBackground(
+              child: _showOnboarding
+                  ? OnboardingScreen(onDone: _finishOnboarding)
+                  : const HomeScreen(),
+            ),
           ),
         ),
       ),

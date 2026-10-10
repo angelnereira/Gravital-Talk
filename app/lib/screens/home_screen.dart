@@ -3,6 +3,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
 
 import '../core/states.dart';
+import '../core/glass.dart';
 import '../core/routes.dart';
 import '../core/tokens.dart';
 import '../models/session.dart';
@@ -188,18 +189,11 @@ class _Hero extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Container(
+    // El hero es vidrio: es la pieza que fija el tono de la pantalla y la que
+    // se beneficia del resplandor de marca.
+    return GlassSurface(
+      glow: scheme.primary.withValues(alpha: 0.28),
       padding: const EdgeInsets.all(22),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(Radii.xl),
-        // Superficie elevada normal, sin degradado de color. El hero antes
-        // llevaba un lavado teal con borde del mismo color: era el bloque más
-        // saturado de la pantalla y el que hacía que todo lo demás pareciera
-        // plano al lado. La referencia de Pixel separa por superficie y
-        // tipografía, no por tintes.
-        color: scheme.surfaceContainerLow,
-        border: Border.all(color: scheme.outline),
-      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

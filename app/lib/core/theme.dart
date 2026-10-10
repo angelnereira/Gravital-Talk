@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'glass.dart';
 import 'palette.dart';
 import 'tokens.dart';
 
@@ -25,10 +26,17 @@ class GravitalTheme {
       useMaterial3: true,
       brightness: brightness,
       colorScheme: scheme,
+      extensions: [
+        scheme.brightness == Brightness.dark
+            ? GlassTextTheme.dark
+            : GlassTextTheme.light,
+      ],
       splashFactory: InkSparkle.splashFactory,
       visualDensity: VisualDensity.adaptivePlatformDensity,
       textTheme: text,
-      scaffoldBackgroundColor: scheme.surface,
+      // Transparente: deja ver el fondo degradado de `GravitalBackground`,
+      // que es lo que el glass difumina.
+      scaffoldBackgroundColor: Colors.transparent,
 
       appBarTheme: AppBarTheme(
         centerTitle: false,
@@ -46,7 +54,7 @@ class GravitalTheme {
         margin: EdgeInsets.zero,
         color: scheme.surfaceContainerLow,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(Radii.xl),
+          borderRadius: BorderRadius.circular(Radii.glass),
           // Borde en lugar de sombra: es lo que da el aspecto de "equipo".
           side: BorderSide(color: scheme.outlineVariant),
         ),
@@ -142,14 +150,14 @@ class GravitalTheme {
       bottomSheetTheme: BottomSheetThemeData(
         backgroundColor: scheme.surfaceContainerLow,
         shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(Radii.xl)),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(Radii.glass)),
         ),
       ),
 
       dialogTheme: DialogThemeData(
         backgroundColor: scheme.surfaceContainerLow,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(Radii.xl),
+          borderRadius: BorderRadius.circular(Radii.glass),
         ),
       ),
 

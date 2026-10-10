@@ -25,11 +25,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// Pantalla de destino simplificada.
 class Destino extends StatelessWidget {
-  const Destino();
+  const Destino({super.key});
 
   @override
-  Widget build(BuildContext context) =>
-      const Scaffold(body: Center(child: Text('destino')));
+  Widget build(BuildContext context) => const Scaffold(
+        body: Center(child: Text('destino')),
+      );
 }
 
 Future<SessionController> _controller(EventLog log) async {

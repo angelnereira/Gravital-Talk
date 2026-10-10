@@ -4,6 +4,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:provider/provider.dart';
 
 import '../core/palette.dart';
+import '../core/glass.dart';
 import '../core/tokens.dart';
 import '../models/session.dart';
 import '../services/event_log.dart';
@@ -79,38 +80,38 @@ class SectionCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(title,
-                          style: theme.textTheme.titleMedium
-                              ?.copyWith(fontWeight: FontWeight.w700)),
-                      if (subtitle != null)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 2),
-                          child: Text(subtitle!,
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                  color: theme.colorScheme.onSurfaceVariant)),
-                        ),
-                    ],
-                  ),
+    final glassText = GlassTextTheme.of(context);
+    return GlassSurface(
+      padding: const EdgeInsets.all(Spacing.xl),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w700,
+                            color: glassText.primary)),
+                    if (subtitle != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(subtitle!,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                                color: glassText.secondary)),
+                      ),
+                  ],
                 ),
-                if (trailing != null) ?trailing,
-              ],
-            ),
-            const SizedBox(height: 14),
-            child,
-          ],
-        ),
+              ),
+              if (trailing != null) ?trailing,
+            ],
+          ),
+          const SizedBox(height: Spacing.lg),
+          child,
+        ],
       ),
     );
   }
@@ -412,7 +413,7 @@ class EventLogView extends StatelessWidget {
 ///
 /// El color también significa algo: ámbar al transmitir (convención real de
 /// broadcast), no naranja por elección estética.
-class PttButton extends StatelessWidget {
+class PttButton extends StatefulWidget {
   const PttButton({
     super.key,
     required this.pressed,
@@ -435,32 +436,41 @@ class PttButton extends StatelessWidget {
   final double level;
 
   @override
+  State<PttButton> createState() => _PttButtonState();
+}
+
+class _PttButtonState extends State<PttButton> {
+  @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final pressed = widget.pressed;
+    final enabled = widget.enabled;
+    final level = widget.level.clamp(0.0, 1.0);
 
-    // Ámbar al transmitir. El resto del tiempo, el color de marca.
+    // Ámbar al transmitir; el resto del tiempo, el color de marca.
     final signalColor = pressed
-        ? GravitalColors.transmit
-        : (peerSpeaking ? scheme.tertiary : scheme.primary);
-    final fill = level.clamp(0.0, 1.0);
+        ? GlassAccent.transmit
+        : (widget.peerSpeaking ? scheme.tertiary : scheme.primary);
 
-    final button = GestureDetector(
-      onTapDown: enabled ? (_) => onDown() : null,
-      onTapUp: enabled ? (_) => onUp() : null,
-      onTapCancel: enabled ? onUp : null,
+    final disc = GestureDetector(
+      onTapDown: enabled ? (_) => widget.onDown() : null,
+      onTapUp: enabled ? (_) => widget.onUp() : null,
+      onTapCancel: enabled ? widget.onUp : null,
       child: Semantics(
         button: true,
         enabled: enabled,
         label: pressed
             ? 'Transmitiendo. Suelta para dejar de hablar'
             : 'Mantén pulsado para hablar',
-        hint: peerSpeaking ? 'El otro participante está transmitiendo' : null,
+        hint: widget.peerSpeaking
+            ? 'El otro participante está transmitiendo'
+            : null,
         child: SizedBox(
           width: HitSizes.pttButton,
           height: HitSizes.pttButton,
           child: CustomPaint(
             painter: _PttRingPainter(
-              level: fill,
+              level: level,
               color: signalColor,
               trackColor: scheme.outlineVariant,
               glow: pressed,
@@ -473,7 +483,9 @@ class PttButton extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(
-                      peerSpeaking && !pressed ? Icons.hearing : Icons.mic,
+                      widget.peerSpeaking && !pressed
+                          ? Icons.hearing
+                          : Icons.mic,
                       color: signalColor,
                       size: 34,
                     ),
@@ -495,6 +507,20 @@ class PttButton extends StatelessWidget {
           ),
         ),
       ),
+    );
+
+    // El anillo va sobre un disco de vidrio: sin el volumen del cristal, el
+    // botón más importante de la app quedaba como un aro plano sobre el fondo.
+    // El resplandor sólo aparece al transmitir, cuando el vidrio debe parecer
+    // que emite luz propia.
+    final button = GlassSurface(
+      borderRadius: Radii.pill,
+      width: HitSizes.pttButton,
+      height: HitSizes.pttButton,
+      blur: 14,
+      padding: EdgeInsets.zero,
+      glow: pressed ? signalColor.withValues(alpha: 0.55) : null,
+      child: disc,
     );
 
     return AnimatedScale(

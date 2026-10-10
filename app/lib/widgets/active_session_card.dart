@@ -39,7 +39,7 @@ class ActiveSessionCard extends StatelessWidget {
     return Card(
       color: theme.colorScheme.primaryContainer,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(Radii.xl),
+        borderRadius: BorderRadius.circular(Radii.glass),
       ),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
