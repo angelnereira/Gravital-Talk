@@ -17,5 +17,38 @@ int main(void) {
            gs_version());
     printf("Default config: %u Hz, %u ch, %u ms, MTU=%u\n",
            cfg.sample_rate, cfg.channels, cfg.frame_duration_ms, cfg.mtu);
+    /* El audio nativo es opcional segun el build, pero sus simbolos existen
+     * siempre: con la sesion sin audio, las estadisticas salen a cero. */
+    GsSessionHandle *session = NULL;
+    st = gs_session_create(&cfg, "127.0.0.1", 0, &session);
+    if (st != GS_OK) {
+        fprintf(stderr, "gs_session_create failed: %d\n", (int)st);
+        return 1;
+    }
+    GsAudioStats audio;
+    st = gs_audio_stats(session, &audio);
+    if (st != GS_OK || audio.rx_frames != 0) {
+        fprintf(stderr, "gs_audio_stats failed: %d\n", (int)st);
+        return 1;
+    }
+    printf("Audio nativo: %s\n", gs_audio_supported() ? "si" : "no");
+
+    /* Sin servidor de encuentro: quitarlo es valido y no toca la red. */
+    st = gs_session_set_rendezvous(session, NULL, 0);
+    if (st != GS_OK) {
+        fprintf(stderr, "gs_session_set_rendezvous failed: %d\n", (int)st);
+        return 1;
+    }
+    /* Una candidata mal escrita se rechaza antes de intentar conectar. */
+    if (gs_session_connect_any(session, "no-es-una-direccion") != GS_ERR_INVALID_ARGUMENT) {
+        fprintf(stderr, "gs_session_connect_any acepto una candidata invalida\n");
+        return 1;
+    }
+    gs_session_destroy(session);
+
+    char ip[64];
+    if (gs_discover_local_addr(ip, sizeof ip) == GS_OK) {
+        printf("IP local: %s\n", ip);
+    }
     return gs_ping();
 }

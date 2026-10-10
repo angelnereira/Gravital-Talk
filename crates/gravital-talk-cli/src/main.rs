@@ -78,6 +78,9 @@ enum Command {
         /// Nombre del input device (p. ej. `default`). Activa captura desde micrófono.
         #[arg(long)]
         device: Option<String>,
+        /// Token de sala (secreto). Necesario para emparejar con la app móvil.
+        #[arg(long)]
+        token: Option<String>,
         /// Codec de audio a usar.
         #[arg(long, default_value = "pcm")]
         codec: CodecArg,
@@ -111,6 +114,9 @@ enum Command {
         /// Nombre del output device (p. ej. `default`). Activa playback de altavoz en paralelo.
         #[arg(long)]
         device: Option<String>,
+        /// Token de sala (secreto). Necesario para emparejar con la app móvil.
+        #[arg(long)]
+        token: Option<String>,
         /// Codec de audio a usar (debe coincidir con el sender).
         #[arg(long, default_value = "pcm")]
         codec: CodecArg,
@@ -141,6 +147,63 @@ enum Command {
         host: String,
         #[arg(long, default_value_t = 9000)]
         port: u16,
+    },
+    /// Peer de validación contra un dispositivo real (el móvil).
+    ///
+    /// Hace de walkie-talkie: pulsa para emitir un tono, escucha lo que llega
+    /// del dispositivo y lo analiza (frecuencia, RMS, saturación), y termina
+    /// con un roger beep que confirma que el audio sigue fluyendo.
+    ///
+    /// Ejemplo contra la app del móvil:
+    ///   gs peer --host 192.168.0.12 --port 9000 --token SECRETO --duration 30
+    ///
+    /// Entre redes distintas, con un relay como servidor de encuentro:
+    ///   gs peer --bind 0.0.0.0 --token SECRETO --rendezvous relay:9000   (anfitrión)
+    ///   gs peer --join --token SECRETO --rendezvous relay:9000           (invitado)
+    Peer {
+        /// Host destino (modo cliente: conecta al que creó la sala).
+        #[arg(long)]
+        host: Option<String>,
+        /// Puerto destino en modo cliente.
+        #[arg(long, default_value_t = 9000)]
+        port: u16,
+        /// Dirección de bind (modo servidor: el móvil se conecta aquí).
+        #[arg(long)]
+        bind: Option<String>,
+        /// Puerto de bind en modo servidor.
+        #[arg(long, default_value_t = 9000)]
+        bind_port: u16,
+        /// Peer esperado (modo servidor). Sin él se acepta al primero que
+        /// llegue, que es lo que hace la app al crear una sala.
+        #[arg(long)]
+        peer: Option<String>,
+        /// Puerto del peer (modo servidor).
+        #[arg(long)]
+        peer_port: Option<u16>,
+        /// Token de sala (secreto compartido con el dispositivo).
+        #[arg(long)]
+        token: String,
+        /// Duración total de la validación, en segundos.
+        #[arg(long, default_value_t = 30)]
+        duration: u64,
+        /// Frecuencia del tono de emisión, en Hz.
+        #[arg(long, default_value_t = 1200.0)]
+        tone_hz: f64,
+        /// Ruta donde guardar el PCM recibido del dispositivo (WAV).
+        #[arg(long)]
+        capture: Option<PathBuf>,
+        /// Servidor de encuentro (`host:puerto` de un relay) para perforar
+        /// NAT cuando los dos extremos están en redes distintas.
+        #[arg(long)]
+        rendezvous: Option<String>,
+        /// Dirección candidata adicional del anfitrión (`ip:puerto`). Se
+        /// puede repetir; se prueban todas y gana la primera que contesta.
+        #[arg(long)]
+        candidate: Vec<String>,
+        /// Modo cliente sin dirección: la del anfitrión llega por el
+        /// servidor de encuentro.
+        #[arg(long)]
+        join: bool,
     },
     /// Verifica el entorno: versión, red, permisos.
     Doctor,
@@ -305,6 +368,7 @@ async fn dispatch(cmd: Command) -> Result<()> {
             port,
             input,
             device,
+            token,
             codec,
             duration,
             sample_rate,
@@ -315,6 +379,7 @@ async fn dispatch(cmd: Command) -> Result<()> {
                 port,
                 input,
                 device.as_deref(),
+                token.as_deref(),
                 codec,
                 duration,
                 sample_rate,
@@ -329,6 +394,7 @@ async fn dispatch(cmd: Command) -> Result<()> {
             peer_port,
             output,
             device,
+            token,
             codec,
             duration,
             sample_rate,
@@ -341,10 +407,32 @@ async fn dispatch(cmd: Command) -> Result<()> {
                 peer_port,
                 output,
                 device.as_deref(),
+                token.as_deref(),
                 codec,
                 duration,
                 sample_rate,
                 channels,
+            )
+            .await
+        }
+        Command::Peer {
+            host,
+            port,
+            bind,
+            bind_port,
+            peer,
+            peer_port,
+            token,
+            duration,
+            tone_hz,
+            capture,
+            rendezvous,
+            candidate,
+            join,
+        } => {
+            cmd_peer(
+                host, port, bind, bind_port, peer, peer_port, token, duration, tone_hz, capture,
+                rendezvous, candidate, join,
             )
             .await
         }
@@ -415,6 +503,351 @@ async fn dispatch(cmd: Command) -> Result<()> {
     }
 }
 
+/// Tono sintético de `ms` milisegundos a `freq_hz`, mono.
+fn tone(freq_hz: f64, ms: u64, sample_rate: u32) -> Vec<i16> {
+    let n = (sample_rate as u64 * ms / 1000) as usize;
+    let step = 2.0 * std::f64::consts::PI * freq_hz / f64::from(sample_rate);
+    // 0.6 de amplitud: deja margen para que el codec y la red no saturen.
+    (0..n)
+        .map(|i| (f64::sin(step * i as f64) * 0.6 * f64::from(i16::MAX)) as i16)
+        .collect()
+}
+
+/// Análisis mínimo de un bloque de PCM: frecuencia por cruces por cero, RMS y
+/// cuántas muestras saturan. Es lo que distingue "llegaron bytes" de "llegó
+/// audio": un frame vacío o corrompido no tiene tono ni energía.
+///
+/// La frecuencia es una **estimación** por cruces por cero (±2 % en ventanas
+/// largas), no una FFT. Sirve para saber si hay un tono reconocible y más o
+/// menos dónde cae, que es lo que hace falta para validar el transporte; no
+/// para afinar un instrumento.
+struct PcmStats {
+    frames: usize,
+    samples: usize,
+    zero_crossings: usize,
+    rms: f64,
+    clipped: usize,
+    freq_hz: f64,
+}
+
+fn analyze(samples: &[i16], sample_rate: u32) -> PcmStats {
+    if samples.is_empty() {
+        return PcmStats {
+            frames: 0,
+            samples: 0,
+            zero_crossings: 0,
+            rms: 0.0,
+            clipped: 0,
+            freq_hz: 0.0,
+        };
+    }
+    let mut crossings = 0usize;
+    let mut sum_sq = 0f64;
+    let mut clipped = 0usize;
+    for (i, &s) in samples.iter().enumerate() {
+        let v = f64::from(s);
+        sum_sq = v.mul_add(v, sum_sq);
+        if s == i16::MAX || s == i16::MIN {
+            clipped += 1;
+        }
+        if i > 0 && (s >= 0) != (samples[i - 1] >= 0) {
+            crossings += 1;
+        }
+    }
+    let n = samples.len() as f64;
+    PcmStats {
+        frames: 0,
+        samples: samples.len(),
+        zero_crossings: crossings,
+        rms: (sum_sq / n).sqrt(),
+        clipped,
+        // Dos cruces por ciclo. Redondeado a entero: un tono sintético cae
+        // exactamente en la frecuencia, y aquí sólo hay ruido de red.
+        freq_hz: (f64::from(crossings as u32) * (f64::from(sample_rate) / n)) / 2.0,
+    }
+}
+
+/// Peer de validación contra un dispositivo real.
+///
+/// La secuencia es la de un walkie-talkie de verdad, y cada paso comprueba una
+/// parte distinta del transporte:
+///
+/// 1. **Handshake con el token de sala.** Si el secreto no coincide, la sesión
+///    no llega a establecerse. Es la prueba de que el emparejamiento por QR
+///    funciona entre dos dispositivos distintos, no entre dos sesiones del
+///    mismo proceso.
+/// 2. **Tono de emisión.** Ocupa el canal en el sentido contenedor → móvil.
+/// 3. **Escucha.** Mientras el usuario pulsa PTT en el móvil, aquí entra el
+///    audio real de su micrófono. Se mide frecuencia, RMS y saturación: un
+///    frame vacío o corrupto no tiene tono ni energía, así que esto distingue
+///    audio válido de "llegaron N frames".
+/// 4. **Roger beep.** Un pitido corto al final confirma que el audio seguía
+///    fluyendo cuando terminó la prueba, no sólo al principio.
+#[allow(clippy::too_many_arguments)]
+async fn cmd_peer(
+    host: Option<String>,
+    port: u16,
+    bind: Option<String>,
+    bind_port: u16,
+    peer: Option<String>,
+    peer_port: Option<u16>,
+    token: String,
+    duration_s: u64,
+    tone_hz: f64,
+    capture: Option<PathBuf>,
+    rendezvous: Option<String>,
+    extra_candidates: Vec<String>,
+    join: bool,
+) -> Result<()> {
+    const SAMPLE_RATE: u32 = 48_000;
+    const CHANNELS: u8 = 1;
+    const FRAME_MS: u8 = 10;
+    let frame_samples = (SAMPLE_RATE as usize * FRAME_MS as usize) / 1000;
+
+    /// Cómo se llega al otro extremo.
+    enum Path {
+        /// Cliente: probar estas direcciones (y las que dé el encuentro).
+        Connect(Vec<SocketAddr>),
+        /// Servidor esperando a un peer concreto.
+        Accept(SocketAddr),
+        /// Servidor aceptando al primero que llegue.
+        AcceptAny,
+    }
+
+    let rendezvous = match rendezvous {
+        Some(r) => Some(
+            tokio::net::lookup_host(&r)
+                .await
+                .with_context(|| format!("no se pudo resolver el servidor de encuentro {r}"))?
+                .next()
+                .with_context(|| format!("{r} no resuelve a ninguna dirección"))?,
+        ),
+        None => None,
+    };
+
+    let (bind_addr, path) = match (host, bind) {
+        (host, None) if host.is_some() || join => {
+            let mut candidates = Vec::new();
+            if let Some(h) = host {
+                candidates.push(
+                    format!("{h}:{port}")
+                        .parse::<SocketAddr>()
+                        .context("host/puerto del dispositivo no válidos")?,
+                );
+            }
+            for c in &extra_candidates {
+                candidates.push(
+                    c.parse::<SocketAddr>()
+                        .with_context(|| format!("candidata no válida: {c}"))?,
+                );
+            }
+            if candidates.is_empty() && rendezvous.is_none() {
+                anyhow::bail!("--join necesita --rendezvous o alguna --candidate");
+            }
+            // En modo cliente el socket local es efímero: el que escucha es el
+            // dispositivo.
+            (
+                "0.0.0.0:0".parse::<SocketAddr>()?,
+                Path::Connect(candidates),
+            )
+        }
+        (_, Some(b)) => {
+            let bind_addr: SocketAddr = format!("{b}:{bind_port}").parse()?;
+            let path = match (peer, peer_port) {
+                (Some(peer), Some(peer_port)) => {
+                    Path::Accept(format!("{peer}:{peer_port}").parse()?)
+                }
+                (None, None) => Path::AcceptAny,
+                _ => anyhow::bail!("--peer y --peer-port van juntos"),
+            };
+            (bind_addr, path)
+        }
+        _ => anyhow::bail!("usa --host o --join (cliente), o --bind (servidor)"),
+    };
+
+    let transport = Arc::new(
+        UdpTransport::bind(UdpConfig {
+            bind_addr,
+            ..Default::default()
+        })
+        .await?,
+    );
+    let config = Config {
+        sample_rate: SAMPLE_RATE,
+        channels: CHANNELS,
+        frame_duration_ms: FRAME_MS,
+        ..Config::default()
+    };
+    let cs = CodecSession::new(transport, config.clone(), CodecId::Pcm)?;
+    cs.session().set_room_token(Some(token));
+    cs.session().set_rendezvous(rendezvous);
+
+    println!();
+    println!("  Validación de audio extremo a extremo");
+    println!("  ─────────────────────────────────────");
+    match &path {
+        Path::Connect(c) => println!("  rol       : cliente, candidatas {c:?}"),
+        Path::Accept(p) => println!("  rol       : servidor, esperando a {p}"),
+        Path::AcceptAny => println!(
+            "  rol       : servidor en {}, acepta al primero",
+            cs.session().local_addr()?
+        ),
+    }
+    if let Some(rv) = rendezvous {
+        println!("  encuentro : {rv}");
+    }
+    println!("  token     : fijado (NNpsk0)");
+    println!();
+
+    // ── 1. Handshake ────────────────────────────────────────────────────────
+    print!("  [1/4] handshake… ");
+    let t0 = std::time::Instant::now();
+    let handshake = match &path {
+        Path::Connect(candidates) => cs.session().handshake_any(candidates).await,
+        Path::Accept(peer) => cs.session().handshake(SessionRole::Server, *peer).await,
+        Path::AcceptAny => cs.session().handshake_open().await,
+    };
+    match handshake {
+        Ok(()) => {
+            println!(
+                "OK ({} ms, session_id={}, peer={:?})",
+                t0.elapsed().as_millis(),
+                cs.session().session_id(),
+                cs.session().peers().await
+            );
+        }
+        Err(e) => {
+            println!("FALLO: {e}");
+            println!();
+            println!("  Sin handshake no hay nada que validar. Comprueba que el");
+            println!("  token coincide con el de la sala y que el puerto es alcanzable.");
+            std::process::exit(1);
+        }
+    }
+
+    // ── 2. Tono de emisión (contenedor → dispositivo) ────────────────────────
+    print!("  [2/4] tono de emisión ({tone_hz:.0} Hz)… ");
+    let emit_tone = tone(tone_hz, 400, SAMPLE_RATE);
+    for frame in emit_tone.chunks(frame_samples * CHANNELS as usize) {
+        let mut buf = vec![0i16; frame.len()];
+        buf[..frame.len()].copy_from_slice(frame);
+        if cs.send_samples(&buf).await.is_err() {
+            println!("FALLO al emitir");
+            std::process::exit(1);
+        }
+    }
+    println!(
+        "{} ms emitidos",
+        emit_tone.len() * 1000 / SAMPLE_RATE as usize
+    );
+
+    // ── 3. Escucha y análisis de lo que manda el dispositivo ─────────────────
+    println!("  [3/4] escuchando {duration_s}s — pulsa PTT en el móvil ahora…");
+    let mut capture_buf: Option<Vec<i16>> = capture.as_ref().map(|_| Vec::new());
+    let mut stats = PcmStats {
+        frames: 0,
+        samples: 0,
+        zero_crossings: 0,
+        rms: 0.0,
+        clipped: 0,
+        freq_hz: 0.0,
+    };
+    let mut audio_frames = 0usize;
+    let mut peak_rms = 0f64;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(duration_s);
+    let mut rx_total = 0usize;
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match tokio::time::timeout(remaining, cs.recv_samples()).await {
+            Ok(Ok(samples)) => {
+                rx_total += 1;
+                let a = analyze(&samples, SAMPLE_RATE);
+                stats.samples += a.samples;
+                stats.zero_crossings += a.zero_crossings;
+                stats.clipped += a.clipped;
+                peak_rms = peak_rms.max(a.rms);
+                // Sólo cuenta como audio del dispositivo lo que trae energía:
+                // así un frame de silencio no falsea el resultado. 300 sobre
+                // 32767 son unos -40 dBFS, el suelo a partir del cual hay
+                // señal y no ruido de fondo.
+                if a.rms > 300.0 {
+                    audio_frames += 1;
+                }
+                if let Some(ref mut b) = capture_buf {
+                    b.extend_from_slice(&samples);
+                }
+            }
+            Ok(Err(e)) => {
+                println!("        error recibiendo: {e}");
+                break;
+            }
+            Err(_) => {}
+        }
+    }
+    stats.frames = rx_total;
+    stats.rms = peak_rms;
+    if stats.samples > 0 {
+        stats.freq_hz =
+            (stats.zero_crossings as f64 * SAMPLE_RATE as f64 / stats.samples as f64) / 2.0;
+    }
+
+    println!(
+        "        frames recibidos : {rx_total} ({} con audio real)",
+        audio_frames
+    );
+    println!(
+        "        RMS de pico      : {:.0}   frecuencia dominante: {:.0} Hz",
+        peak_rms, stats.freq_hz
+    );
+
+    if let Some(path) = &capture {
+        let spec = WavSpec {
+            channels: CHANNELS as u16,
+            sample_rate: SAMPLE_RATE,
+            bits_per_sample: 16,
+            sample_format: SampleFormat::Int,
+        };
+        let mut w = WavWriter::create(path, spec)?;
+        for &s in capture_buf.as_deref().unwrap_or(&[]) {
+            w.write_sample(s)?;
+        }
+        w.finalize()?;
+        println!("        PCM guardado en  : {}", path.display());
+    }
+
+    // ── 4. Roger beep: el audio sigue fluyendo al terminar ──────────────────
+    print!("  [4/4] roger beep… ");
+    let beep_buf = tone(tone_hz, 120, SAMPLE_RATE);
+    for frame in beep_buf.chunks(frame_samples * CHANNELS as usize) {
+        let mut buf = vec![0i16; frame.len()];
+        buf[..frame.len()].copy_from_slice(frame);
+        let _ = cs.send_samples(&buf).await;
+    }
+    std::thread::sleep(Duration::from_millis(120));
+    println!("OK");
+
+    // ── Veredicto ───────────────────────────────────────────────────────────
+    println!();
+    let ok_audio = audio_frames > 0 && peak_rms > 300.0;
+    println!(
+        "  {}",
+        if ok_audio {
+            "RESULTADO: audio real recibido del dispositivo.".to_string()
+        } else {
+            "RESULTADO: el handshake funcionó pero NO llegó audio del dispositivo.".to_string()
+        }
+    );
+    if !ok_audio {
+        println!("  Revisa que el PTT del móvil estuviera pulsado durante la escucha");
+        println!("  y que los permisos de micrófono estén concedidos.");
+        std::process::exit(2);
+    }
+    Ok(())
+}
+
 // El futuro mantiene vivos `AudioCapture`/iteradores no-`Send` (cpal `Stream`)
 // a través de los `await`; `main` lo ejecuta con `block_on` y nunca lo spawnea.
 #[allow(clippy::future_not_send)]
@@ -424,6 +857,7 @@ async fn cmd_send(
     port: u16,
     input: String,
     device: Option<&str>,
+    token: Option<&str>,
     codec_arg: CodecArg,
     duration_s: u64,
     sample_rate: u32,
@@ -447,6 +881,10 @@ async fn cmd_send(
     };
     let codec_id = codec_arg.to_codec_id();
     let cs = CodecSession::new(transport, config.clone(), codec_id)?;
+    if let Some(t) = token {
+        cs.session().set_room_token(Some(t.to_string()));
+        tracing::info!("room token fijado: handshake en modo NNpsk0");
+    }
     cs.handshake(SessionRole::Client, peer).await?;
     tracing::info!(session_id = cs.session().session_id(), codec = ?codec_id, "handshake OK");
 
@@ -518,6 +956,7 @@ async fn cmd_receive(
     peer_port: u16,
     output: PathBuf,
     device: Option<&str>,
+    token: Option<&str>,
     codec_arg: CodecArg,
     duration_s: u64,
     sample_rate: u32,
@@ -541,6 +980,10 @@ async fn cmd_receive(
     };
     let codec_id = codec_arg.to_codec_id();
     let cs = CodecSession::new(transport, config.clone(), codec_id)?;
+    if let Some(t) = token {
+        cs.session().set_room_token(Some(t.to_string()));
+        tracing::info!("room token fijado: handshake en modo NNpsk0");
+    }
     cs.handshake(SessionRole::Server, peer_addr).await?;
     tracing::info!(session_id = cs.session().session_id(), codec = ?codec_id, "handshake OK");
 
@@ -1529,4 +1972,67 @@ fn wav_frames_i16(
         let take = per_frame.min(samples.len());
         Some(samples.drain(..take).collect())
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn el_tono_generado_tiene_la_frecuencia_esperada() {
+        // La frecuencia se mide por cruces por cero, que es una estimación, no
+        // una FFT: en ventanas cortas tiene error de borde (~0,5 %). Aquí se
+        // comprueba que el generador y el análisis concuerdan dentro de ese
+        // margen; si no, la validación daría falsos negativos.
+        let samples = tone(1000.0, 500, 48_000);
+        let stats = analyze(&samples, 48_000);
+        assert!(
+            (stats.freq_hz - 1000.0).abs() < 1000.0 * 0.02,
+            "frecuencia medida {} Hz, se esperaba ~1000 Hz (+/-2 %)",
+            stats.freq_hz
+        );
+        // Amplitud 0,6 de i16::MAX => RMS = 0,6/sqrt(2) * 32767 ≈ 13 901.
+        assert!(
+            stats.rms > 12_000.0 && stats.rms < 16_000.0,
+            "RMS fuera de rango: {}",
+            stats.rms
+        );
+    }
+
+    #[test]
+    fn el_silencio_no_tiene_energia_ni_frecuencia() {
+        let stats = analyze(&[0i16; 4800], 48_000);
+        assert_eq!(stats.rms, 0.0);
+        assert_eq!(stats.zero_crossings, 0);
+        assert_eq!(stats.freq_hz, 0.0);
+    }
+
+    #[test]
+    fn distingue_dos_tonos_distintos() {
+        for hz in [440.0, 2000.0] {
+            let samples = tone(hz, 200, 48_000);
+            let stats = analyze(&samples, 48_000);
+            assert!(
+                (stats.freq_hz - hz).abs() < hz * 0.02,
+                "tono de {hz} Hz medido como {} Hz",
+                stats.freq_hz
+            );
+        }
+    }
+
+    #[test]
+    fn cuenta_las_muestras_que_saturan() {
+        let mut samples = vec![0i16; 1000];
+        samples[10] = i16::MAX;
+        samples[20] = i16::MIN;
+        let stats = analyze(&samples, 48_000);
+        assert_eq!(stats.clipped, 2);
+    }
+
+    #[test]
+    fn un_bloque_vacio_no_provoca_panico() {
+        let stats = analyze(&[], 48_000);
+        assert_eq!(stats.samples, 0);
+        assert_eq!(stats.rms, 0.0);
+    }
 }
