@@ -134,6 +134,47 @@ eventos de PTT remoto observados, y **frecuencia + RMS + saturación del PCM rec
 Requiere `--frame-ms 10` con PCM: el tope duro `MAX_PAYLOAD_SIZE` (1176 B) no admite un
 frame PCM de 20 ms (1920 B). Ver la nota de `[Unreleased]` en `CHANGELOG.md`.
 
+## App de escritorio Linux y audio nativo
+
+```bash
+make app-linux       # FFI con `--features audio` + flutter build linux --release
+app/build/linux/x64/release/bundle/gravital_talk_app [--host] [--auto-talk=N] [gravital-talk://pair?…]
+```
+
+- En escritorio el audio lo lleva la librería nativa (`gs_audio_*`, cpal). En
+  Android/iOS la feature `audio` va apagada, `gs_audio_start` devuelve
+  `GS_ERR_UNSUPPORTED` y el audio lo ponen los plugins de Flutter (`AudioPump`).
+- El bundle copia `target/release/libgravital_talk_ffi.so` **tal como esté**.
+  `make ffi-smoke`, `make build` y el build de CI la recompilan **sin** `audio`:
+  si después empaquetas la app sin volver a `make app-linux`, sale sin micrófono
+  ni altavoz. `gs_audio_supported()` lo dice.
+- `--host` abre directamente una sala y `--auto-talk=N` habla/escucha en turnos
+  de N s. Existen porque en GNOME/Wayland no se pueden inyectar clics (xdotool
+  no llega a la ventana, ni bajo XWayland); las capturas sí funcionan con
+  `GDK_BACKEND=x11` + `import -window`, y `zbarimg` lee el QR de la captura.
+- `GS_AUDIO_TEST_TONE=1000` sustituye el micrófono por un tono; con
+  `gs peer --host IP --port P --token T` se mide lo que llega.
+- `cargo run -p gravital-talk-io --example voice_probe` comprueba que el
+  micrófono y el altavoz abren, sin protocolo de por medio.
+
+## Conexión entre redes (perforación de NAT)
+
+```bash
+make nat-sim         # NAT real del kernel con namespaces; pide sudo. Incluye control negativo
+cargo test -p gravital-talk-transport --test nat_punch   # red simulada, sin privilegios
+```
+
+- El servidor de encuentro es el propio `gs-relay` (puerto UDP). No lleva audio:
+  sólo presenta direcciones. Protocolo y límites en `docs/pairing.md`.
+- En la app sólo lo configura el anfitrión (Ajustes); viaja en la invitación
+  (`rv=`). Sin él, las salas funcionan sólo dentro de la misma red.
+- STUN para la invitación se hace **desde el socket de la sesión**
+  (`Session::discover_public_addr`) y **antes** del handshake: es el único
+  lector del socket en ese momento. `discover_public_addr(0)` usa otro socket y
+  su puerto no es el de la sala.
+- Si cambias cómo se sondan o eligen los caminos, corre las dos pruebas: la red
+  simulada no reproduce el estado de conntrack, y el NAT del kernel sí.
+
 ## REGLA: cada cambio deja un APK instalable en `outputs/`
 
 Obligatorio después de tocar Dart o el FFI. El repo debe tener siempre la última versión
@@ -223,6 +264,10 @@ de gRPC-Web viven en `grpc_web_io.dart` y llegan por import condicional desde
 
 ## Gotchas conocidos
 
+- `make clippy` falla en `main` por `crates/gravital-talk-audit/tests/spike_multipeer.rs`
+  (`listener` sin usar). Para validar el resto: `--workspace --exclude gravital-talk-audit`.
+- Un frame PCM tiene que caber en un paquete: 1156 B útiles. A 48 kHz mono eso
+  son 10 ms; la app recorta sola (`effectiveFrameMs`), el CLI necesita `--frame-ms 10`.
 - `make pgo-build` invoca `scripts/build-pgo.sh`, que **no existe** en el repo.
 - `make doc` usa `--open` (abre navegador; no sirve en headless/CI).
 - `sdks/python` y `sdks/web` son workspaces Cargo independientes con su propio `Cargo.lock`; `cargo` en la raíz

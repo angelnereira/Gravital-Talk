@@ -4,6 +4,103 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
 
 ## [Unreleased]
 
+### Added
+
+**Conexión entre redes distintas: perforación de NAT**
+- Hasta ahora una sala sólo servía dentro de la misma red. Con un **servidor de
+  encuentro** dos dispositivos tras NAT conectan directo: el servidor le dice a
+  cada uno la dirección pública del otro, los dos se envían una sonda y sus
+  routers dejan pasar el resto. El audio no pasa por el servidor, que tampoco
+  conoce el token de la sala.
+- `gs-relay` hace de servidor de encuentro en su puerto UDP, sin configuración.
+- La invitación lleva varias direcciones del anfitrión (`host`/`udp` de la red
+  local, `pub` pública del mismo socket) y el servidor de encuentro (`rv`). El
+  invitado las sonda todas a la vez y conecta por la primera que contesta,
+  prefiriendo la local. Los campos nuevos son aditivos: una invitación antigua
+  sigue funcionando.
+- Ajustes → "Servidor de encuentro". Sólo lo configura el anfitrión; al
+  invitado le llega en la invitación.
+- `Session::{set_rendezvous, select_path, handshake_any, discover_public_addr}`
+  y el módulo `gravital_talk_transport::rendezvous`.
+- ABI nueva (aditiva): `gs_session_set_rendezvous`, `gs_session_public_addr`,
+  `gs_session_connect_any`.
+- `gs peer --rendezvous HOST:PUERTO`, `--join`, `--candidate IP:PUERTO`, y modo
+  servidor sin `--peer` (acepta al primero, como la app).
+- `make nat-sim` (`scripts/nat-sim.sh`): monta dos redes privadas tras dos
+  routers con el NAT del kernel y comprueba que sin servidor de encuentro no se
+  conecta y que con él sí, con audio en los dos sentidos.
+- Límites: no funciona si los dos lados tienen NAT simétrico (típico de algunas
+  redes móviles), y todavía no hay relevo automático a reenviar el audio por el
+  relay cuando la perforación falla. Detalle en `docs/pairing.md`.
+
+**Audio nativo en escritorio (`gs_audio_*`, feature `audio` de `gravital-talk-ffi`)**
+- La app de escritorio no tenía audio: lo recibido se descartaba y lo que se
+  enviaba era un tono de prueba. Ahora la librería nativa captura el micrófono y
+  reproduce lo recibido con `cpal`, en dos hilos propios, sin pasar los frames
+  por Dart.
+- ABI nueva (aditiva): `gs_audio_supported`, `gs_audio_start`, `gs_audio_stop`,
+  `gs_audio_set_ptt`, `gs_audio_stats` (`GsAudioStats`) y el estado
+  `GS_ERR_UNSUPPORTED`. Los símbolos existen en todos los builds; sin la
+  feature (Android, iOS) `gs_audio_start` devuelve `GS_ERR_UNSUPPORTED` y el
+  audio lo pone la app.
+- `gravital_talk_io::{VoiceCapture, VoicePlayback}`: micrófono y altavoz en el
+  formato de la sesión (mono, al sample rate pedido) sea cual sea el del
+  device, con cola de reproducción acotada a 120 ms para que la deriva de
+  reloj no acumule latencia. Ejemplo `voice_probe` para comprobar los devices.
+- `GS_AUDIO_TEST_TONE=<Hz>` sustituye el micrófono por un tono, para medir el
+  camino de ida sin que haya nadie hablando.
+
+**Invitaciones por enlace**
+- `gravital-talk://pair?…` abre la app directamente en la sala: en Android por
+  intent, en escritorio como argumento. Es el mismo contenido que el QR.
+- La pantalla de sala tiene "Copiar invitación" para pasarla por mensaje.
+- `gs_discover_local_addr`: IP de la red local de este dispositivo.
+
+**Opciones de prueba en escritorio**: `--host` abre directamente una sala y
+`--auto-talk=N` habla y escucha en turnos de N segundos.
+
+### Changed
+
+**Emparejar es un paso, no un formulario**
+- La home tiene dos acciones, "Crear sala" y "Unirse". Crear abre la sala al
+  entrar y enseña el QR; unirse enciende la cámara y conecta al leerlo. Antes
+  escanear sólo rellenaba un campo que luego había que enviar.
+- Al conectar se pasa sola a la pantalla de hablar, en los dos extremos.
+- La pantalla de hablar muestra quién tiene la palabra y el nivel de lo que se
+  oye, y resume la calidad en una palabra. RTT, jitter, MOS, perfiles de red y
+  registro de eventos quedan plegados en "Detalles técnicos".
+- El fondo degradado va por debajo del Navigator: antes sólo lo tenía la home y
+  el resto de pantallas se veían sobre negro.
+- La sala usa un puerto libre que elige el sistema, no el 9000 fijo.
+
+### Fixed
+
+**El QR de la sala no llevaba a ningún sitio**
+- Publicaba `host=red-local&udp=0`: ni una dirección ni un puerto. Ahora lleva
+  la IP de la red local y el puerto real del socket de la sala.
+- El descubrimiento por STUN se hacía con el puerto de la sesión, que ya estaba
+  ocupado por ella, y fallaba siempre con *address already in use*. Además su
+  resultado no servía para el QR: es el puerto de otro socket.
+- Entre redes distintas hace falta además un servidor de encuentro (ver
+  "Conexión entre redes distintas").
+
+**El micrófono del móvil nunca se transmitía**
+- La captura corría en un isolate secundario, donde un plugin no puede
+  entregar un stream, así que se enviaba el tono de reserva en su lugar. La
+  captura pasa al isolate principal; el secundario sólo recibe.
+- El permiso de micrófono no llegaba a pedirse, y su falta no se avisaba.
+
+**Con los ajustes por defecto no se podía enviar ningún frame**
+- Un frame PCM de 20 ms a 48 kHz son 1920 B y el tope por paquete es 1176 B:
+  cada envío fallaba y el primer fallo paraba el audio. La app acorta el frame
+  hasta que quepa (10 ms) y un envío fallido ya no detiene nada.
+
+**Cancelar una sala en espera podía liberar memoria en uso**
+- Al salir mientras se esperaba invitado se destruía la sesión con el
+  handshake aún dentro de la librería. Ahora se cierra, se espera a que el
+  handshake vuelva y sólo entonces se libera.
+
+
 ### Changed
 
 **Los APKs se descargan del release "Builds" de GitHub**
