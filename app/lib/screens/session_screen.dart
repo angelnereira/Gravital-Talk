@@ -1,14 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../core/glass.dart';
 import '../core/states.dart';
 import '../core/tokens.dart';
-import '../models/connection.dart';
 import '../models/session.dart';
+import '../services/engine.dart';
 import '../services/session_controller.dart';
 import '../widgets/common.dart';
 
-/// Pantalla de sesión activa: PTT, medidores y métricas en vivo.
+/// Pantalla de hablar.
+///
+/// Una sola cosa en el centro: el botón. Lo que rodea al botón responde a una
+/// única pregunta —¿quién habla ahora?— y las métricas del protocolo quedan
+/// plegadas en "Detalles técnicos". RTT, jitter y MOS son para diagnosticar,
+/// no para conversar.
 class SessionScreen extends StatelessWidget {
   const SessionScreen({super.key});
 
@@ -19,19 +25,18 @@ class SessionScreen extends StatelessWidget {
     return h > 0 ? '$h:$m:$s' : '$m:$s';
   }
 
-  /// Confirma antes de cortar: se pierde el audio en curso y no hay vuelta
-  /// atrás. Sin confirmación, un toque accidental en plena conversación
-  /// descuelga la sesión.
+  /// Confirma antes de cortar: un toque accidental en plena conversación no
+  /// debe descolgar la sesión.
   Future<void> _confirmEndSession(
     BuildContext context,
     SessionController c,
   ) async {
     final ok = await ConfirmDialog.show(
       context,
-      title: 'Finalizar sesión',
-      message: 'Se cortará el audio en curso y se perderá la conexión. '
-          'Tendrás que emparejar de nuevo.',
-      confirmLabel: 'Finalizar',
+      title: 'Salir de la sala',
+      message: 'Se cortará la conversación. Para volver a hablar habrá que '
+          'emparejar de nuevo.',
+      confirmLabel: 'Salir',
       destructive: true,
     );
     if (!ok || !context.mounted) return;
@@ -42,210 +47,322 @@ class SessionScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = context.watch<SessionController>();
-    final scheme = Theme.of(context).colorScheme;
-    final m = c.metrics;
-
-    final modeLabel = switch (c.mode) {
-      ConnectionMode.server =>
-        c.role == ConnectionRole.host ? 'Sala (host)' : 'Sala (join)',
-      ConnectionMode.p2p =>
-        c.role == ConnectionRole.host ? 'P2P (esperando)' : 'P2P (directo)',
-      null => 'Sesión',
-    };
+    final theme = Theme.of(context);
+    final glass = GlassTextTheme.of(context);
 
     return Scaffold(
       appBar: AppBar(
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(modeLabel),
-            Text(
-              c.isLive
-                  ? 'session 0x${c.sessionId.toRadixString(16).padLeft(8, '0').toUpperCase()}'
-                  : 'sin conexión',
-              style: Theme.of(context).textTheme.labelSmall,
-            ),
+            Text(c.roomCode != null ? 'Sala ${c.roomCode}' : 'Conversación'),
+            if (c.isLive)
+              Text(
+                _formatDuration(c.elapsed),
+                style: theme.textTheme.labelSmall
+                    ?.copyWith(color: glass.secondary),
+              ),
           ],
         ),
         actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 12),
-            child: Center(child: StatusBadge(c.state)),
-          ),
+          if (c.isLive)
+            Padding(
+              padding: const EdgeInsets.only(right: Spacing.lg),
+              child: Center(child: _QualityChip(metrics: c.metrics)),
+            ),
         ],
       ),
       body: !c.isLive
           ? _IdlePlaceholder(onBack: () => Navigator.pop(context))
-          : ListView(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: MetricTile(
-                        label: 'Duración',
-                        value: _formatDuration(c.elapsed),
-                        icon: Icons.timer_outlined,
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: MetricTile(
-                        label: 'Room',
-                        value: c.roomCode ?? 'P2P',
-                        icon: Icons.meeting_room_outlined,
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: MetricTile(
-                        label: 'Puerto local',
-                        value: '${c.localPort}',
-                        icon: Icons.settings_ethernet,
-                      ),
-                    ),
-                  ],
-                ),
-                if (c.state == SessionState.reconnecting) ...[
-                  const SizedBox(height: Spacing.md),
-                  const ReconnectingBanner(),
-                ],
-                if (c.engineKind == EngineKind.demo) ...[
-                  const SizedBox(height: Spacing.md),
-                  WarningBanner(
-                    message: 'Motor demo: no hay audio real. '
-                        'Compila la librería nativa para hablar de verdad.',
-                  ),
-                ],
-                const SizedBox(height: Spacing.lg),
-                const ParticipantsCard(),
-                const SizedBox(height: Spacing.lg),
-                if (c.peerPttActive && !c.pttActive)
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: scheme.primary.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(Icons.hearing, color: scheme.primary),
-                        const SizedBox(width: 10),
-                        const Text('El peer está transmitiendo…',
-                            style: TextStyle(fontWeight: FontWeight.w600)),
-                      ],
-                    ),
-                  ),
-                if (c.peerPttActive && !c.pttActive) const SizedBox(height: 14),
-                Center(
-                  child: PttButton(
-                    pressed: c.pttActive,
-                    enabled: c.isLive,
-                    peerSpeaking: c.peerPttActive,
-                    // El anillo se llena con el nivel real del micro. Sin esto
-                    // el "indicador" sería un círculo vacío con buenas
-                    // intenciones.
-                    level: c.micLevel,
-                    onDown: c.pttDown,
-                    onUp: c.pttUp,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                LevelMeter(level: c.micLevel, transmitting: c.pttActive),
-                const SizedBox(height: 6),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text('Nivel de micrófono',
-                        style: Theme.of(context).textTheme.labelSmall),
-                    Text(
-                      c.pttActive ? 'TX' : '—',
-                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          fontWeight: FontWeight.w700,
-                          color: c.pttActive
-                              ? GravitalColors.transmit
-                              : scheme.onSurfaceVariant),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 22),
-                SectionCard(
-                  title: 'Calidad de red',
-                  subtitle: 'Métricas en vivo del protocolo',
-                  child: GridView.count(
-                    crossAxisCount: 2,
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    mainAxisSpacing: 10,
-                    crossAxisSpacing: 10,
-                    childAspectRatio: 2.1,
+          : SafeArea(
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 520),
+                  child: ListView(
+                    padding: const EdgeInsets.fromLTRB(
+                        Spacing.xl, Spacing.md, Spacing.xl, Spacing.xxl),
                     children: [
-                      MetricTile(
-                        label: 'RTT',
-                        value: m.rttMs.toStringAsFixed(1),
-                        unit: 'ms',
-                        icon: Icons.speed,
-                      ),
-                      MetricTile(
-                        label: 'Jitter',
-                        value: m.jitterMs.toStringAsFixed(1),
-                        unit: 'ms',
-                        icon: Icons.waves,
-                      ),
-                      MetricTile(
-                        label: 'Pérdida',
-                        value: m.lossPercent.toStringAsFixed(1),
-                        unit: '%',
-                        icon: Icons.trending_down,
-                        color: m.lossPercent > 5 ? scheme.error : null,
-                      ),
-                      MetricTile(
-                        label: 'MOS',
-                        value: m.estimatedMos.toStringAsFixed(2),
-                        icon: Icons.star_outline,
-                        color: m.estimatedMos >= 4
-                            ? GravitalColors.online
-                            : (m.estimatedMos >= 3 ? Colors.orange : scheme.error),
-                      ),
-                      MetricTile(
-                        label: 'Buffer',
-                        value: m.bufferFillPercent.toStringAsFixed(0),
-                        unit: '%',
-                        icon: Icons.storage,
-                      ),
-                      MetricTile(
-                        label: 'Reorden.',
-                        value: m.reorderPercent.toStringAsFixed(1),
-                        unit: '%',
-                        icon: Icons.swap_vert,
-                      ),
-                      MetricTile(
-                        label: 'Paquetes RX',
-                        value: '${m.packetsReceived}',
-                        icon: Icons.download,
-                      ),
-                      MetricTile(
-                        label: 'Paquetes TX',
-                        value: '${m.packetsSent}',
-                        icon: Icons.upload,
+                      if (c.state == SessionState.reconnecting) ...[
+                        const ReconnectingBanner(),
+                        const SizedBox(height: Spacing.md),
+                      ],
+                      if (c.engineKind == EngineKind.demo) ...[
+                        const WarningBanner(
+                          message: 'Modo demostración: no hay audio real.',
+                        ),
+                        const SizedBox(height: Spacing.md),
+                      ],
+                      if (c.notice != null) ...[
+                        WarningBanner(
+                          message: c.notice!,
+                          actionLabel: 'Entendido',
+                          onAction: c.clearNotice,
+                        ),
+                        const SizedBox(height: Spacing.md),
+                      ],
+                      const SizedBox(height: Spacing.xl),
+                      _TalkPanel(controller: c),
+                      const SizedBox(height: Spacing.xxxl),
+                      _TechnicalDetails(controller: c),
+                      const SizedBox(height: Spacing.lg),
+                      OutlinedButton.icon(
+                        onPressed: () => _confirmEndSession(context, c),
+                        icon: Icon(Icons.call_end,
+                            color: theme.colorScheme.error),
+                        label: Text(
+                          'Salir de la sala',
+                          style: TextStyle(color: theme.colorScheme.error),
+                        ),
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(height: 16),
-                SectionCard(
-                  title: 'Eventos de sesión',
-                  child: EventLogView(log: c.log, max: 6),
+              ),
+            ),
+    );
+  }
+}
+
+/// El botón y, encima, quién tiene la palabra.
+///
+/// Los niveles llegan por `controller.levels`, que cambia varias veces por
+/// segundo: sólo este panel se repinta con él, no la pantalla.
+class _TalkPanel extends StatelessWidget {
+  const _TalkPanel({required this.controller});
+
+  final SessionController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = controller;
+    final theme = Theme.of(context);
+    final glass = GlassTextTheme.of(context);
+    final talking = c.pttActive;
+    final listening = c.peerPttActive && !talking;
+
+    return ValueListenableBuilder<AudioLevels>(
+      valueListenable: c.levels,
+      builder: (context, levels, _) {
+        // El aviso de "te hablan" no depende sólo de la señalización: si
+        // llega audio, alguien está hablando, se haya recibido o no su PTT.
+        final hearing = listening || (!talking && levels.rx > 0.02);
+        final (headline, detail, color) = talking
+            ? (
+                'Estás hablando',
+                'Suelta para escuchar',
+                GravitalColors.transmit,
+              )
+            : hearing
+                ? (
+                    'Te están hablando',
+                    'Espera a que termine para contestar',
+                    theme.colorScheme.primary,
+                  )
+                : (
+                    'Mantén pulsado para hablar',
+                    'El otro te oye mientras no sueltes',
+                    glass.primary,
+                  );
+        final level = talking ? levels.mic : (hearing ? levels.rx : 0.0);
+
+        return Column(
+          children: [
+            Semantics(
+              liveRegion: true,
+              child: Text(
+                headline,
+                textAlign: TextAlign.center,
+                style: theme.textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.w800,
+                  color: color,
                 ),
-                const SizedBox(height: 20),
-                OutlinedButton.icon(
-                  onPressed: () => _confirmEndSession(context, c),
-                  icon: const Icon(Icons.call_end, color: Colors.red),
-                  label: const Text('Finalizar sesión',
-                      style: TextStyle(color: Colors.red)),
+              ),
+            ),
+            const SizedBox(height: Spacing.xs),
+            Text(
+              detail,
+              textAlign: TextAlign.center,
+              style:
+                  theme.textTheme.bodyMedium?.copyWith(color: glass.secondary),
+            ),
+            const SizedBox(height: Spacing.xxxl),
+            PttButton(
+              pressed: talking,
+              enabled: c.isLive,
+              peerSpeaking: hearing,
+              level: level,
+              onDown: c.pttDown,
+              onUp: c.pttUp,
+            ),
+            const SizedBox(height: Spacing.xxxl),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: Spacing.xxxl),
+              child: LevelMeter(level: level, transmitting: talking),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// Calidad de la conexión en una palabra.
+///
+/// Resume el MOS, que nadie fuera del gremio sabe leer, en tres estados.
+class _QualityChip extends StatelessWidget {
+  const _QualityChip({required this.metrics});
+
+  final SessionMetrics metrics;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    // Sin tráfico en los dos sentidos aún no hay nada que medir, y el MOS
+    // que se calcula sobre nada sale bajo: no se afirma ni que va bien ni que
+    // va mal, sólo que hay conexión.
+    final measured = metrics.packetsReceived > 20 && metrics.rttMs > 0;
+    final mos = measured ? metrics.estimatedMos : 0.0;
+    final (label, color, icon) = mos <= 0
+        ? ('Conectado', GravitalColors.online, Icons.check_circle_outline)
+        : mos >= 4
+            ? ('Buena señal', GravitalColors.online, Icons.signal_cellular_alt)
+            : mos >= 3
+                ? (
+                    'Señal regular',
+                    GravitalColors.transmit,
+                    Icons.signal_cellular_alt_2_bar,
+                  )
+                : (
+                    'Señal mala',
+                    theme.colorScheme.error,
+                    Icons.signal_cellular_alt_1_bar,
+                  );
+    return Semantics(
+      label: 'Calidad de la conexión: $label',
+      child: ExcludeSemantics(
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 18, color: color),
+            const SizedBox(width: Spacing.xs),
+            Text(
+              label,
+              style: theme.textTheme.labelMedium
+                  ?.copyWith(color: color, fontWeight: FontWeight.w700),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Métricas del protocolo y registro, plegados por defecto.
+class _TechnicalDetails extends StatelessWidget {
+  const _TechnicalDetails({required this.controller});
+
+  final SessionController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final glass = GlassTextTheme.of(context);
+    final scheme = theme.colorScheme;
+    final c = controller;
+    final m = c.metrics;
+
+    return GlassSurface(
+      padding: EdgeInsets.zero,
+      child: Theme(
+        data: theme.copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          shape: const Border(),
+          collapsedShape: const Border(),
+          iconColor: glass.secondary,
+          collapsedIconColor: glass.secondary,
+          trailing: const Icon(Icons.keyboard_arrow_down_rounded),
+          tilePadding: const EdgeInsets.symmetric(
+              horizontal: Spacing.xl, vertical: Spacing.xs),
+          childrenPadding: const EdgeInsets.fromLTRB(
+              Spacing.xl, 0, Spacing.xl, Spacing.xl),
+          title: Text(
+            'Detalles técnicos',
+            style: theme.textTheme.titleSmall?.copyWith(color: glass.primary),
+          ),
+          subtitle: Text(
+            'Latencia, pérdida y registro de la sesión',
+            style: theme.textTheme.bodySmall?.copyWith(color: glass.secondary),
+          ),
+          children: [
+            GridView.count(
+              crossAxisCount: 2,
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              mainAxisSpacing: 10,
+              crossAxisSpacing: 10,
+              childAspectRatio: 2.1,
+              children: [
+                MetricTile(
+                  label: 'RTT',
+                  value: m.rttMs.toStringAsFixed(1),
+                  unit: 'ms',
+                  icon: Icons.speed,
+                ),
+                MetricTile(
+                  label: 'Jitter',
+                  value: m.jitterMs.toStringAsFixed(1),
+                  unit: 'ms',
+                  icon: Icons.waves,
+                ),
+                MetricTile(
+                  label: 'Pérdida',
+                  value: m.lossPercent.toStringAsFixed(1),
+                  unit: '%',
+                  icon: Icons.trending_down,
+                  color: m.lossPercent > 5 ? scheme.error : null,
+                ),
+                MetricTile(
+                  label: 'MOS',
+                  value: m.estimatedMos.toStringAsFixed(2),
+                  icon: Icons.star_outline,
+                ),
+                MetricTile(
+                  label: 'Paquetes RX',
+                  value: '${m.packetsReceived}',
+                  icon: Icons.download,
+                ),
+                MetricTile(
+                  label: 'Paquetes TX',
+                  value: '${m.packetsSent}',
+                  icon: Icons.upload,
+                ),
+                ValueListenableBuilder<AudioLevels>(
+                  valueListenable: c.levels,
+                  builder: (context, l, _) => MetricTile(
+                    label: 'Audio RX',
+                    value: '${l.rxFrames}',
+                    unit: 'frames',
+                    icon: Icons.hearing,
+                  ),
+                ),
+                ValueListenableBuilder<AudioLevels>(
+                  valueListenable: c.levels,
+                  builder: (context, l, _) => MetricTile(
+                    label: 'Audio TX',
+                    value: '${l.txFrames}',
+                    unit: 'frames',
+                    icon: Icons.mic_none,
+                  ),
                 ),
               ],
             ),
+            const SizedBox(height: Spacing.lg),
+            const ParticipantsCard(),
+            const SizedBox(height: Spacing.lg),
+            EventLogView(log: c.log, max: 6),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -258,23 +375,31 @@ class _IdlePlaceholder extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = context.watch<SessionController>();
+    final theme = Theme.of(context);
+    final glass = GlassTextTheme.of(context);
     return Center(
       child: Padding(
-        padding: const EdgeInsets.all(32),
+        padding: const EdgeInsets.all(Spacing.xxxl),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.power_off,
-                size: 56,
-                color: Theme.of(context).colorScheme.onSurfaceVariant),
-            const SizedBox(height: 16),
-            Text('No hay sesión activa',
-                style: Theme.of(context).textTheme.titleMedium),
+            Icon(Icons.call_end, size: 56, color: glass.secondary),
+            const SizedBox(height: Spacing.lg),
+            Text(
+              'La conversación terminó',
+              style:
+                  theme.textTheme.titleLarge?.copyWith(color: glass.primary),
+            ),
             if (c.error != null) ...[
-              const SizedBox(height: 8),
-              Text(c.error!, textAlign: TextAlign.center),
+              const SizedBox(height: Spacing.sm),
+              Text(
+                c.error!,
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodyMedium
+                    ?.copyWith(color: glass.secondary),
+              ),
             ],
-            const SizedBox(height: 20),
+            const SizedBox(height: Spacing.xl),
             FilledButton(onPressed: onBack, child: const Text('Volver')),
           ],
         ),

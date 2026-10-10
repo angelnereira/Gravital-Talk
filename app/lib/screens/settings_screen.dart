@@ -5,6 +5,7 @@ import 'package:toastification/toastification.dart';
 
 import '../core/constants.dart';
 import '../models/connection.dart';
+import '../services/engine.dart';
 import '../services/native_bridge.dart';
 import '../services/session_controller.dart';
 
@@ -44,9 +45,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
               SettingsTile(
                 title: const Text('Se ajusta solo'),
                 description: const Text(
-                    'Codec (Opus), sample rate, frame y bitrate se negocian en el '
-                    'handshake. Cambiarlos a mano puede romper la compatibilidad '
-                    'con otros dispositivos.'),
+                    'Sample rate, frame y bitrate se negocian en el handshake. '
+                    'Cambiarlos a mano puede romper la compatibilidad con '
+                    'otros dispositivos.'),
                 trailing: const Icon(Icons.auto_fix_high, size: 18),
                 onPressed: null,
               ),
@@ -56,6 +57,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     '${AppSettings.defaults.samplesPerFrame} muestras (${AppSettings.defaults.frameDurationMs} ms)'),
                 trailing: const Icon(Icons.straighten, size: 18),
                 onPressed: null,
+              ),
+            ],
+          ),
+          SettingsSection(
+            title: const Text('Conexión entre redes'),
+            tiles: [
+              SettingsTile.navigation(
+                title: const Text('Servidor de encuentro'),
+                description: Text(s.rendezvous.isEmpty
+                    ? 'Sin configurar: las salas sólo funcionan dentro de la '
+                        'misma red. Con uno, se puede entrar desde cualquier '
+                        'red; el audio sigue yendo directo, no pasa por él.'
+                    : '${s.rendezvous} · presenta a los dos dispositivos para '
+                        'que conecten directo. No lleva audio.'),
+                leading: const Icon(Icons.hub_outlined),
+                onPressed: (_) => _editRendezvous(c),
               ),
             ],
           ),
@@ -111,6 +128,60 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ],
       ),
     );
+  }
+
+  /// Pide la dirección del servidor de encuentro.
+  Future<void> _editRendezvous(SessionController c) async {
+    final ctl = TextEditingController(text: c.settings.rendezvous);
+    String? error;
+    final value = await showDialog<String>(
+      context: context,
+      builder: (dialogCtx) => StatefulBuilder(
+        builder: (dialogCtx, setDialog) => AlertDialog(
+          title: const Text('Servidor de encuentro'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Dirección de un gs-relay alcanzable desde internet. Déjalo '
+                'vacío para usar sólo la red local.',
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: ctl,
+                autofocus: true,
+                autocorrect: false,
+                keyboardType: TextInputType.url,
+                decoration: InputDecoration(
+                  hintText: 'relay.ejemplo.com:9000',
+                  errorText: error,
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogCtx),
+              child: const Text('Cancelar'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final text = ctl.text.trim();
+                if (text.isNotEmpty && splitHostPort(text) == null) {
+                  setDialog(() => error = 'Usa la forma host:puerto');
+                  return;
+                }
+                Navigator.pop(dialogCtx, text);
+              },
+              child: const Text('Guardar'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (value == null) return;
+    c.updateSettings(c.settings.copyWith(rendezvous: value));
   }
 
   Future<void> _runDiagnostics(SessionController c) async {

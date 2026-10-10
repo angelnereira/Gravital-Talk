@@ -68,6 +68,45 @@ final class GsMetricsNative extends Struct {
   external int bytesReceived;
 }
 
+final class GsAudioStatsNative extends Struct {
+  @Float()
+  external double micLevel;
+
+  @Float()
+  external double rxLevel;
+
+  @Uint64()
+  external int txFrames;
+
+  @Uint64()
+  external int rxFrames;
+
+  @Uint8()
+  external int captureOk;
+
+  @Uint8()
+  external int playbackOk;
+}
+
+/// Estado del audio nativo de una sesión.
+class NativeAudioStats {
+  const NativeAudioStats({
+    required this.micLevel,
+    required this.rxLevel,
+    required this.txFrames,
+    required this.rxFrames,
+    required this.captureOk,
+    required this.playbackOk,
+  });
+
+  final double micLevel;
+  final double rxLevel;
+  final int txFrames;
+  final int rxFrames;
+  final bool captureOk;
+  final bool playbackOk;
+}
+
 // ── Firmas nativas (tipos FFI) y Dart ─────────────────────────────────────
 
 typedef _VersionC = Pointer<Utf8> Function();
@@ -124,6 +163,18 @@ typedef _PreferredPortC = Int32 Function(Uint16, Pointer<Uint16>);
 typedef _ReachD = int Function(int, Pointer<Int32>);
 typedef _PreferredPortD = int Function(int, Pointer<Uint16>);
 typedef _DiscoverStunD = int Function(int, Pointer<Utf8>, int);
+typedef _DiscoverLocalC = Int32 Function(Pointer<Utf8>, UintPtr);
+typedef _DiscoverLocalD = int Function(Pointer<Utf8>, int);
+typedef _SetRendezvousC = Int32 Function(Pointer<Void>, Pointer<Utf8>, Uint16);
+typedef _SetRendezvousD = int Function(Pointer<Void>, Pointer<Utf8>, int);
+typedef _PublicAddrC = Int32 Function(Pointer<Void>, Pointer<Utf8>, UintPtr);
+typedef _PublicAddrD = int Function(Pointer<Void>, Pointer<Utf8>, int);
+typedef _ConnectAnyC = Int32 Function(Pointer<Void>, Pointer<Utf8>);
+typedef _ConnectAnyD = int Function(Pointer<Void>, Pointer<Utf8>);
+typedef _AudioSetPttC = Int32 Function(Pointer<Void>, Int32);
+typedef _AudioSetPttD = int Function(Pointer<Void>, int);
+typedef _AudioStatsC = Int32 Function(Pointer<Void>, Pointer<GsAudioStatsNative>);
+typedef _AudioStatsD = int Function(Pointer<Void>, Pointer<GsAudioStatsNative>);
 
 /// Envoltorio tipado de `libgravital_talk_ffi` (ABI C v1).
 class NativeBridge {
@@ -180,6 +231,22 @@ class NativeBridge {
         _errorClear = lib.lookupFunction<_ClearC, _ClearD>('gs_error_clear'),
         _discoverPublicAddr = lib.lookupFunction<_DiscoverStunC, _DiscoverStunD>(
             'gs_discover_public_addr'),
+        _discoverLocalAddr = lib.lookupFunction<_DiscoverLocalC, _DiscoverLocalD>(
+            'gs_discover_local_addr'),
+        _setRendezvous = lib.lookupFunction<_SetRendezvousC, _SetRendezvousD>(
+            'gs_session_set_rendezvous'),
+        _publicAddr = lib.lookupFunction<_PublicAddrC, _PublicAddrD>(
+            'gs_session_public_addr'),
+        _connectAny = lib.lookupFunction<_ConnectAnyC, _ConnectAnyD>(
+            'gs_session_connect_any'),
+        _audioSupported =
+            lib.lookupFunction<_IntC, _IntD>('gs_audio_supported'),
+        _audioStart = lib.lookupFunction<_HandleC, _HandleD>('gs_audio_start'),
+        _audioStop = lib.lookupFunction<_HandleC, _HandleD>('gs_audio_stop'),
+        _audioSetPtt = lib
+            .lookupFunction<_AudioSetPttC, _AudioSetPttD>('gs_audio_set_ptt'),
+        _audioStats =
+            lib.lookupFunction<_AudioStatsC, _AudioStatsD>('gs_audio_stats'),
         _diagnoseReachability =
             lib.lookupFunction<_ReachC, _ReachD>('gs_diagnose_reachability'),
         _preferredHostPort =
@@ -213,6 +280,15 @@ class NativeBridge {
   final _ErrorLastD _errorLast;
   final _ClearD _errorClear;
   final _DiscoverStunD _discoverPublicAddr;
+  final _DiscoverLocalD _discoverLocalAddr;
+  final _SetRendezvousD _setRendezvous;
+  final _PublicAddrD _publicAddr;
+  final _ConnectAnyD _connectAny;
+  final _IntD _audioSupported;
+  final _HandleD _audioStart;
+  final _HandleD _audioStop;
+  final _AudioSetPttD _audioSetPtt;
+  final _AudioStatsD _audioStats;
   final _ReachD _diagnoseReachability;
   final _PreferredPortD _preferredHostPort;
   final _IntD _ping;
@@ -225,8 +301,16 @@ class NativeBridge {
   /// [explicitPath] permite apuntar a un `.so`/`.dylib`/`.dll` concreto
   /// (ajustes avanzados). Devuelve `null` si no está disponible.
   static NativeBridge? tryLoad({String? explicitPath}) {
+    // Junto al ejecutable: es donde la deja el bundle de escritorio. Va antes
+    // que el nombre pelado porque éste depende del directorio de trabajo y del
+    // `LD_LIBRARY_PATH`, y una app lanzada desde el menú no tiene ninguno útil.
+    final exeDir = File(Platform.resolvedExecutable).parent.path;
     final candidates = <String>[
       if (explicitPath != null && explicitPath.isNotEmpty) explicitPath,
+      if (Platform.isLinux) '$exeDir/lib/libgravital_talk_ffi.so',
+      if (Platform.isMacOS)
+        '$exeDir/../Frameworks/libgravital_talk_ffi.dylib',
+      if (Platform.isWindows) '$exeDir\\gravital_talk_ffi.dll',
       if (Platform.isWindows) 'gravital_talk_ffi.dll',
       if (Platform.isLinux || Platform.isAndroid) 'libgravital_talk_ffi.so',
       if (Platform.isMacOS) 'libgravital_talk_ffi.dylib',
@@ -272,6 +356,62 @@ class NativeBridge {
       return (status: st, error: st == GsStatus.ok ? null : lastError());
     } finally {
       calloc.free(cHost);
+    }
+  }
+
+  /// Handshake de cliente probando varias direcciones del anfitrión.
+  ///
+  /// [candidates] son `ip:puerto`; puede ir vacía si la sesión tiene servidor
+  /// de encuentro. Bloquea: llamar desde un isolate worker.
+  ({int status, String? error}) runConnectAny(
+    int handleAddress,
+    List<String> candidates,
+  ) {
+    final ptr = Pointer<Void>.fromAddress(handleAddress);
+    final csv = candidates.join(',').toNativeUtf8();
+    try {
+      final st = _connectAny(ptr, csv);
+      return (status: st, error: st == GsStatus.ok ? null : lastError());
+    } finally {
+      calloc.free(csv);
+    }
+  }
+
+  /// Fija (o quita, con [host] vacío) el servidor de encuentro de la sesión.
+  ///
+  /// Resuelve DNS, así que bloquea: llamar desde un isolate worker.
+  ({int status, String? error}) runSetRendezvous(
+    int handleAddress,
+    String host,
+    int port,
+  ) {
+    final ptr = Pointer<Void>.fromAddress(handleAddress);
+    final cHost = host.toNativeUtf8();
+    try {
+      final st = _setRendezvous(ptr, cHost, port);
+      return (status: st, error: st == GsStatus.ok ? null : lastError());
+    } finally {
+      calloc.free(cHost);
+    }
+  }
+
+  /// Dirección pública (`ip:puerto`) del socket de la sesión, por STUN.
+  ///
+  /// `null` si STUN no contesta. Bloquea: llamar desde un isolate worker, y
+  /// sólo antes del handshake.
+  String? runPublicAddr(int handleAddress) {
+    const bufLen = 128;
+    final ptr = Pointer<Void>.fromAddress(handleAddress);
+    final buf = calloc<Uint8>(bufLen);
+    try {
+      final st = _publicAddr(ptr, buf.cast(), bufLen);
+      if (st != GsStatus.ok) {
+        lastError();
+        return null;
+      }
+      return buf.cast<Utf8>().toDartString();
+    } finally {
+      calloc.free(buf);
     }
   }
 
@@ -340,6 +480,26 @@ class NativeBridge {
       return out.value;
     } finally {
       calloc.free(out);
+    }
+  }
+
+  /// `true` si la librería trae audio nativo (micrófono y altavoz en Rust).
+  bool get audioSupported => _audioSupported() == 1;
+
+  /// IP local (LAN) del dispositivo, sin puerto. `null` si no hay red.
+  ///
+  /// El puerto no viene de aquí a propósito: es el de la sesión. El socket con
+  /// el que se averigua la IP es desechable.
+  String? discoverLocalAddress() {
+    const bufLen = 128;
+    final buf = calloc<Uint8>(bufLen);
+    try {
+      final st = _discoverLocalAddr(buf.cast(), bufLen);
+      if (st != GsStatus.ok) return null;
+      final s = buf.cast<Utf8>().toDartString();
+      return s.isEmpty ? null : s;
+    } finally {
+      calloc.free(buf);
     }
   }
 
@@ -481,6 +641,57 @@ class NativeSession {
     } finally {
       calloc.free(buf);
       calloc.free(len);
+    }
+  }
+
+  /// Arranca el audio nativo (micrófono → red, red → altavoz).
+  ///
+  /// Devuelve `false` si esta librería no lo trae (Android): entonces el audio
+  /// lo pone la app con sus plugins. Cualquier otro fallo lanza.
+  bool audioStart() {
+    _ensureAlive();
+    final st = _bridge._audioStart(_handle);
+    if (st == GsStatus.unsupported) {
+      _bridge.lastError();
+      return false;
+    }
+    _bridge._check(st);
+    return true;
+  }
+
+  /// Motivo por el que el audio nativo arrancó sin micrófono o sin altavoz
+  /// (y lo consume). `null` si abrió todo.
+  String? audioProblems() => _bridge.lastError();
+
+  /// Para el audio nativo. Inocuo si no estaba arrancado.
+  void audioStop() {
+    if (_destroyed) return;
+    _bridge._audioStop(_handle);
+  }
+
+  /// Abre o cierra el paso del micrófono a la red.
+  void audioSetPtt(bool on) {
+    if (_destroyed) return;
+    _bridge._audioSetPtt(_handle, on ? 1 : 0);
+  }
+
+  /// Niveles y contadores del audio nativo.
+  NativeAudioStats audioStats() {
+    _ensureAlive();
+    final out = calloc<GsAudioStatsNative>();
+    try {
+      _bridge._check(_bridge._audioStats(_handle, out));
+      final s = out.ref;
+      return NativeAudioStats(
+        micLevel: s.micLevel,
+        rxLevel: s.rxLevel,
+        txFrames: s.txFrames,
+        rxFrames: s.rxFrames,
+        captureOk: s.captureOk == 1,
+        playbackOk: s.playbackOk == 1,
+      );
+    } finally {
+      calloc.free(out);
     }
   }
 

@@ -120,6 +120,59 @@ void main() {
     });
   });
 
+  group('candidatas para conectar entre redes', () {
+    test('la dirección pública y el servidor de encuentro van y vuelven', () {
+      const original = PairingUri(
+        host: '192.168.0.13',
+        room: 'GRVT-A3F2',
+        udpPort: 40958,
+        token: 't',
+        publicEndpoint: '203.0.113.7:40958',
+        rendezvous: 'relay.ejemplo.com:9000',
+      );
+      final parsed = PairingUri.tryParse(original.toUri())!;
+      expect(parsed.publicEndpoint, '203.0.113.7:40958');
+      expect(parsed.rendezvous, 'relay.ejemplo.com:9000');
+    });
+
+    test('primero la red local y después la pública', () {
+      const p = PairingUri(
+        host: '192.168.0.13',
+        room: 'R',
+        udpPort: 40958,
+        publicEndpoint: '203.0.113.7:51000',
+      );
+      expect(p.candidates(9000), ['192.168.0.13:40958', '203.0.113.7:51000']);
+    });
+
+    test('una invitación antigua sigue dando su única dirección', () {
+      final p = PairingUri.tryParse(
+        'gravital-talk://pair?v=1&host=192.168.0.13&room=R&udp=40958',
+      )!;
+      expect(p.publicEndpoint, isNull);
+      expect(p.rendezvous, isNull);
+      expect(p.candidates(9000), ['192.168.0.13:40958']);
+    });
+
+    test('la misma dirección no se sonda dos veces', () {
+      // Un anfitrión con IP pública directa: su dirección local y la que ve
+      // STUN coinciden.
+      const p = PairingUri(
+        host: '203.0.113.7',
+        room: 'R',
+        udpPort: 40958,
+        publicEndpoint: '203.0.113.7:40958',
+      );
+      expect(p.candidates(9000), ['203.0.113.7:40958']);
+    });
+
+    test('sin esos campos el enlace no los menciona', () {
+      const p = PairingUri(host: 'h', room: 'R');
+      expect(p.toUri(), isNot(contains('pub=')));
+      expect(p.toUri(), isNot(contains('rv=')));
+    });
+  });
+
   group('isComplete', () {
     test('hace falta el host para conectar sin teclear', () {
       const sinHost = PairingUri(host: '', room: 'R');

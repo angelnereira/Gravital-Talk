@@ -19,6 +19,10 @@ class NativeBridge {
 
   String? discoverPublicAddress(int localPort) => null;
 
+  String? discoverLocalAddress() => null;
+
+  bool get audioSupported => false;
+
   NativeSession createSession({
     required int sampleRate,
     required int channels,
@@ -40,8 +44,42 @@ class NativeBridge {
   }) =>
       (status: GsStatus.internal, error: 'FFI no disponible en esta plataforma');
 
+  ({int status, String? error}) runConnectAny(
+    int handleAddress,
+    List<String> candidates,
+  ) =>
+      (status: GsStatus.internal, error: 'FFI no disponible en esta plataforma');
+
+  ({int status, String? error}) runSetRendezvous(
+    int handleAddress,
+    String host,
+    int port,
+  ) =>
+      (status: GsStatus.internal, error: 'FFI no disponible en esta plataforma');
+
+  String? runPublicAddr(int handleAddress) => null;
+
   ({int status, String? error}) runAcceptAny(int handleAddress) =>
       (status: GsStatus.internal, error: 'FFI no disponible en esta plataforma');
+}
+
+/// Estado del audio nativo (nunca se produce en web).
+class NativeAudioStats {
+  const NativeAudioStats({
+    required this.micLevel,
+    required this.rxLevel,
+    required this.txFrames,
+    required this.rxFrames,
+    required this.captureOk,
+    required this.playbackOk,
+  });
+
+  final double micLevel;
+  final double rxLevel;
+  final int txFrames;
+  final int rxFrames;
+  final bool captureOk;
+  final bool playbackOk;
 }
 
 /// Handle opaco (nunca instanciado en web).
@@ -74,6 +112,11 @@ class NativeSession {
   void pttRelease() => _unavailable();
   bool peerPttActive() => _unavailable();
   void destroy() => _unavailable();
+  bool audioStart() => false;
+  String? audioProblems() => null;
+  void audioStop() {}
+  void audioSetPtt(bool on) {}
+  NativeAudioStats audioStats() => _unavailable();
   NetworkReachability? diagnoseReachability() => _unavailable();
 
   Never _unavailable() =>

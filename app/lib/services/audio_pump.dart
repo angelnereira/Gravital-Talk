@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_sound/flutter_sound.dart';
@@ -9,162 +10,211 @@ import 'package:record/record.dart';
 
 import 'native_bridge.dart';
 
-/// Captura y reproducción de audio real sobre la sesión nativa.
+/// Audio de la sesión con plugins de Flutter (móvil).
 ///
-/// Arquitectura:
-///   - [AudioPump] (isolate principal): recibe frames del worker y los
-///     reproduce con `flutter_sound` (PCM16). Si el plugin no está
-///     disponible, los descarta sin romper la sesión.
-///   - Worker isolate: captura el micrófono con `record` (PCM16), acumula
-///     frames del tamaño configurado y los envía a la sesión FFI cuando PTT
-///     está activo; además hace polling de recepción con timeout y reporta
-///     el nivel de micrófono (RMS) para el VU meter.
-///   - En plataformas sin plugins (web/desktop sin soporte) o sin micrófono,
-///     cae a una fuente senoidal interna para poder probar el flujo de red.
+/// En escritorio no se usa: allí la librería nativa trae su propio audio
+/// (`gs_audio_*`) y el camino micrófono → red no pasa por Dart.
+///
+/// Reparto entre isolates, que no es arbitrario:
+///
+///   - **Isolate principal**: captura (`record`) y reproducción
+///     (`flutter_sound`). Los plugins que entregan streams sólo funcionan
+///     aquí: un isolate secundario no puede registrar el manejador de mensajes
+///     de un `EventChannel`. La captura vivía en el worker, así que el stream
+///     del micrófono nunca arrancaba y lo que se transmitía era el tono de
+///     reserva.
+///   - **Worker**: sólo la recepción, que es una llamada FFI bloqueante con
+///     timeout y congelaría la UI si se hiciera en el principal.
 class AudioPump {
-  AudioPump._(this._isolate, this._port, this._control, this._speaker);
+  AudioPump._(
+    this._session,
+    this._isolate,
+    this._port,
+    this._speaker,
+    this._frameBytes,
+  );
 
+  final NativeSession _session;
   final Isolate _isolate;
   final ReceivePort _port;
-  final SendPort _control;
   final _SpeakerSink _speaker;
+  final int _frameBytes;
 
-  double _level = 0;
-  int _rxFrames = 0;
+  AudioRecorder? _recorder;
+  StreamSubscription<Uint8List>? _micSub;
+  final BytesBuilder _pending = BytesBuilder(copy: false);
+
+  SendPort? _control;
+  bool _ptt = false;
   bool _stopped = false;
+  bool _micOk = false;
+  double _micLevel = 0;
+  double _rxLevel = 0;
+  int _txFrames = 0;
+  int _rxFrames = 0;
+  DateTime _lastRx = DateTime.fromMillisecondsSinceEpoch(0);
+  String? _warning;
 
-  /// Nivel de micrófono 0..1 (RMS suavizado).
-  double get micLevel => _level;
+  /// Nivel del micrófono 0..1. Cero si no se está transmitiendo.
+  double get micLevel => _ptt ? _micLevel : 0;
 
-  /// Frames de audio recibidos desde que arrancó el pump.
-  int get receivedFrames => _rxFrames;
+  /// Nivel del audio recibido 0..1. Cae a cero cuando deja de llegar.
+  double get rxLevel =>
+      DateTime.now().difference(_lastRx).inMilliseconds > 250 ? 0 : _rxLevel;
 
-  bool get speakerEnabled => _speaker.enabled;
+  int get txFrames => _txFrames;
+  int get rxFrames => _rxFrames;
+  bool get micOk => _micOk;
+  bool get speakerOk => _speaker.enabled;
 
-  /// Arranca el pipeline de audio para una sesión ya conectada.
+  /// Aviso pendiente para el usuario (y lo consume).
+  String? takeWarning() {
+    final w = _warning;
+    _warning = null;
+    return w;
+  }
+
+  /// `true` donde hay plugins de captura y reproducción PCM.
+  static bool get supported =>
+      !kIsWeb && (Platform.isAndroid || Platform.isIOS || Platform.isMacOS);
+
+  /// Arranca el audio de una sesión ya conectada.
   static Future<AudioPump> start({
-    required int handleAddress,
+    required NativeSession session,
     required int sampleRate,
     required int channels,
     required int frameDurationMs,
   }) async {
+    final frameBytes = (sampleRate * frameDurationMs ~/ 1000) * channels * 2;
     final port = ReceivePort();
     final speaker = await _SpeakerSink.start(sampleRate, channels);
-
     final isolate = await Isolate.spawn(
-      _audioWorkerMain,
-      [
-        port.sendPort,
-        handleAddress,
-        sampleRate,
-        channels,
-        frameDurationMs,
-        _canUsePlugins,
-      ],
-      debugName: 'gs-audio-pump',
+      _receiveWorker,
+      [port.sendPort, session.address, frameDurationMs],
+      debugName: 'gs-audio-rx',
     );
 
-    // El worker informa su puerto de control como primer mensaje.
-    final controlCompleter = Completer<SendPort>();
-    late final AudioPump pump;
-    pump = AudioPump._(isolate, port, _DeferredSendPort(controlCompleter.future), speaker);
-
-    port.listen((message) {
-      if (message is! Map) return;
-      switch (message['t']) {
-        case 'port':
-          completePort(controlCompleter, message['p'] as SendPort, pump);
-        case 'level':
-          pump._level = (message['v'] as num).toDouble().clamp(0.0, 1.0);
-        case 'audio':
-          final data = message['d'];
-          if (data is Uint8List) {
-            pump._rxFrames++;
-            unawaited(speaker.feed(data));
-          }
-      }
-    });
-
-    // Espera al puerto de control (con timeout defensivo).
+    final pump = AudioPump._(session, isolate, port, speaker, frameBytes);
+    port.listen(pump._onWorkerMessage);
+    await pump._openMic(sampleRate, channels);
+    if (!speaker.enabled) {
+      pump._warning ??= 'No se pudo abrir el altavoz: no oirás al otro.';
+    }
     return pump;
   }
 
-  static void completePort(
-    Completer<SendPort> completer,
-    SendPort port,
-    AudioPump pump,
-  ) {
-    if (!completer.isCompleted) {
-      completer.complete(port);
-      (pump._control as _DeferredSendPort).attach(port);
+  void _onWorkerMessage(Object? message) {
+    if (message is SendPort) {
+      _control = message;
+    } else if (message is Uint8List) {
+      _rxFrames++;
+      _rxLevel = _rxLevel * 0.5 + pcmLevel(message) * 0.5;
+      _lastRx = DateTime.now();
+      _speaker.feed(message);
     }
   }
 
-  /// Activa/desactiva el envío según PTT.
+  Future<void> _openMic(int sampleRate, int channels) async {
+    try {
+      final recorder = AudioRecorder();
+      // `hasPermission` pide el permiso si aún no se concedió.
+      if (!await recorder.hasPermission()) {
+        await recorder.dispose();
+        _warning = 'Sin permiso de micrófono: puedes escuchar pero no hablar. '
+            'Concédelo en los ajustes del sistema.';
+        return;
+      }
+      final stream = await recorder.startStream(RecordConfig(
+        encoder: AudioEncoder.pcm16bits,
+        sampleRate: sampleRate,
+        numChannels: channels,
+        noiseSuppress: true,
+        autoGain: true,
+        // Entregar de frame en frame: un buffer mayor es latencia añadida.
+        streamBufferSize: _frameBytes,
+      ));
+      _recorder = recorder;
+      _micSub = stream.listen(_onMicChunk);
+      _micOk = true;
+    } catch (e) {
+      _warning = 'No se pudo abrir el micrófono: $e';
+    }
+  }
+
+  void _onMicChunk(Uint8List chunk) {
+    if (_stopped) return;
+    if (!_ptt) {
+      // Lo capturado sin PTT se tira: no debe salir al pulsar después.
+      _pending.clear();
+      return;
+    }
+    _pending.add(chunk);
+    if (_pending.length < _frameBytes) return;
+
+    final all = _pending.takeBytes();
+    var offset = 0;
+    while (all.length - offset >= _frameBytes) {
+      final frame = Uint8List.sublistView(all, offset, offset + _frameBytes);
+      offset += _frameBytes;
+      try {
+        _session.sendAudio(frame);
+        _txFrames++;
+        _micLevel = _micLevel * 0.6 + pcmLevel(frame) * 0.4;
+      } on NativeException catch (e) {
+        // Un envío fallido no para el audio: la sesión puede estar
+        // reconectando. Se avisa una vez y se sigue intentando.
+        _warning ??= 'No se pudo enviar audio: ${e.message}';
+      }
+    }
+    if (offset < all.length) {
+      _pending.add(Uint8List.sublistView(all, offset));
+    }
+  }
+
+  /// Abre o cierra el paso del micrófono a la red.
   void setPtt(bool on) {
     if (_stopped) return;
-    _send({'t': 'ptt', 'v': on});
+    _ptt = on;
+    if (!on) {
+      _pending.clear();
+      _micLevel = 0;
+    }
   }
 
-  void _send(Map<String, Object?> msg) {
-    _control.send(msg);
-  }
-
-  /// Para el worker y libera el playback.
+  /// Para el worker y libera micrófono y altavoz.
   Future<void> stop() async {
     if (_stopped) return;
     _stopped = true;
-    _send({'t': 'stop'});
-    await Future<void>.delayed(const Duration(milliseconds: 250));
+    _ptt = false;
+    await _micSub?.cancel();
+    try {
+      await _recorder?.stop();
+      await _recorder?.dispose();
+    } catch (_) {
+      // El plugin pudo no haberse abierto nunca.
+    }
+    _control?.send(null);
+    // Margen para que el worker salga de su llamada bloqueante antes de que
+    // quien llama destruya la sesión que está leyendo.
+    await Future<void>.delayed(const Duration(milliseconds: 120));
     _isolate.kill(priority: Isolate.immediate);
     _port.close();
     await _speaker.stop();
   }
-
-  static final bool _canUsePlugins = !kIsWeb &&
-      (Platform.isAndroid || Platform.isIOS || Platform.isMacOS);
 }
 
-/// `SendPort` que espera a conocerse (primer mensaje del worker).
-class _DeferredSendPort implements SendPort {
-  _DeferredSendPort(this._future);
-
-  final Future<SendPort> _future;
-  SendPort? _resolved;
-
-  void attach(SendPort port) => _resolved = port;
-
-  @override
-  void send(Object? message) {
-    final r = _resolved;
-    if (r != null) {
-      r.send(message);
-    } else {
-      unawaited(_future.then((p) => p.send(message)));
-    }
-  }
-
-  @override
-  bool operator ==(Object other) => other is SendPort && other == _resolved;
-
-  @override
-  int get hashCode => _resolved?.hashCode ?? identityHashCode(this);
-}
-
-// ─────────────────────────────────────────────────────────────────────────
-// Worker isolate
-// ─────────────────────────────────────────────────────────────────────────
-
-Future<void> _audioWorkerMain(List<Object?> args) async {
+/// Worker de recepción: saca frames de la sesión y los manda al principal.
+///
+/// Cualquier mensaje por el puerto de control lo para.
+Future<void> _receiveWorker(List<Object?> args) async {
   final mainPort = args[0] as SendPort;
   final handleAddress = args[1] as int;
-  final sampleRate = args[2] as int;
-  final channels = args[3] as int;
-  final frameMs = args[4] as int;
-  final usePlugins = args[5] as bool;
+  final frameMs = args[2] as int;
 
   final control = ReceivePort();
-  mainPort.send({'t': 'port', 'p': control.sendPort});
+  mainPort.send(control.sendPort);
+  var stopped = false;
+  control.listen((_) => stopped = true);
 
   final bridge = NativeBridge.tryLoad();
   if (bridge == null) {
@@ -173,181 +223,55 @@ Future<void> _audioWorkerMain(List<Object?> args) async {
   }
   final session = NativeSession.at(bridge, handleAddress);
 
-  var ptt = false;
-  var stopped = false;
-  control.listen((msg) {
-    if (msg is! Map) return;
-    switch (msg['t']) {
-      case 'ptt':
-        ptt = msg['v'] as bool;
-      case 'stop':
-        stopped = true;
-    }
-  });
-
-  final frameBytes = (sampleRate * frameMs ~/ 1000) * channels * 2;
-
-  // ── Captura ────────────────────────────────────────────────────────────
-  AudioRecorder? recorder;
-  StreamSubscription<Uint8List>? micSub;
-  Stream<Uint8List>? micStream;
-  if (usePlugins) {
-    try {
-      recorder = AudioRecorder();
-      // `hasPermission` ya pide el permiso si no está concedido (`request`
-      // vale `true` por defecto en el paquete `record`). Lo que faltaba era
-      // avisar cuando se deniega: sin esto el PTT "funcionaba" pero no se
-      // transmitía nada, y el usuario no tenía forma de saber por qué.
-      if (await recorder.hasPermission()) {
-        micStream = await recorder.startStream(RecordConfig(
-          encoder: AudioEncoder.pcm16bits,
-          sampleRate: sampleRate,
-          numChannels: channels,
-        ));
-      } else {
-        // Sin micrófono no hay comunicación, y el usuario tiene que saberlo
-        // para poder arreglarlo en Ajustes.
-        mainPort.send({
-          't': 'error',
-          'v': 'Sin permiso de micrófono. Habilítalo en Ajustes del sistema '
-              'para poder hablar.',
-        });
-      }
-    } catch (e) {
-      micStream = null;
-      mainPort.send({
-        't': 'error',
-        'v': 'No se pudo abrir el micrófono: $e',
-      });
-    }
-  }
-
-  final buffer = <int>[];
-  var lastLevelSent = DateTime.fromMillisecondsSinceEpoch(0);
-  double smoothLevel = 0;
-
-  void reportLevel(double value) {
-    smoothLevel = smoothLevel * 0.7 + value * 0.3;
-    final now = DateTime.now();
-    if (now.difference(lastLevelSent).inMilliseconds >= 80) {
-      lastLevelSent = now;
-      mainPort.send({'t': 'level', 'v': smoothLevel});
-    }
-  }
-
-  void sendFrame(List<int> frame) {
-    try {
-      session.sendAudio(Uint8List.fromList(frame));
-      reportLevel(_rms(frame));
-    } catch (_) {
-      stopped = true;
-    }
-  }
-
-  micSub = micStream?.listen((chunk) {
-    if (stopped) return;
-    if (!ptt) {
-      buffer.clear();
-      return;
-    }
-    buffer.addAll(chunk);
-    while (buffer.length >= frameBytes) {
-      final frame = buffer.sublist(0, frameBytes);
-      buffer.removeRange(0, frameBytes);
-      if (stopped) break;
-      sendFrame(frame);
-    }
-  });
-
-  // ── Fuente senoidal si no hay micrófono ────────────────────────────────
-  Timer? sineTimer;
-  if (micStream == null) {
-    final rng = Random();
-    var phase = 0.0;
-    final step = 2 * pi * 440.0 / sampleRate;
-    sineTimer = Timer.periodic(Duration(milliseconds: frameMs), (_) {
-      if (stopped || !ptt) return;
-      final frame = <int>[];
-      final mono = sampleRate * frameMs ~/ 1000;
-      for (var i = 0; i < mono; i++) {
-        // Mezcla tono + ruido suave para que el RMS no sea constante.
-        final s = (sin(phase) * 12000 + (rng.nextDouble() - 0.5) * 1500)
-            .clamp(-32768.0, 32767.0)
-            .toInt();
-        for (var c = 0; c < channels; c++) {
-          frame
-            ..add(s & 0xFF)
-            ..add((s >> 8) & 0xFF);
-        }
-        phase += step;
-        if (phase > 2 * pi) phase -= 2 * pi;
-      }
-      sendFrame(frame);
-    });
-  }
-
-  // ── Recepción (polling con timeout para poder parar) ───────────────────
-  unawaited((() async {
-    while (!stopped) {
-      try {
-        final frame = session.recvAudioTimeout(timeoutMs: frameMs);
-        if (frame != null) {
-          mainPort.send({'t': 'audio', 'd': frame});
-        }
-      } catch (_) {
-        break;
-      }
-      await Future<void>.delayed(Duration.zero);
-    }
-  })());
-
-  // ── Espera de parada ───────────────────────────────────────────────────
   while (!stopped) {
-    await Future<void>.delayed(const Duration(milliseconds: 50));
-  }
-
-  await micSub?.cancel();
-  sineTimer?.cancel();
-  try {
-    await recorder?.stop();
-    await recorder?.dispose();
-  } catch (_) {
-    // El plugin pudo no haberse abierto nunca.
+    try {
+      final frame = session.recvAudioTimeout(timeoutMs: frameMs * 2);
+      if (frame != null) {
+        mainPort.send(frame);
+      }
+    } on NativeException {
+      // Sesión cerrada o aún sin peer: esperar en vez de girar en vacío.
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+    // Ceder el turno para que llegue el mensaje de parada.
+    await Future<void>.delayed(Duration.zero);
   }
   control.close();
 }
 
-/// RMS normalizado (0..1) de un frame PCM16 LE.
-double _rms(List<int> pcm) {
-  if (pcm.length < 2) return 0;
-  var sum = 0.0;
-  var n = 0;
-  for (var i = 0; i + 1 < pcm.length; i += 2) {
-    var s = pcm[i] | (pcm[i + 1] << 8);
-    if (s >= 0x8000) s -= 0x10000;
-    final f = s / 32768.0;
-    sum += f * f;
-    n++;
-  }
+/// Nivel 0..1 de un frame PCM16 LE (RMS con ganancia para el medidor).
+double pcmLevel(Uint8List pcm) {
+  final n = pcm.length ~/ 2;
   if (n == 0) return 0;
+  final data = ByteData.sublistView(pcm);
+  var sum = 0.0;
+  for (var i = 0; i < n; i++) {
+    final f = data.getInt16(i * 2, Endian.little) / 32768.0;
+    sum += f * f;
+  }
   return (sqrt(sum / n) * 3).clamp(0.0, 1.0);
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Playback (isolate principal, PCM16 vía flutter_sound)
+// Reproducción (isolate principal, PCM16 vía flutter_sound)
 // ─────────────────────────────────────────────────────────────────────────
 
 class _SpeakerSink {
-  _SpeakerSink._(this._player);
-
   FlutterSoundPlayer? _player;
   bool _enabled = false;
+
+  /// Frames entregados al reproductor que aún no ha aceptado.
+  int _backlog = 0;
+
+  /// Tope de frames en espera. Por encima se descarta: audio que llega tarde
+  /// a una conversación es peor que audio que falta.
+  static const _maxBacklog = 8;
 
   bool get enabled => _enabled;
 
   static Future<_SpeakerSink> start(int sampleRate, int channels) async {
-    final sink = _SpeakerSink._(null);
-    if (!AudioPump._canUsePlugins) return sink;
+    final sink = _SpeakerSink();
+    if (!AudioPump.supported) return sink;
     try {
       final player = FlutterSoundPlayer();
       await player.openPlayer();
@@ -356,7 +280,7 @@ class _SpeakerSink {
         interleaved: true,
         numChannels: channels,
         sampleRate: sampleRate,
-        bufferSize: 2048,
+        bufferSize: 1024,
       );
       sink._player = player;
       sink._enabled = true;
@@ -366,26 +290,25 @@ class _SpeakerSink {
     return sink;
   }
 
-  Future<void> feed(Uint8List data) async {
+  void feed(Uint8List data) {
     final p = _player;
-    if (!_enabled || p == null) return;
-    try {
-      await p.feedUint8FromStream(data);
-    } catch (_) {
-      // Buffer underflow / reproducción detenida: ignorar.
-    }
+    if (!_enabled || p == null || _backlog >= _maxBacklog) return;
+    _backlog++;
+    p.feedUint8FromStream(data).then<void>((_) {}, onError: (Object _) {
+      // Reproducción detenida a medias: se ignora.
+    }).whenComplete(() => _backlog--);
   }
 
   Future<void> stop() async {
     final p = _player;
     if (p == null) return;
+    _enabled = false;
+    _player = null;
     try {
       await p.stopPlayer();
       await p.closePlayer();
     } catch (_) {
       // ignorar
     }
-    _enabled = false;
-    _player = null;
   }
 }
