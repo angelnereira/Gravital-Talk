@@ -625,7 +625,8 @@ class LevelMeter extends StatelessWidget {
           animationDuration: 120,
           lineHeight: 8,
           barRadius: const Radius.circular(8),
-          backgroundColor: scheme.surfaceContainerHighest,
+          // Carril translúcido: uno opaco se confunde con una barra llena.
+          backgroundColor: scheme.onSurface.withValues(alpha: 0.12),
           progressColor:
               transmitting ? GravitalColors.transmit : scheme.primary,
         ),

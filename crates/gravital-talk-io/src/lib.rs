@@ -6,6 +6,8 @@
 //!   PCM i16 a un canal std::mpsc.
 //! - [`AudioPlayback`] — reproduce PCM i16 recibido por un canal.
 //! - [`devices`] — enumeración de devices input/output.
+//! - [`VoiceCapture`] / [`VoicePlayback`] — lo mismo pero en el formato de la
+//!   sesión (mono, sample rate pedido) y con latencia acotada.
 //!
 //! El diseño desacopla la callback de cpal (que corre en un thread de
 //! tiempo real) del pipeline Gravital Talk usando canales sin bloqueo.
@@ -18,12 +20,14 @@ pub mod devices;
 pub mod error;
 pub mod playback;
 pub mod resampler;
+pub mod voice;
 
 pub use capture::AudioCapture;
 pub use devices::{list_input_devices, list_output_devices, DeviceInfo};
 pub use error::IoError;
 pub use playback::AudioPlayback;
 pub use resampler::Resampler;
+pub use voice::{VoiceCapture, VoicePlayback};
 
 pub type Result<T> = core::result::Result<T, IoError>;
 

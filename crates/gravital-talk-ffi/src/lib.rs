@@ -19,11 +19,14 @@ use std::cell::RefCell;
 use std::ffi::{c_char, c_int, CStr, CString};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::ptr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+
+mod audio;
 
 use gravital_talk::{
-    discover_public_addr, reach, Config as RustConfig, HandshakeMode, LatencyClass,
-    MetricsSnapshot, Session, SessionRole, SessionState, TransportError, UdpConfig, UdpTransport,
+    discover_local_addr, discover_public_addr, reach, Config as RustConfig, HandshakeMode,
+    LatencyClass, MetricsSnapshot, Session, SessionRole, SessionState, TransportError, UdpConfig,
+    UdpTransport,
 };
 
 thread_local! {
@@ -43,8 +46,21 @@ pub struct GsSessionHandle {
 }
 
 struct SessionInner {
-    runtime: tokio::runtime::Runtime,
+    /// Va primero para soltarse primero: sus hilos usan el runtime y la sesión.
+    audio: Mutex<Option<audio::Engine>>,
+    /// En `Arc` porque los hilos de audio también hacen `block_on` sobre él.
+    runtime: Arc<tokio::runtime::Runtime>,
     session: Arc<Session>,
+    config: GsConfig,
+}
+
+impl SessionInner {
+    fn audio(&self) -> std::sync::MutexGuard<'_, Option<audio::Engine>> {
+        match self.audio.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        }
+    }
 }
 
 /// Versión ABI estable.
@@ -64,6 +80,8 @@ pub enum GsStatus {
     GS_ERR_INVALID_STATE = -7,
     GS_ERR_CLOSED = -8,
     GS_ERR_BUFFER_TOO_SMALL = -9,
+    /// La operación no existe en este build (p. ej. audio nativo en Android).
+    GS_ERR_UNSUPPORTED = -10,
     GS_ERR_INTERNAL = -99,
 }
 
@@ -268,7 +286,12 @@ pub unsafe extern "C" fn gs_session_create(
     };
 
     let session = Arc::new(Session::new(transport, rust_cfg));
-    let inner = Box::new(SessionInner { runtime, session });
+    let inner = Box::new(SessionInner {
+        audio: Mutex::new(None),
+        runtime: Arc::new(runtime),
+        session,
+        config: *cfg_c,
+    });
     let ptr = Box::into_raw(inner) as *mut GsSessionHandle;
     unsafe { *out_handle = ptr };
     GsStatus::GS_OK
@@ -442,6 +465,8 @@ pub unsafe extern "C" fn gs_session_close(handle: *mut GsSessionHandle) -> GsSta
         return GsStatus::GS_ERR_NULL_POINTER;
     }
     let inner = unsafe { &*(handle as *mut SessionInner) };
+    // El audio se para antes de cerrar: sus hilos leen y escriben la sesión.
+    drop(inner.audio().take());
     let session = inner.session.clone();
     let _ = inner.runtime.block_on(async move { session.close().await });
     GsStatus::GS_OK
@@ -806,6 +831,63 @@ pub unsafe extern "C" fn gs_discover_public_addr(
     }
 }
 
+/// Descubre la IP local (LAN) de este dispositivo.
+///
+/// Es el host que va en el QR: dos dispositivos en la misma WiFi se conectan
+/// por la LAN, y la IP pública del router no siempre vuelve a entrar (hairpin
+/// NAT).
+///
+/// Escribe **sólo la IP** como C-string NUL-terminada. El puerto es el de la
+/// sesión (`gs_session_local_port`): el socket con el que se averigua la IP es
+/// desechable y su puerto no sirve a nadie.
+///
+/// # Safety
+/// `out_buf` debe apuntar a un buffer de al menos `buf_len` bytes escribibles.
+#[no_mangle]
+pub unsafe extern "C" fn gs_discover_local_addr(out_buf: *mut c_char, buf_len: usize) -> GsStatus {
+    if out_buf.is_null() || buf_len < 8 {
+        return GsStatus::GS_ERR_NULL_POINTER;
+    }
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            set_last_error(format!("runtime: {e}"));
+            return GsStatus::GS_ERR_INTERNAL;
+        }
+    };
+    match runtime.block_on(discover_local_addr()) {
+        Ok(addr) => {
+            if addr.ip().is_unspecified() {
+                set_last_error("local addr: sin ruta de red");
+                return GsStatus::GS_ERR_IO;
+            }
+            let s = addr.ip().to_string();
+            let bytes = s.as_bytes();
+            if bytes.len() + 1 > buf_len {
+                return GsStatus::GS_ERR_BUFFER_TOO_SMALL;
+            }
+            // SAFETY: `out_buf` tiene `buf_len` bytes escribibles (contrato de
+            // la función) y se acaba de comprobar que caben los bytes y el NUL.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    bytes.as_ptr() as *const c_char,
+                    out_buf,
+                    bytes.len(),
+                );
+                *out_buf.add(bytes.len()) = 0;
+            }
+            GsStatus::GS_OK
+        }
+        Err(e) => {
+            set_last_error(format!("local addr: {e}"));
+            GsStatus::GS_ERR_IO
+        }
+    }
+}
+
 /// Handshake servidor que acepta el primer cliente que llegue desde cualquier
 /// dirección (modo QR/code pairing — no se requiere conocer la IP del cliente).
 ///
@@ -831,6 +913,330 @@ pub unsafe extern "C" fn gs_session_accept_any(handle: *mut GsSessionHandle) -> 
             GsStatus::GS_ERR_HANDSHAKE
         }
     }
+}
+
+// ─── Conexión entre redes distintas ────────────────────────────────────
+
+/// Copia `text` a `out_buf` como C-string NUL-terminada.
+///
+/// # Safety
+/// `out_buf` debe apuntar a `buf_len` bytes escribibles.
+unsafe fn write_c_string(text: &str, out_buf: *mut c_char, buf_len: usize) -> GsStatus {
+    let bytes = text.as_bytes();
+    if bytes.len() + 1 > buf_len {
+        return GsStatus::GS_ERR_BUFFER_TOO_SMALL;
+    }
+    // SAFETY: `out_buf` tiene `buf_len` bytes escribibles (contrato) y se acaba
+    // de comprobar que caben los bytes y el NUL.
+    unsafe {
+        ptr::copy_nonoverlapping(bytes.as_ptr() as *const c_char, out_buf, bytes.len());
+        *out_buf.add(bytes.len()) = 0;
+    }
+    GsStatus::GS_OK
+}
+
+/// Fija el servidor de encuentro que coordina la perforación de NAT.
+///
+/// Con él, dos dispositivos en redes distintas conectan directo: el servidor
+/// (un `gs-relay`) sólo le dice a cada uno la dirección pública del otro; el
+/// audio no pasa por él. Llamar después de `gs_session_set_room_token` y antes
+/// del handshake. `host` nulo o vacío lo desactiva.
+///
+/// Devuelve `GS_ERR_IO` si `host` no resuelve.
+///
+/// # Safety
+/// `handle` debe ser válido; `host`, nulo o una C-string NUL-terminada.
+#[no_mangle]
+pub unsafe extern "C" fn gs_session_set_rendezvous(
+    handle: *mut GsSessionHandle,
+    host: *const c_char,
+    port: u16,
+) -> GsStatus {
+    if handle.is_null() {
+        return GsStatus::GS_ERR_NULL_POINTER;
+    }
+    // SAFETY: `handle` no es nulo y viene de `gs_session_create` (contrato).
+    let inner = unsafe { &*(handle as *mut SessionInner) };
+    if host.is_null() {
+        inner.session.set_rendezvous(None);
+        return GsStatus::GS_OK;
+    }
+    // SAFETY: `host` no es nulo y es una C-string NUL-terminada (contrato).
+    let Ok(host) = unsafe { CStr::from_ptr(host) }.to_str() else {
+        return GsStatus::GS_ERR_INVALID_ARGUMENT;
+    };
+    if host.is_empty() {
+        inner.session.set_rendezvous(None);
+        return GsStatus::GS_OK;
+    }
+    let resolved = inner.runtime.block_on(async {
+        let lookup = tokio::net::lookup_host((host, port));
+        tokio::time::timeout(std::time::Duration::from_secs(4), lookup).await
+    });
+    // El socket de la sesión es IPv4: una dirección IPv6 no serviría.
+    match resolved {
+        Ok(Ok(mut addrs)) => {
+            let ipv4 = addrs.find(SocketAddr::is_ipv4);
+            if ipv4.is_none() {
+                set_last_error(format!("rendezvous: {host} no tiene dirección IPv4"));
+                return GsStatus::GS_ERR_IO;
+            }
+            inner.session.set_rendezvous(ipv4);
+            GsStatus::GS_OK
+        }
+        Ok(Err(e)) => {
+            set_last_error(format!("rendezvous: {host}: {e}"));
+            GsStatus::GS_ERR_IO
+        }
+        Err(_) => {
+            set_last_error(format!("rendezvous: {host} no resolvió a tiempo"));
+            GsStatus::GS_ERR_TIMEOUT
+        }
+    }
+}
+
+/// Dirección pública (`ip:puerto`) del socket **de esta sesión**, vista por
+/// STUN.
+///
+/// A diferencia de `gs_discover_public_addr`, que pregunta desde otro socket,
+/// el puerto que devuelve es el de la sala: es la dirección que tiene sentido
+/// poner en una invitación. Llamar antes del handshake.
+///
+/// # Safety
+/// `handle` debe ser válido y `out_buf` apuntar a `buf_len` bytes escribibles.
+#[no_mangle]
+pub unsafe extern "C" fn gs_session_public_addr(
+    handle: *mut GsSessionHandle,
+    out_buf: *mut c_char,
+    buf_len: usize,
+) -> GsStatus {
+    if handle.is_null() || out_buf.is_null() {
+        return GsStatus::GS_ERR_NULL_POINTER;
+    }
+    // SAFETY: `handle` no es nulo y viene de `gs_session_create` (contrato).
+    let inner = unsafe { &*(handle as *mut SessionInner) };
+    let session = inner.session.clone();
+    match inner
+        .runtime
+        .block_on(async move { session.discover_public_addr().await })
+    {
+        // SAFETY: `out_buf` y `buf_len` cumplen el contrato de esta función.
+        Ok(addr) => unsafe { write_c_string(&addr.to_string(), out_buf, buf_len) },
+        Err(e) => {
+            set_last_error(format!("public addr: {e}"));
+            GsStatus::GS_ERR_IO
+        }
+    }
+}
+
+/// Handshake de cliente contra un anfitrión con varias direcciones posibles.
+///
+/// `candidates` es una lista `ip:puerto` separada por comas (red local,
+/// pública…). Se sondan todas a la vez y se conecta por la primera que
+/// contesta, prefiriendo la de red local. Puede ir vacía si hay servidor de
+/// encuentro: la dirección del anfitrión llega entonces por él.
+///
+/// # Safety
+/// `handle` debe ser válido y `candidates` una C-string NUL-terminada.
+#[no_mangle]
+pub unsafe extern "C" fn gs_session_connect_any(
+    handle: *mut GsSessionHandle,
+    candidates: *const c_char,
+) -> GsStatus {
+    if handle.is_null() || candidates.is_null() {
+        return GsStatus::GS_ERR_NULL_POINTER;
+    }
+    // SAFETY: `handle` no es nulo y viene de `gs_session_create` (contrato).
+    let inner = unsafe { &*(handle as *mut SessionInner) };
+    // SAFETY: `candidates` no es nulo y es una C-string NUL-terminada.
+    let Ok(text) = unsafe { CStr::from_ptr(candidates) }.to_str() else {
+        return GsStatus::GS_ERR_INVALID_ARGUMENT;
+    };
+    let mut addrs: Vec<SocketAddr> = Vec::new();
+    for part in text.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+        match part.parse() {
+            Ok(addr) => addrs.push(addr),
+            Err(_) => {
+                set_last_error(format!("candidata no válida: {part}"));
+                return GsStatus::GS_ERR_INVALID_ARGUMENT;
+            }
+        }
+    }
+    let session = inner.session.clone();
+    match inner
+        .runtime
+        .block_on(async move { session.handshake_any(&addrs).await })
+    {
+        Ok(()) => GsStatus::GS_OK,
+        Err(TransportError::Timeout) => {
+            set_last_error("handshake timeout");
+            GsStatus::GS_ERR_TIMEOUT
+        }
+        Err(e) => {
+            set_last_error(format!("handshake: {e}"));
+            GsStatus::GS_ERR_HANDSHAKE
+        }
+    }
+}
+
+// ─── Audio nativo ──────────────────────────────────────────────────────
+
+/// Estado del audio nativo de una sesión.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct GsAudioStats {
+    /// Nivel del micrófono, 0..1. Cero si no se está transmitiendo.
+    pub mic_level: f32,
+    /// Nivel del audio recibido, 0..1.
+    pub rx_level: f32,
+    /// Frames enviados desde `gs_audio_start`.
+    pub tx_frames: u64,
+    /// Frames recibidos desde `gs_audio_start`.
+    pub rx_frames: u64,
+    /// `1` si hay micrófono abierto.
+    pub capture_ok: u8,
+    /// `1` si hay salida de audio abierta.
+    pub playback_ok: u8,
+}
+
+/// Devuelve `1` si este build trae audio nativo (`gs_audio_start` funciona).
+#[no_mangle]
+pub const extern "C" fn gs_audio_supported() -> c_int {
+    cfg!(feature = "audio") as c_int
+}
+
+/// Arranca el audio nativo de la sesión: micrófono → red y red → altavoz.
+///
+/// Llamar con la sesión ya en `Active`. Mientras está arrancado, el embebedor
+/// **no** debe llamar a `gs_session_send_audio` ni `gs_session_recv_audio`:
+/// competiría con estos hilos por los mismos frames.
+///
+/// Que falte el micrófono o el altavoz no es un error: la sesión sigue,
+/// `gs_audio_stats` dice cuál de los dos falta y `gs_error_last` por qué. Devuelve `GS_ERR_UNSUPPORTED`
+/// si el build no trae audio nativo y `GS_ERR_INVALID_ARGUMENT` si un frame de
+/// la configuración no cabe en un paquete.
+///
+/// # Safety
+/// `handle` debe ser un handle válido de `gs_session_create`.
+#[no_mangle]
+pub unsafe extern "C" fn gs_audio_start(handle: *mut GsSessionHandle) -> GsStatus {
+    if handle.is_null() {
+        return GsStatus::GS_ERR_NULL_POINTER;
+    }
+    // SAFETY: `handle` no es nulo y viene de `gs_session_create` (contrato).
+    let inner = unsafe { &*(handle as *mut SessionInner) };
+    audio_start(inner)
+}
+
+#[cfg(feature = "audio")]
+fn audio_start(inner: &SessionInner) -> GsStatus {
+    if inner.audio().is_some() {
+        return GsStatus::GS_OK;
+    }
+    // El motor se arranca sin el cerrojo cogido: abrir los devices tarda, y
+    // `gs_audio_stats` no debe quedarse esperando mientras tanto.
+    match audio::Engine::start(
+        inner.runtime.clone(),
+        inner.session.clone(),
+        inner.config.sample_rate,
+        inner.config.channels,
+        inner.config.frame_duration_ms,
+    ) {
+        Ok(engine) => {
+            // Arrancar sin un device no es un error, pero el motivo se deja en
+            // `gs_error_last` para quien quiera mostrarlo.
+            if let Some(problems) = engine.shared().problems() {
+                set_last_error(format!("audio: {problems}"));
+            }
+            *inner.audio() = Some(engine);
+            GsStatus::GS_OK
+        }
+        Err(e) => {
+            set_last_error(format!("audio: {e}"));
+            GsStatus::GS_ERR_INVALID_ARGUMENT
+        }
+    }
+}
+
+#[cfg(not(feature = "audio"))]
+fn audio_start(inner: &SessionInner) -> GsStatus {
+    let _ = (&inner.config, &inner.audio);
+    set_last_error("audio: este build no trae audio nativo");
+    GsStatus::GS_ERR_UNSUPPORTED
+}
+
+/// Para el audio nativo. No hace nada si no estaba arrancado.
+///
+/// # Safety
+/// `handle` debe ser un handle válido de `gs_session_create`.
+#[no_mangle]
+pub unsafe extern "C" fn gs_audio_stop(handle: *mut GsSessionHandle) -> GsStatus {
+    if handle.is_null() {
+        return GsStatus::GS_ERR_NULL_POINTER;
+    }
+    // SAFETY: `handle` no es nulo y viene de `gs_session_create` (contrato).
+    let inner = unsafe { &*(handle as *mut SessionInner) };
+    // Se saca del mutex antes de soltarlo: el `Drop` espera a los hilos y no
+    // debe hacerlo con el cerrojo cogido.
+    let engine = inner.audio().take();
+    drop(engine);
+    GsStatus::GS_OK
+}
+
+/// Abre (`on != 0`) o cierra el paso del micrófono a la red.
+///
+/// Es independiente de `gs_session_ptt_press`, que señaliza el turno al peer:
+/// esta función sólo decide si los frames capturados se envían.
+///
+/// # Safety
+/// `handle` debe ser un handle válido de `gs_session_create`.
+#[no_mangle]
+pub unsafe extern "C" fn gs_audio_set_ptt(handle: *mut GsSessionHandle, on: c_int) -> GsStatus {
+    if handle.is_null() {
+        return GsStatus::GS_ERR_NULL_POINTER;
+    }
+    // SAFETY: `handle` no es nulo y viene de `gs_session_create` (contrato).
+    let inner = unsafe { &*(handle as *mut SessionInner) };
+    inner
+        .audio()
+        .as_ref()
+        .map_or(GsStatus::GS_ERR_INVALID_STATE, |engine| {
+            engine.shared().set_ptt(on != 0);
+            GsStatus::GS_OK
+        })
+}
+
+/// Lee el estado del audio nativo. Con el audio parado escribe todo a cero.
+///
+/// # Safety
+/// `handle` debe ser válido y `out` apuntar a un `GsAudioStats` escribible.
+#[no_mangle]
+pub unsafe extern "C" fn gs_audio_stats(
+    handle: *mut GsSessionHandle,
+    out: *mut GsAudioStats,
+) -> GsStatus {
+    if handle.is_null() || out.is_null() {
+        return GsStatus::GS_ERR_NULL_POINTER;
+    }
+    // SAFETY: `handle` no es nulo y viene de `gs_session_create` (contrato).
+    let inner = unsafe { &*(handle as *mut SessionInner) };
+    let stats = inner
+        .audio()
+        .as_ref()
+        .map(|e| e.shared().stats())
+        .unwrap_or_default();
+    // SAFETY: `out` no es nulo y apunta a un `GsAudioStats` escribible.
+    unsafe {
+        *out = GsAudioStats {
+            mic_level: stats.mic_level,
+            rx_level: stats.rx_level,
+            tx_frames: stats.tx_frames,
+            rx_frames: stats.rx_frames,
+            capture_ok: u8::from(stats.capture_ok),
+            playback_ok: u8::from(stats.playback_ok),
+        };
+    }
+    GsStatus::GS_OK
 }
 
 /// Retorna `GS_OK` — útil como smoke test de linkado.
@@ -909,5 +1315,55 @@ mod tests {
         assert_eq!(state, GsSessionState::GS_STATE_IDLE);
 
         unsafe { gs_session_destroy(handle) };
+    }
+
+    #[test]
+    fn las_estadisticas_de_audio_son_cero_con_el_audio_parado() {
+        let mut cfg = GsConfig {
+            sample_rate: 0,
+            channels: 0,
+            frame_duration_ms: 0,
+            max_bitrate: 0,
+            codec_preferred: 0,
+            capability_flags: 0,
+            jitter_buffer_ms: 0,
+            mtu: 0,
+        };
+        unsafe { gs_config_default(&mut cfg) };
+        let bind = CString::new("127.0.0.1").unwrap();
+        let mut handle: *mut GsSessionHandle = std::ptr::null_mut();
+        assert_eq!(
+            unsafe { gs_session_create(&cfg, bind.as_ptr(), 0, &mut handle) },
+            GsStatus::GS_OK
+        );
+
+        let mut stats = GsAudioStats {
+            rx_frames: 99,
+            ..Default::default()
+        };
+        assert_eq!(
+            unsafe { gs_audio_stats(handle, &mut stats) },
+            GsStatus::GS_OK
+        );
+        assert_eq!(stats.rx_frames, 0);
+        // Sin audio arrancado no hay PTT que abrir, y parar es inocuo.
+        assert_eq!(
+            unsafe { gs_audio_set_ptt(handle, 1) },
+            GsStatus::GS_ERR_INVALID_STATE
+        );
+        assert_eq!(unsafe { gs_audio_stop(handle) }, GsStatus::GS_OK);
+
+        unsafe { gs_session_destroy(handle) };
+    }
+
+    #[test]
+    fn la_ip_local_no_lleva_puerto() {
+        let mut buf = [0 as c_char; 64];
+        let st = unsafe { gs_discover_local_addr(buf.as_mut_ptr(), buf.len()) };
+        // Sin red no hay IP que dar; con red, tiene que ser una IP pelada.
+        if st == GsStatus::GS_OK {
+            let s = unsafe { CStr::from_ptr(buf.as_ptr()) }.to_str().unwrap();
+            assert!(s.parse::<IpAddr>().is_ok(), "no es una IP: {s}");
+        }
     }
 }

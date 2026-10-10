@@ -49,7 +49,7 @@ pub use gravital_talk_metrics::{
 };
 
 pub use gravital_talk_transport::{
-    discover_public_addr,
+    discover_local_addr, discover_public_addr,
     jitter_buffer::{Frame, JitterBuffer},
     session::HandshakeMode,
     udp::{UdpConfig, UdpTransport, DEFAULT_SOCKET_BUFFER, DSCP_EF},

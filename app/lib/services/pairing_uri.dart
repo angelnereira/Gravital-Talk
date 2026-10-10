@@ -42,6 +42,8 @@ class PairingUri {
     this.udpPort,
     this.obsPort,
     this.token,
+    this.publicEndpoint,
+    this.rendezvous,
   });
 
   /// Intenta interpretar un valor escaneado.
@@ -83,7 +85,14 @@ class PairingUri {
       udpPort: int.tryParse(uri.queryParameters['udp'] ?? ''),
       obsPort: int.tryParse(uri.queryParameters['obs'] ?? ''),
       token: uri.queryParameters['token']?.trim(),
+      publicEndpoint: _nonEmpty(uri.queryParameters['pub']),
+      rendezvous: _nonEmpty(uri.queryParameters['rv']),
     );
+  }
+
+  static String? _nonEmpty(String? value) {
+    final v = value?.trim() ?? '';
+    return v.isEmpty ? null : v;
   }
 
   static bool _looksLikeRoomCode(String code) {
@@ -108,6 +117,31 @@ class PairingUri {
   /// Token de sala. `null` o vacío = sala abierta.
   final String? token;
 
+  /// Dirección pública del anfitrión (`ip:puerto`), o `null`.
+  ///
+  /// Segunda candidata, para quien no está en su misma red: [host] es la de
+  /// la red local.
+  final String? publicEndpoint;
+
+  /// Servidor de encuentro (`host:puerto`) que usa el anfitrión, o `null`.
+  ///
+  /// Viaja en la invitación para que el invitado use el mismo sin tener que
+  /// configurarlo: los dos tienen que registrarse en el mismo sitio.
+  final String? rendezvous;
+
+  /// Direcciones del anfitrión por las que intentar conectar, de la más
+  /// cercana a la más lejana.
+  List<String> candidates(int defaultPort) {
+    final list = <String>[];
+    if (host.isNotEmpty) {
+      final h = host.contains(':') ? '[$host]' : host;
+      list.add('$h:${udpPort ?? defaultPort}');
+    }
+    final pub = publicEndpoint;
+    if (pub != null && !list.contains(pub)) list.add(pub);
+    return list;
+  }
+
   /// `true` si el QR traía todo lo necesario para conectar sin teclear nada.
   ///
   /// Es la comprobación que decide si la pantalla de unirse pasa directa a
@@ -127,6 +161,8 @@ class PairingUri {
     if (udpPort != null) params['udp'] = '$udpPort';
     if (obsPort != null) params['obs'] = '$obsPort';
     if (token != null && token!.isNotEmpty) params['token'] = token!;
+    if (publicEndpoint != null) params['pub'] = publicEndpoint!;
+    if (rendezvous != null) params['rv'] = rendezvous!;
 
     final query = params.entries
         .map((e) =>

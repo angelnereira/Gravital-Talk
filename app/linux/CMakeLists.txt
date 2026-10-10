@@ -100,6 +100,19 @@ install(FILES "${FLUTTER_ICU_DATA_FILE}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}
 install(FILES "${FLUTTER_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
   COMPONENT Runtime)
 
+# Motor nativo de Gravital Talk (Rust). Va en el bundle junto al resto de
+# librerías: sin él la app arranca en modo demostración. Hay que compilarlo
+# antes con `cargo build --release -p gravital-talk-ffi --features audio`.
+set(GRAVITAL_FFI_LIBRARY
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../target/release/libgravital_talk_ffi.so")
+if(EXISTS "${GRAVITAL_FFI_LIBRARY}")
+  install(FILES "${GRAVITAL_FFI_LIBRARY}"
+    DESTINATION "${INSTALL_BUNDLE_LIB_DIR}" COMPONENT Runtime)
+else()
+  message(WARNING
+    "No se encontró ${GRAVITAL_FFI_LIBRARY}: la app usará el motor demo.")
+endif()
+
 foreach(bundled_library ${PLUGIN_BUNDLED_LIBRARIES})
   install(FILES "${bundled_library}"
     DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"

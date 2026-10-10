@@ -1,0 +1,19 @@
+name: flutter_sound_linux
+description: Implementación Linux (no-op) de flutter_sound, para poder compilar la app en escritorio.
+version: 1.0.0
+
+environment:
+  sdk: ^3.6.0
+
+flutter:
+  plugin:
+    implements: flutter_sound
+    platforms:
+      linux:
+        pluginClass: FlutterSoundLinuxPlugin
+        dartPluginClass: FlutterSoundLinux
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_sound_platform_interface: ^9.30.0

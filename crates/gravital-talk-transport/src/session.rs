@@ -52,11 +52,23 @@ use crate::fec::{FecDecoder, FecEncoder, FecParity};
 use crate::jitter_buffer::{Frame, JitterBuffer};
 #[cfg(feature = "noise")]
 use crate::noise::NoiseHandshake;
+use crate::rendezvous::{self, Message as RvMessage, RoomKey};
 use crate::replay::ReplayWindow;
 use crate::traits::Transport;
 
 /// Timeout del intento Noise antes de caer al handshake legacy (modo `Auto`).
 const NOISE_FALLBACK_MS: u64 = 1500;
+
+/// Cada cuánto se renueva el registro en el servidor de encuentro y se
+/// repiten las sondas de perforación.
+const PUNCH_INTERVAL_MS: u64 = 250;
+
+/// Cuánto espera el invitado a que algún camino conteste antes de rendirse.
+const PATH_SELECT_TIMEOUT_MS: u64 = 6_000;
+
+/// Margen que se da a un camino local para contestar cuando ya contestó uno
+/// público: entre dos caminos que funcionan, el local tiene menos latencia.
+const LOCAL_PATH_GRACE_MS: u64 = 150;
 
 /// Primer mensaje de handshake recibido por el servidor.
 enum FirstHandshake {
@@ -183,6 +195,8 @@ pub struct Session {
     replay_by_peer: Mutex<HashMap<SocketAddr, ReplayWindow>>,
     /// Señal de cancelación: se activa en `close()` para interrumpir loops bloqueantes.
     closed: AtomicBool,
+    /// Servidor de encuentro para perforar NAT. `None` = sólo caminos directos.
+    rendezvous: std::sync::Mutex<Option<SocketAddr>>,
 }
 
 impl core::fmt::Debug for Session {
@@ -230,6 +244,7 @@ impl Session {
             handshake_mode: AtomicU8::new(handshake_mode_byte),
             replay_by_peer: Mutex::new(HashMap::new()),
             closed: AtomicBool::new(false),
+            rendezvous: std::sync::Mutex::new(None),
         }
     }
 
@@ -356,6 +371,229 @@ impl Session {
         let bytes = token.filter(|t| !t.is_empty()).map(String::into_bytes);
         let mut guard = self.room_token.lock().unwrap_or_else(|p| p.into_inner());
         *guard = bytes;
+    }
+
+    /// Fija el servidor de encuentro que coordina la perforación de NAT.
+    ///
+    /// Con él, dos dispositivos en redes distintas pueden conectar directo: el
+    /// anfitrión se registra mientras espera y el invitado al conectar, y cada
+    /// uno aprende la dirección pública del otro. Ver [`crate::rendezvous`].
+    ///
+    /// Sólo actúa si la sala tiene token: la clave con la que los dos extremos
+    /// se reconocen deriva de él, y sin token todas las salas abiertas del
+    /// mundo compartirían la misma.
+    pub fn set_rendezvous(&self, server: Option<SocketAddr>) {
+        *self.rendezvous.lock().unwrap_or_else(|p| p.into_inner()) = server;
+    }
+
+    /// Servidor de encuentro efectivo: el configurado, si además hay token.
+    fn rendezvous_server(&self) -> Option<SocketAddr> {
+        if !self.has_room_token() {
+            return None;
+        }
+        *self.rendezvous.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Clave de encuentro de esta sala.
+    ///
+    /// Sin token sale la de la cadena vacía: sirve para las sondas directas
+    /// entre extremos, que no pasan por ningún servidor.
+    fn room_key(&self) -> RoomKey {
+        let guard = self.room_token.lock().unwrap_or_else(|p| p.into_inner());
+        RoomKey::from_token(guard.as_deref().unwrap_or_default())
+    }
+
+    /// Dirección pública del socket de esta sesión, vista por STUN.
+    ///
+    /// Es la que tiene sentido compartir en una invitación. Llamar **antes**
+    /// del handshake: usa el mismo socket que el resto del tráfico.
+    ///
+    /// Tiene un tope de 3 s en total: es un dato opcional de la invitación y
+    /// no debe retrasar la sala, y quien llama tiene que poder contar con que
+    /// al volver ya nadie lee del socket.
+    pub async fn discover_public_addr(&self) -> Result<SocketAddr, crate::stun::StunError> {
+        timeout(
+            Duration::from_secs(3),
+            crate::stun::discover_public_addr_on(self.transport.as_ref()),
+        )
+        .await
+        .unwrap_or(Err(crate::stun::StunError::Timeout))
+    }
+
+    /// Envía un mensaje de encuentro. Un fallo de envío no es fatal: es UDP y
+    /// se repite en el siguiente ciclo.
+    async fn send_rv(&self, msg: &RvMessage, to: SocketAddr) {
+        let bytes = msg.encode(self.room_key());
+        if let Err(e) = self.transport.send_to(&bytes, to).await {
+            tracing::trace!(?to, %e, "mensaje de encuentro no enviado");
+        }
+    }
+
+    /// Atiende un mensaje de encuentro recibido mientras se espera invitado.
+    ///
+    /// - `PEERS` del servidor: alguien más está en la sala. Se le manda una
+    ///   sonda, que es lo que abre este NAT para lo que él envíe.
+    /// - `PUNCH` de un extremo: se confirma, para que sepa que el camino
+    ///   funciona en los dos sentidos.
+    ///
+    /// Todo lo que no lleve la clave de esta sala se ignora: no se contesta a
+    /// quien no ha demostrado conocerla.
+    async fn on_rendezvous(&self, datagram: &[u8], from: SocketAddr) {
+        let Some((key, msg)) = RvMessage::decode(datagram) else {
+            return;
+        };
+        if key != self.room_key() {
+            return;
+        }
+        match msg {
+            RvMessage::Peers { others, .. } if Some(from) == self.rendezvous_server() => {
+                for peer in others {
+                    let nonce = rendezvous::random_nonce();
+                    self.send_rv(&RvMessage::Punch { nonce }, peer).await;
+                }
+            }
+            RvMessage::Punch { nonce } => {
+                self.send_rv(&RvMessage::PunchAck { nonce }, from).await;
+            }
+            _ => {}
+        }
+    }
+
+    /// Elige, entre varias direcciones candidatas del anfitrión, una por la
+    /// que de verdad se llega.
+    ///
+    /// Sonda todas a la vez y devuelve la primera que confirma. Si hay
+    /// servidor de encuentro, además se registra en él: así el anfitrión
+    /// aprende la dirección de este extremo (y abre su NAT hacia ella) y este
+    /// extremo aprende la del anfitrión aunque no viniera en la invitación.
+    ///
+    /// Devuelve `Timeout` si nada contesta en `wait`.
+    pub async fn select_path(
+        &self,
+        candidates: &[SocketAddr],
+        wait: Duration,
+    ) -> Result<SocketAddr, TransportError> {
+        let server = self.rendezvous_server();
+        let key = self.room_key();
+        let nonce = rendezvous::random_nonce();
+        let mut candidates: Vec<SocketAddr> = candidates.to_vec();
+        let deadline = Instant::now() + wait;
+        let tick = Duration::from_millis(PUNCH_INTERVAL_MS);
+        let mut next_send = Instant::now();
+        // Camino público que ya contestó, y hasta cuándo se espera a uno local.
+        let mut fallback: Option<(SocketAddr, Instant)> = None;
+        let mut buf = vec![0u8; self.config.mtu];
+
+        loop {
+            if self.closed.load(Ordering::Acquire) {
+                return Err(TransportError::PeerClosed("session closed"));
+            }
+            let now = Instant::now();
+            if let Some((addr, until)) = fallback {
+                if now >= until {
+                    return Ok(addr);
+                }
+            }
+            if now >= deadline {
+                return fallback
+                    .map(|(addr, _)| addr)
+                    .ok_or(TransportError::Timeout);
+            }
+            if now >= next_send {
+                if let Some(server) = server {
+                    self.send_rv(&RvMessage::Register, server).await;
+                }
+                for &candidate in &candidates {
+                    self.send_rv(&RvMessage::Punch { nonce }, candidate).await;
+                }
+                next_send = now + tick;
+            }
+
+            let mut wake = next_send.min(deadline);
+            if let Some((_, until)) = fallback {
+                wake = wake.min(until);
+            }
+            let received = timeout(
+                wake.saturating_duration_since(now),
+                self.transport.recv(&mut buf),
+            )
+            .await;
+            let (n, from) = match received {
+                Ok(Ok(r)) => r,
+                Ok(Err(e)) => return Err(e),
+                Err(_) => continue,
+            };
+            let Some((got_key, msg)) = RvMessage::decode(&buf[..n]) else {
+                continue;
+            };
+            if got_key != key {
+                continue;
+            }
+            match msg {
+                RvMessage::Peers { others, .. } if Some(from) == server => {
+                    for peer in others {
+                        if !candidates.contains(&peer) {
+                            tracing::debug!(?peer, "candidato aprendido del servidor de encuentro");
+                            candidates.push(peer);
+                            // Sin esperar al siguiente ciclo: cada sonda que
+                            // sale antes es conexión que llega antes.
+                            self.send_rv(&RvMessage::Punch { nonce }, peer).await;
+                        }
+                    }
+                }
+                RvMessage::PunchAck { nonce: echoed } if echoed == nonce => {
+                    if rendezvous::is_local(&from) {
+                        return Ok(from);
+                    }
+                    if fallback.is_none() {
+                        let grace = Duration::from_millis(LOCAL_PATH_GRACE_MS);
+                        fallback = Some((from, Instant::now() + grace));
+                    }
+                }
+                // El anfitrión sondeando desde una dirección que no estaba en
+                // la lista: pasa cuando su NAT es simétrico y usa hacia aquí un
+                // puerto distinto del que vio el servidor. Esa dirección es la
+                // buena, así que se añade y se sonda.
+                RvMessage::Punch { nonce: theirs } => {
+                    self.send_rv(&RvMessage::PunchAck { nonce: theirs }, from)
+                        .await;
+                    if !candidates.contains(&from) {
+                        candidates.push(from);
+                        self.send_rv(&RvMessage::Punch { nonce }, from).await;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Handshake de cliente contra un anfitrión con varias direcciones
+    /// posibles (red local, pública…).
+    ///
+    /// Primero elige el camino con [`Self::select_path`] y luego hace el
+    /// handshake normal por él. Si ninguna sonda vuelve, lo intenta igualmente
+    /// contra la primera candidata: un anfitrión con una versión anterior no
+    /// contesta sondas pero sí acepta el handshake.
+    ///
+    /// `candidates` puede ir vacía si hay servidor de encuentro: la dirección
+    /// del anfitrión llega entonces por él.
+    pub async fn handshake_any(&self, candidates: &[SocketAddr]) -> Result<(), TransportError> {
+        // Sin candidatas sólo hay algo que hacer si el servidor de encuentro
+        // puede aportar alguna.
+        if candidates.is_empty() && self.rendezvous_server().is_none() {
+            return Err(TransportError::InvalidState("no candidates"));
+        }
+        let wait = Duration::from_millis(PATH_SELECT_TIMEOUT_MS);
+        let peer = match self.select_path(candidates, wait).await {
+            Ok(peer) => peer,
+            Err(TransportError::Timeout) => {
+                tracing::debug!("ningún camino contestó a las sondas; se prueba el primero");
+                *candidates.first().ok_or(TransportError::Timeout)?
+            }
+            Err(e) => return Err(e),
+        };
+        tracing::debug!(?peer, "camino elegido");
+        self.handshake(SessionRole::Client, peer).await
     }
 
     /// `true` si hay token de sala configurado.
@@ -1205,16 +1443,41 @@ impl Session {
         allow_legacy: bool,
     ) -> Result<(FirstHandshake, SocketAddr), TransportError> {
         let mut buf = vec![0u8; self.config.mtu];
+        // El encuentro sólo aplica cuando se espera a cualquiera: con un peer
+        // fijado ya se sabe a dónde hablar.
+        let open = expect_peer.is_none();
+        let tick = Duration::from_millis(PUNCH_INTERVAL_MS);
+        let mut next_register = Instant::now();
         loop {
             if self.closed.load(Ordering::Acquire) {
                 return Err(TransportError::PeerClosed("session closed"));
             }
-            let recv_res = timeout(Duration::from_millis(500), self.transport.recv(&mut buf)).await;
+            // Registrarse mientras se espera: es lo que deja que el invitado
+            // encuentre esta dirección y lo que trae la suya de vuelta.
+            let wait = if let Some(server) = self.rendezvous_server().filter(|_| open) {
+                let now = Instant::now();
+                if now >= next_register {
+                    self.send_rv(&RvMessage::Register, server).await;
+                    next_register = now + tick;
+                }
+                next_register
+                    .saturating_duration_since(now)
+                    .max(Duration::from_millis(1))
+            } else {
+                Duration::from_millis(500)
+            };
+            let recv_res = timeout(wait, self.transport.recv(&mut buf)).await;
             let (n, from) = match recv_res {
                 Ok(Ok(r)) => r,
                 Ok(Err(e)) => return Err(e),
                 Err(_) => continue,
             };
+            if rendezvous::is_rendezvous(&buf[..n]) {
+                if open {
+                    self.on_rendezvous(&buf[..n], from).await;
+                }
+                continue;
+            }
             if let Some(expected) = expect_peer {
                 if from != expected {
                     tracing::debug!(?from, ?expected, "dropping datagram from wrong peer");
@@ -1698,6 +1961,12 @@ impl Session {
             match recv_res {
                 Ok(Ok((n, from))) => {
                     self.metrics.counters.record_received(n as u64);
+                    // Sondas de quien aún está eligiendo camino hacia esta
+                    // sala: se contestan, pero no son tráfico de la sesión.
+                    if rendezvous::is_rendezvous(&buf[..n]) {
+                        self.on_rendezvous(&buf[..n], from).await;
+                        continue;
+                    }
                     if let Ok(view) = PacketView::decode(&buf[..n]) {
                         self.last_rx
                             .store(self.micros_since_epoch(), Ordering::Release);

@@ -75,6 +75,16 @@ python-test: python-sdk ## Ejecuta la suite de pytest del SDK Python
 web-sdk: ## Compila el SDK Web a WASM con wasm-pack
 	cd sdks/web && wasm-pack build --target web --release --out-dir pkg
 
+.PHONY: app-linux
+app-linux: ## Compila la app de escritorio Linux con su motor de audio nativo
+	$(CARGO) build --release -p gravital-talk-ffi --features audio
+	cd app && flutter build linux --release
+
+.PHONY: nat-sim
+nat-sim: ## Verifica la perforación de NAT contra el NAT del kernel (pide sudo)
+	$(CARGO) build --release -p gravital-talk-cli -p gravital-talk-relay
+	sudo scripts/nat-sim.sh
+
 .PHONY: loopback
 loopback: ## Ejecuta el benchmark de loopback end-to-end
 	$(CARGO) run --release --example loopback

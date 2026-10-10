@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'palette.dart';
 import 'tokens.dart';
 
 /// Estados de carga reutilizables.
@@ -222,31 +223,37 @@ class WarningBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    // Ámbar translúcido: sobre el fondo degradado, el `secondaryContainer`
+    // del tema salía verde saturado y se leía como "todo va bien", justo lo
+    // contrario de un aviso.
+    const amber = GravitalPalette.warning;
+    final onAmber = theme.brightness == Brightness.dark
+        ? const Color(0xFFFFE2B0)
+        : const Color(0xFF5C3A00);
     return Container(
       margin: const EdgeInsets.only(bottom: Spacing.md),
       padding: const EdgeInsets.all(Spacing.md),
       decoration: BoxDecoration(
-        color: theme.colorScheme.secondaryContainer,
+        color: amber.withValues(alpha: 0.18),
+        border: Border.all(color: amber.withValues(alpha: 0.55)),
         borderRadius: BorderRadius.circular(Radii.md),
       ),
       child: Row(
         children: [
-          Icon(
-            Icons.info_outline,
-            color: theme.colorScheme.onSecondaryContainer,
-            size: 20,
-          ),
+          Icon(Icons.warning_amber_rounded, color: onAmber, size: 20),
           const SizedBox(width: Spacing.md),
           Expanded(
             child: Text(
               message,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSecondaryContainer,
-              ),
+              style: theme.textTheme.bodyMedium?.copyWith(color: onAmber),
             ),
           ),
           if (actionLabel != null && onAction != null)
-            TextButton(onPressed: onAction, child: Text(actionLabel!)),
+            TextButton(
+              onPressed: onAction,
+              style: TextButton.styleFrom(foregroundColor: onAmber),
+              child: Text(actionLabel!),
+            ),
         ],
       ),
     );

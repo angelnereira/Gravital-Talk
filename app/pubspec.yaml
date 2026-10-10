@@ -27,6 +27,10 @@ dependencies:
   # Captura de micrófono PCM16 y reproducción PCM (audio real).
   record: ^6.1.2
   flutter_sound: ^9.28.0
+  # Implementacion Linux de flutter_sound (ver tools/flutter_sound_linux):
+  # sin ella `flutter build linux` falla porque el plugin no trae binarios Linux.
+  flutter_sound_linux:
+    path: tools/flutter_sound_linux
   # Componentes UI modernos (shortlist de FlutterGems/FlutterLibrary).
   flutter_animate: ^4.5.2
   animate_do: ^5.1.0

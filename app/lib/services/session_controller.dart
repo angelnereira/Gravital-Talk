@@ -10,6 +10,7 @@ import '../models/session.dart';
 import 'engine.dart';
 import 'event_log.dart';
 import 'native_bridge.dart';
+import 'pairing_uri.dart';
 import 'room_api.dart';
 import 'room_events.dart';
 import 'settings_store.dart';
@@ -51,8 +52,27 @@ class SessionController extends ChangeNotifier {
   int _sessionId = 0;
   int _localPort = 0;
 
-  /// Endpoint público del anfitrión, para el QR.
+  /// Endpoint que el anfitrión comparte en el QR (`ip:puerto`).
   String _publicEndpoint = '';
+
+  /// Dirección pública de la sala vista por STUN, o `null` si no se obtuvo.
+  String? _stunEndpoint;
+
+  /// `true` si la sala en curso tiene servidor de encuentro operativo.
+  bool _rendezvousActive = false;
+
+  /// `true` si a esta sala se puede entrar desde otra red.
+  bool get reachableFromOtherNetworks => _rendezvousActive;
+
+  /// Aviso no bloqueante pendiente de mostrar (p. ej. "sin micrófono").
+  String? _notice;
+  Timer? _levelTicker;
+
+  /// Niveles de audio para los medidores.
+  ///
+  /// Va aparte del `notifyListeners` general a propósito: cambia varias veces
+  /// por segundo y sólo debe repintar los medidores, no la pantalla entera.
+  final ValueNotifier<AudioLevels> levels = ValueNotifier(AudioLevels.silent);
   Duration _elapsed = Duration.zero;
   ConnectionMode? _mode;
   ConnectionRole? _role;
@@ -69,6 +89,18 @@ class SessionController extends ChangeNotifier {
   bool get peerPttActive => _peerPtt;
   bool get busy => _busy;
   String? get error => _error;
+
+  /// Aviso no bloqueante (la sesión sigue), o `null`.
+  String? get notice => _notice;
+
+  void clearNotice() {
+    _notice = null;
+    notifyListeners();
+  }
+
+  /// `true` mientras el anfitrión espera a que alguien entre en su sala.
+  bool get waitingForGuest =>
+      _busy && _role == ConnectionRole.host && !_state.isLive;
 
   /// Diagnostica si este dispositivo puede recibir invitados de fuera.
   Future<NetworkReachability?> diagnoseReachability() =>
@@ -182,13 +214,49 @@ class SessionController extends ChangeNotifier {
   ///
   /// Devuelve `false` y fija el error si no se puede binder el puerto.
   Future<bool> createRoom() => _guard(() async {
-    final profile = _server;
-    await _engine.createSession(_settings, bindPort: profile.udpPort);
+    // Puerto 0: el sistema elige uno libre y el QR publica el real. Un puerto
+    // fijo falla en cuanto otra app (u otra sala) lo tiene cogido.
+    await _engine.createSession(_settings);
+
+    // El puerto real, no el pedido. Si `bindPort` es 0 el sistema elige uno
+    // efímero, y el QR tiene que publicar ESE. Antes no se leía nunca, así que
+    // el QR salía con `udp=0` y ningún invitado podía conectar.
+    _localPort = await _engine.localPort();
+    if (_localPort == 0) {
+      throw StateError('No se pudo abrir un puerto para la sala.');
+    }
+
+    // El QR lleva la dirección de este dispositivo en la red local. No la
+    // pública: la que da STUN es la del router, y sin reenvío de puertos no
+    // entra nadie por ella (ni siquiera desde la misma wifi en muchos routers).
+    final lanIp = await _engine.discoverLocalEndpoint();
+    if (lanIp == null || lanIp.isEmpty) {
+      throw StateError(
+        'No hay red. Conéctate a una wifi para que puedan unirse a tu sala.',
+      );
+    }
+    _publicEndpoint = lanIp.contains(':') ? '[$lanIp]:$_localPort' : '$lanIp:$_localPort';
 
     // El token es el secreto de la sala. Se genera aquí, no se configura: un
     // usuario no debería tener que inventarse un secreto criptográfico.
     final token = _generateRoomToken();
     await _engine.setRoomToken(token);
+
+    // Para invitados de otra red: la dirección pública de este socket y, si
+    // hay servidor de encuentro, el registro en él. Ninguno de los dos es
+    // imprescindible —la sala funciona en la red local sin ellos—, así que un
+    // fallo aquí no impide crearla.
+    _rendezvousActive = _settings.rendezvous.isNotEmpty &&
+        await _engine.setRendezvous(_settings.rendezvous);
+    if (_settings.rendezvous.isNotEmpty && !_rendezvousActive) {
+      _log.warn('No se pudo usar el servidor de encuentro '
+          '${_settings.rendezvous}: sólo se podrá entrar desde esta red.');
+    }
+    _stunEndpoint = await _engine
+        .discoverPublicEndpoint()
+        // Más que el tope del motor (3 s) a propósito: hay que esperar a que
+        // suelte el socket antes de empezar a aceptar por él.
+        .timeout(const Duration(seconds: 6), onTimeout: () => null);
 
     final code = _generateRoomCode();
     _roomCode = code;
@@ -203,10 +271,6 @@ class SessionController extends ChangeNotifier {
     _startTicker();
     notifyListeners();
 
-    // La IP pública puede tardar o fallar (sin red, sin STUN). No bloquea la
-    // creación: la sala existe igual, sólo que el QR llevará la LAN.
-    final endpoint = await _engine.discoverPublicEndpoint();
-    _publicEndpoint = endpoint ?? _lanFallbackEndpoint();
     _log.success(
       'Sala $code lista en $_publicEndpoint (session_id=$_sessionId). '
       'Esperando peers…',
@@ -214,8 +278,79 @@ class SessionController extends ChangeNotifier {
 
     // Acepta al primer cliente de cualquier IP: es el modo emparejamiento.
     await _engine.acceptAny();
-    _onConnected('Sala creada · eres un participante más');
+    _onConnected('Alguien se unió a la sala $code');
   });
+
+  /// URI de emparejamiento de la sala creada: lo que codifica el QR.
+  ///
+  /// `null` si no hay sala que compartir.
+  PairingUri? get pairingUri {
+    final code = _roomCode;
+    if (code == null || code.isEmpty || _publicEndpoint.isEmpty) return null;
+    if (_role != ConnectionRole.host) return null;
+    final idx = _publicEndpoint.lastIndexOf(':');
+    var host = _publicEndpoint.substring(0, idx);
+    if (host.startsWith('[')) host = host.substring(1, host.length - 1);
+    return PairingUri(
+      host: host,
+      room: code,
+      udpPort: int.tryParse(_publicEndpoint.substring(idx + 1)),
+      token: _server.token,
+      publicEndpoint: _stunEndpoint,
+      rendezvous: _rendezvousActive ? _settings.rendezvous : null,
+    );
+  }
+
+  /// Se une a partir de lo escaneado, pegado o recibido por enlace.
+  ///
+  /// Es la única puerta de entrada del invitado: QR, enlace y texto pegado
+  /// acaban aquí, así que los tres se comportan igual.
+  Future<bool> joinFromUri(String raw) {
+    final parsed = PairingUri.tryParse(raw);
+    if (parsed == null) {
+      _fail('Eso no es una invitación de Gravital Talk.');
+      return Future.value(false);
+    }
+    if (!parsed.isComplete) {
+      _fail(
+        'La invitación sólo trae el código de sala, no la dirección. Pide al '
+        'anfitrión el QR o el enlace completo.',
+      );
+      return Future.value(false);
+    }
+    updateServerProfile(_server.copyWith(
+      host: parsed.host,
+      roomCode: parsed.room,
+      udpPort: parsed.udpPort ?? _server.udpPort,
+      token: parsed.token ?? '',
+    ));
+    return _joinCandidates(
+      parsed.candidates(_server.udpPort),
+      rendezvous: parsed.rendezvous,
+    );
+  }
+
+  /// Entra en la sala probando todas las direcciones de la invitación.
+  Future<bool> _joinCandidates(List<String> candidates, {String? rendezvous}) {
+    return _guard(() async {
+      final profile = _server;
+      await _engine.createSession(_settings);
+      if (profile.token.isNotEmpty) {
+        await _engine.setRoomToken(profile.token);
+      }
+      // El servidor de encuentro es el del anfitrión, no el de los ajustes de
+      // este dispositivo: los dos tienen que registrarse en el mismo.
+      if (rendezvous != null) await _engine.setRendezvous(rendezvous);
+      _roomCode = profile.roomCode;
+      _mode = ConnectionMode.server;
+      _role = ConnectionRole.join;
+      _startTicker();
+      notifyListeners();
+
+      await _engine.connectAny(candidates);
+      _onConnected('Conectado a la sala ${profile.roomCode}');
+    });
+  }
 
   /// Se une a una sala conectándose directo al endpoint del anfitrión.
   ///
@@ -276,12 +411,6 @@ class SessionController extends ChangeNotifier {
   }
 
   int _randomSessionId() => Random().nextInt(0x7FFFFFFF) + 1;
-
-  /// Endpoint de emergencia si STUN no responde.
-  ///
-  /// La LAN sirve para el caso más común (los dos en la misma wifi), y es
-  /// mejor que un QR vacío.
-  String _lanFallbackEndpoint() => 'red-local:$_localPort';
 
   Future<bool> hostServer({String? roomCode}) async {
     final profile = _server;
@@ -422,6 +551,14 @@ class SessionController extends ChangeNotifier {
   Future<void> disconnect() async {
     _ticker?.cancel();
     _ticker = null;
+    _levelTicker?.cancel();
+    _levelTicker = null;
+    levels.value = AudioLevels.silent;
+    _notice = null;
+    _publicEndpoint = '';
+    _stunEndpoint = null;
+    _rendezvousActive = false;
+    if (_busy) _cancelled = true;
     // Dejar de observar la sala: si no, el stream sigue abierto tras colgar y
     // la siguiente conexión se encuentra eventos de la sala anterior.
     await _stopObserving();
@@ -483,20 +620,34 @@ class SessionController extends ChangeNotifier {
 
   // ── Internos ────────────────────────────────────────────────────────────
 
+  /// `true` si el usuario canceló la operación en curso.
+  ///
+  /// Cancelar hace que el handshake pendiente vuelva con error; sin esta marca
+  /// ese error se mostraría como un fallo, cuando es justo lo que se pidió.
+  bool _cancelled = false;
+
   Future<bool> _guard(Future<void> Function() action) async {
     _busy = true;
     _error = null;
+    _cancelled = false;
     notifyListeners();
     try {
       await action();
-      return true;
+      return !_cancelled;
     } on NativeException catch (e) {
-      _fail('Error nativo: $e');
+      if (_cancelled) return false;
+      _fail(_describeNative(e));
       return false;
     } on RoomApiException catch (e) {
+      if (_cancelled) return false;
+      _fail(e.message);
+      return false;
+    } on StateError catch (e) {
+      if (_cancelled) return false;
       _fail(e.message);
       return false;
     } catch (e) {
+      if (_cancelled) return false;
       _fail('$e');
       return false;
     } finally {
@@ -505,11 +656,48 @@ class SessionController extends ChangeNotifier {
     }
   }
 
+  /// Traduce un fallo del motor a algo que el usuario pueda arreglar.
+  String _describeNative(NativeException e) {
+    if (e.status == GsStatus.timeout ||
+        e.status == GsStatus.handshake ||
+        e.message.contains('timeout')) {
+      return _role == ConnectionRole.join
+          ? 'No se pudo llegar a la sala. Comprueba que sigue abierta; si '
+              'estáis en redes distintas, el anfitrión necesita un servidor '
+              'de encuentro configurado en Ajustes.'
+          : 'Nadie llegó a conectarse. Vuelve a crear la sala.';
+    }
+    return 'No se pudo conectar: ${e.message}';
+  }
+
   void _onConnected(String message) {
     _state = SessionState.active;
     _connectedAt = DateTime.now();
     _log.success(message);
+    _takeAudioWarning();
+    _startLevelTicker();
     notifyListeners();
+  }
+
+  /// Recoge el aviso de audio del motor, si lo hay, y lo publica.
+  void _takeAudioWarning() {
+    final warning = _engine.takeAudioWarning();
+    if (warning == null) return;
+    _notice = warning;
+    _log.warn(warning);
+  }
+
+  /// Refresca los niveles de audio ~12 veces por segundo.
+  void _startLevelTicker() {
+    _levelTicker?.cancel();
+    _levelTicker = Timer.periodic(const Duration(milliseconds: 80), (_) {
+      if (!_state.isLive) return;
+      try {
+        levels.value = _engine.audioLevels();
+      } catch (_) {
+        // Motor entre dos estados: el siguiente tick reintenta.
+      }
+    });
   }
 
   void _fail(String message) {
@@ -538,6 +726,7 @@ class SessionController extends ChangeNotifier {
         if (_connectedAt != null && st.isLive) {
           _elapsed = DateTime.now().difference(_connectedAt!);
         }
+        if (_notice == null) _takeAudioWarning();
         if (changed || st.isLive) notifyListeners();
       } catch (_) {
         // El motor aún no está listo; el siguiente tick reintenta.
@@ -548,6 +737,8 @@ class SessionController extends ChangeNotifier {
   @override
   void dispose() {
     _ticker?.cancel();
+    _levelTicker?.cancel();
+    levels.dispose();
     _engine.dispose();
     _roomApi.dispose();
     super.dispose();

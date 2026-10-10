@@ -13,6 +13,7 @@ class GsStatus {
   static const invalidState = -7;
   static const closed = -8;
   static const bufferTooSmall = -9;
+  static const unsupported = -10;
   static const internal = -99;
 
   static String describe(int code) {
@@ -35,6 +36,8 @@ class GsStatus {
         return 'sesión cerrada';
       case bufferTooSmall:
         return 'buffer demasiado pequeño';
+      case unsupported:
+        return 'no disponible en esta plataforma';
       case internal:
         return 'error interno';
       default:

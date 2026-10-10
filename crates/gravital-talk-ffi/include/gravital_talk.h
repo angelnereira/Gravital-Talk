@@ -50,6 +50,10 @@ typedef enum {
     GS_ERR_INVALID_STATE = -7,
     GS_ERR_CLOSED = -8,
     GS_ERR_BUFFER_TOO_SMALL = -9,
+    /*
+     La operación no existe en este build (p. ej. audio nativo en Android).
+     */
+    GS_ERR_UNSUPPORTED = -10,
     GS_ERR_INTERNAL = -99,
 } GsStatus;
 
@@ -89,6 +93,36 @@ typedef struct {
     uint64_t bytes_sent;
     uint64_t bytes_received;
 } GsMetrics;
+
+/*
+ Estado del audio nativo de una sesión.
+ */
+typedef struct {
+    /*
+     Nivel del micrófono, 0..1. Cero si no se está transmitiendo.
+     */
+    float mic_level;
+    /*
+     Nivel del audio recibido, 0..1.
+     */
+    float rx_level;
+    /*
+     Frames enviados desde `gs_audio_start`.
+     */
+    uint64_t tx_frames;
+    /*
+     Frames recibidos desde `gs_audio_start`.
+     */
+    uint64_t rx_frames;
+    /*
+     `1` si hay micrófono abierto.
+     */
+    uint8_t capture_ok;
+    /*
+     `1` si hay salida de audio abierta.
+     */
+    uint8_t playback_ok;
+} GsAudioStats;
 
 #ifdef __cplusplus
 extern "C" {
@@ -325,6 +359,22 @@ GsStatus gs_preferred_host_port(uint16_t preferred, uint16_t *out_port);
 GsStatus gs_discover_public_addr(uint16_t local_port, char *out_buf, uintptr_t buf_len);
 
 /*
+ Descubre la IP local (LAN) de este dispositivo.
+
+ Es el host que va en el QR: dos dispositivos en la misma WiFi se conectan
+ por la LAN, y la IP pública del router no siempre vuelve a entrar (hairpin
+ NAT).
+
+ Escribe **sólo la IP** como C-string NUL-terminada. El puerto es el de la
+ sesión (`gs_session_local_port`): el socket con el que se averigua la IP es
+ desechable y su puerto no sirve a nadie.
+
+ # Safety
+ `out_buf` debe apuntar a un buffer de al menos `buf_len` bytes escribibles.
+ */
+GsStatus gs_discover_local_addr(char *out_buf, uintptr_t buf_len);
+
+/*
  Handshake servidor que acepta el primer cliente que llegue desde cualquier
  dirección (modo QR/code pairing — no se requiere conocer la IP del cliente).
 
@@ -334,6 +384,96 @@ GsStatus gs_discover_public_addr(uint16_t local_port, char *out_buf, uintptr_t b
  `handle` debe ser válido y creado con `gs_session_create`.
  */
 GsStatus gs_session_accept_any(GsSessionHandle *handle);
+
+/*
+ Fija el servidor de encuentro que coordina la perforación de NAT.
+
+ Con él, dos dispositivos en redes distintas conectan directo: el servidor
+ (un `gs-relay`) sólo le dice a cada uno la dirección pública del otro; el
+ audio no pasa por él. Llamar después de `gs_session_set_room_token` y antes
+ del handshake. `host` nulo o vacío lo desactiva.
+
+ Devuelve `GS_ERR_IO` si `host` no resuelve.
+
+ # Safety
+ `handle` debe ser válido; `host`, nulo o una C-string NUL-terminada.
+ */
+GsStatus gs_session_set_rendezvous(GsSessionHandle *handle, const char *host, uint16_t port);
+
+/*
+ Dirección pública (`ip:puerto`) del socket **de esta sesión**, vista por
+ STUN.
+
+ A diferencia de `gs_discover_public_addr`, que pregunta desde otro socket,
+ el puerto que devuelve es el de la sala: es la dirección que tiene sentido
+ poner en una invitación. Llamar antes del handshake.
+
+ # Safety
+ `handle` debe ser válido y `out_buf` apuntar a `buf_len` bytes escribibles.
+ */
+GsStatus gs_session_public_addr(GsSessionHandle *handle, char *out_buf, uintptr_t buf_len);
+
+/*
+ Handshake de cliente contra un anfitrión con varias direcciones posibles.
+
+ `candidates` es una lista `ip:puerto` separada por comas (red local,
+ pública…). Se sondan todas a la vez y se conecta por la primera que
+ contesta, prefiriendo la de red local. Puede ir vacía si hay servidor de
+ encuentro: la dirección del anfitrión llega entonces por él.
+
+ # Safety
+ `handle` debe ser válido y `candidates` una C-string NUL-terminada.
+ */
+GsStatus gs_session_connect_any(GsSessionHandle *handle, const char *candidates);
+
+/*
+ Devuelve `1` si este build trae audio nativo (`gs_audio_start` funciona).
+ */
+int gs_audio_supported(void);
+
+/*
+ Arranca el audio nativo de la sesión: micrófono → red y red → altavoz.
+
+ Llamar con la sesión ya en `Active`. Mientras está arrancado, el embebedor
+ **no** debe llamar a `gs_session_send_audio` ni `gs_session_recv_audio`:
+ competiría con estos hilos por los mismos frames.
+
+ Que falte el micrófono o el altavoz no es un error: la sesión sigue,
+ `gs_audio_stats` dice cuál de los dos falta y `gs_error_last` por qué. Devuelve `GS_ERR_UNSUPPORTED`
+ si el build no trae audio nativo y `GS_ERR_INVALID_ARGUMENT` si un frame de
+ la configuración no cabe en un paquete.
+
+ # Safety
+ `handle` debe ser un handle válido de `gs_session_create`.
+ */
+GsStatus gs_audio_start(GsSessionHandle *handle);
+
+/*
+ Para el audio nativo. No hace nada si no estaba arrancado.
+
+ # Safety
+ `handle` debe ser un handle válido de `gs_session_create`.
+ */
+GsStatus gs_audio_stop(GsSessionHandle *handle);
+
+/*
+ Abre (`on != 0`) o cierra el paso del micrófono a la red.
+
+ Es independiente de `gs_session_ptt_press`, que señaliza el turno al peer:
+ esta función sólo decide si los frames capturados se envían.
+
+ # Safety
+ `handle` debe ser un handle válido de `gs_session_create`.
+ */
+GsStatus gs_audio_set_ptt(GsSessionHandle *handle, int on);
+
+/*
+ Lee el estado del audio nativo. Con el audio parado escribe todo a cero.
+
+ # Safety
+ `handle` debe ser válido y `out` apuntar a un `GsAudioStats` escribible.
+ */
+GsStatus gs_audio_stats(GsSessionHandle *handle, GsAudioStats *out);
 
 /*
  Retorna `GS_OK` — útil como smoke test de linkado.

@@ -52,6 +52,7 @@ class AppSettings {
     this.maxBitrate = 64000,
     this.codec = AudioCodec.opus,
     this.themeMode = AppThemeMode.system,
+    this.rendezvous = '',
   });
 
   /// Valores que usa la app cuando nadie ha configurado nada.
@@ -70,6 +71,14 @@ class AppSettings {
   final AudioCodec codec;
   final AppThemeMode themeMode;
 
+  /// Servidor de encuentro (`host:puerto` de un `gs-relay`), o vacío.
+  ///
+  /// Es lo que permite conectar entre redes distintas: presenta a los dos
+  /// extremos para que perforen su NAT. No lleva audio. Vacío = las salas sólo
+  /// funcionan dentro de la misma red (o con el anfitrión alcanzable desde
+  /// fuera).
+  final String rendezvous;
+
   AppSettings copyWith({
     int? sampleRate,
     int? channels,
@@ -79,6 +88,7 @@ class AppSettings {
     int? maxBitrate,
     AudioCodec? codec,
     AppThemeMode? themeMode,
+    String? rendezvous,
   }) {
     return AppSettings(
       sampleRate: sampleRate ?? this.sampleRate,
@@ -89,6 +99,7 @@ class AppSettings {
       maxBitrate: maxBitrate ?? this.maxBitrate,
       codec: codec ?? this.codec,
       themeMode: themeMode ?? this.themeMode,
+      rendezvous: rendezvous ?? this.rendezvous,
     );
   }
 

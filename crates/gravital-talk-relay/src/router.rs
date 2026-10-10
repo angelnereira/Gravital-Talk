@@ -105,6 +105,9 @@ pub struct Router {
     metrics: RelayMetrics,
     /// Canal de eventos para suscriptores (WatchRoom gRPC, dashboards).
     event_tx: tokio::sync::broadcast::Sender<RoomEventMsg>,
+    /// Servidor de encuentro: quién está esperando en cada sala para
+    /// perforar NAT. Independiente del enrutado: aquí no pasa audio.
+    rendezvous: gravital_talk_transport::rendezvous::Registry,
 }
 
 /// Sala con su `session_id` y token opcional (hash SHA-256, nunca en claro).
@@ -139,7 +142,13 @@ impl Router {
             max_peers_per_session,
             metrics,
             event_tx,
+            rendezvous: gravital_talk_transport::rendezvous::Registry::new(max_sessions),
         }
+    }
+
+    /// Registro del servidor de encuentro.
+    pub const fn rendezvous(&self) -> &gravital_talk_transport::rendezvous::Registry {
+        &self.rendezvous
     }
 
     /// Suscriptor al stream de eventos de sesión.

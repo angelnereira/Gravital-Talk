@@ -18,6 +18,8 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 gravital-talk          = { workspace = true, default-features = false, features = ["std"] }
 tokio                   = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync", "macros"] }
 jni                     = { version = "0.21", default-features = false, optional = true }
+gravital-talk-io        = { workspace = true, optional = true }
+tracing                 = { workspace = true }
 
 [build-dependencies]
 cbindgen = { workspace = true }
@@ -25,6 +27,10 @@ cbindgen = { workspace = true }
 [features]
 default = []
 android = ["dep:jni"]
+# Audio nativo con cpal (`gs_audio_*`). Para escritorio: en Android/iOS el
+# audio lo pone la app, y sin la feature esas funciones devuelven
+# `GS_ERR_UNSUPPORTED`.
+audio = ["dep:gravital-talk-io"]
 
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

@@ -3,7 +3,7 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
-  flutter_sound
+  flutter_sound_linux
   record_linux
   url_launcher_linux
 )

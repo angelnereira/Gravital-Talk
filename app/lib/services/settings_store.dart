@@ -24,6 +24,7 @@ class SettingsStore {
         (t) => t.name == p.getString(PrefKeys.themeMode),
         orElse: () => AppThemeMode.system,
       ),
+      rendezvous: p.getString(PrefKeys.rendezvous) ?? '',
     );
   }
 
@@ -37,6 +38,7 @@ class SettingsStore {
     await p.setInt(PrefKeys.maxBitrate, s.maxBitrate);
     await p.setString(PrefKeys.codec, s.codec.name);
     await p.setString(PrefKeys.themeMode, s.themeMode.name);
+    await p.setString(PrefKeys.rendezvous, s.rendezvous);
   }
 
   Future<ServerProfile> loadServerProfile() async {

@@ -46,6 +46,7 @@ class PrefKeys {
   static const codec = 'audio.codec';
   static const themeMode = 'ui.themeMode';
   static const nativeLibPath = 'advanced.nativeLibPath';
+  static const rendezvous = 'net.rendezvous';
 
   const PrefKeys._();
 }
