@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
 
@@ -12,6 +13,7 @@ import '../widgets/active_session_card.dart';
 import '../widgets/common.dart';
 import '../widgets/contacts_section.dart';
 import '../services/contacts.dart';
+import '../services/launch_links.dart';
 import 'about_screen.dart';
 import 'invite_screen.dart';
 import 'pairing_screen.dart';
@@ -56,6 +58,24 @@ class _HomeScreenState extends State<HomeScreen> {
       context,
       ForwardRoute(builder: (_) => const InviteScreen()),
     );
+  }
+
+  /// Lee el portapapeles sólo cuando se pide: en Android leerlo por sistema
+  /// enseña un aviso cada vez, y no hay por qué mirar lo que el usuario copia.
+  Future<void> _pasteInvite() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text ?? '';
+    final link = LaunchLinks.extract(text);
+    if (link == null) {
+      messenger.showSnackBar(const SnackBar(
+        content: Text('No hay ninguna invitación de Gravital Talk copiada.'),
+      ));
+      return;
+    }
+    navigator.push(ForwardRoute(
+      builder: (_) => PairingScreen(mode: PairingMode.join, invite: link),
+    ));
   }
 
   void _open(PairingMode mode) {
@@ -152,7 +172,15 @@ class _HomeScreenState extends State<HomeScreen> {
                   .animate(delay: 180.ms)
                   .fadeIn(duration: 300.ms)
                   .slideY(begin: 0.08, end: 0),
-              const SizedBox(height: Spacing.xxl),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: canPair ? _pasteInvite : null,
+                  icon: const Icon(Icons.content_paste_go, size: 18),
+                  label: const Text('Abrir invitación copiada'),
+                ),
+              ),
+              const SizedBox(height: Spacing.lg),
               ContactsSection(enabled: canPair),
               const SizedBox(height: Spacing.xxl),
               _TechnicalDetails(

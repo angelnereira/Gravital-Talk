@@ -4,6 +4,30 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
 
 ## [Unreleased]
 
+### Added
+
+**Abrir invitaciones sin copiar y pegar**
+- Android: **compartir un mensaje hacia Gravital Talk** desde cualquier chat
+  (mantener pulsado → Compartir); la app extrae el enlace del texto.
+- Pantalla de inicio: **Abrir invitación copiada**, que lee el portapapeles
+  sólo cuando se pulsa.
+- Linux: la app se registra como manejadora de `gravital-talk://` y, si ya
+  está abierta, una segunda apertura le entrega el enlace en vez de abrir
+  otra ventana.
+
+### Changed
+- La conversación muestra **con quién** se habla en vez del código de sala.
+- Presentación de primer arranque rehecha: mismo fondo y vidrio que el resto,
+  colores de texto según el tema y contenido al día (pulsar y hablar, invitar
+  con un enlace, contactos).
+- `README.md` reescrito: instalación, uso, cómo se conecta, arquitectura y una
+  tabla de qué funciona y qué no, con lo que está medido y lo que no.
+
+### Fixed
+- Linux: iconos en blanco tras una compilación incremental (la fuente de
+  iconos recortada quedaba de un build anterior). `make app-linux` ya no la
+  recorta.
+
 ### Changed
 
 **Emparejar con un solo enlace**

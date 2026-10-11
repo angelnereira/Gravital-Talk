@@ -1,828 +1,277 @@
 # Gravital Talk
 
-[![CI](https://github.com/angelnereira/gravital-talk/actions/workflows/ci.yml/badge.svg)](https://github.com/angelnereira/gravital-talk/actions/workflows/ci.yml)
-[![Build outputs](https://github.com/angelnereira/gravital-talk/actions/workflows/build-outputs.yml/badge.svg)](https://github.com/angelnereira/gravital-talk/actions/workflows/build-outputs.yml)
-[![Android APK](https://github.com/angelnereira/gravital-talk/actions/workflows/android.yml/badge.svg)](https://github.com/angelnereira/gravital-talk/actions/workflows/android.yml)
-[![Docs](https://github.com/angelnereira/gravital-talk/actions/workflows/docs.yml/badge.svg)](https://github.com/angelnereira/gravital-talk/actions/workflows/docs.yml)
-[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#licencia)
+Voz **pulsa y habla** entre dispositivos, directa y cifrada de extremo a extremo, sin
+cuentas y sin un servidor central. Un protocolo de audio en tiempo real escrito en Rust
+y una app (Android y escritorio Linux) que lo usa.
 
-Gravital Talk es un protocolo de comunicación de audio Push-To-Talk en tiempo real escrito en Rust. Transporta voz de baja latencia sobre UDP con cifrado de extremo a extremo, emparejamiento P2P por código QR sin servidor intermediario obligatorio, control de congestión, corrección de errores (FEC) y métricas de calidad en tiempo real. El núcleo es `no_std` compatible y se expone a cualquier lenguaje a través de una FFI estable en C.
+**Estado: alpha (`0.3.0-alpha.1`).** Funciona y se usa a diario para probarlo, pero el
+formato de red y la ABI pueden cambiar entre versiones, y hay límites conocidos que se
+listan sin adornos en [Qué funciona y qué no](#qué-funciona-y-qué-no).
 
-**Estado actual: alpha.** La API pública y el protocolo wire son estables dentro de la serie `0.1.x`.
+Licencia: MIT o Apache-2.0, a elegir.
 
 ---
 
 ## Índice
 
-- [Inicio rápido — Android](#inicio-rápido--android)
-- [Verificación: ¿esto funciona de verdad?](#verificación-esto-funciona-de-verdad)
-- [Inicio rápido — CLI](#inicio-rápido--cli)
-- [Arquitectura](#arquitectura)
-- [Estado del proyecto](#estado-del-proyecto)
-- [Emparejamiento P2P por QR](#emparejamiento-p2p-por-qr)
-- [Requisitos](#requisitos)
-- [Compilar desde fuente](#compilar-desde-fuente)
-- [Binarios pre-compilados](#binarios-pre-compilados)
-- [Uso en Rust](#uso-en-rust)
-- [Relay de producción](#relay-de-producción)
-- [C FFI](#c-ffi)
-- [Python SDK](#python-sdk)
-- [Web / WASM SDK](#web--wasm-sdk)
-- [CLI](#cli)
-- [Protocolo](#protocolo)
-- [Observabilidad](#observabilidad)
-- [Tests](#tests)
-- [Infraestructura](#infraestructura)
-- [Hoja de ruta](#hoja-de-ruta)
-- [Contribuciones](#contribuciones)
-- [Licencia](#licencia)
+- [Qué es](#qué-es)
+- [Instalar](#instalar)
+- [Usar la app](#usar-la-app)
+- [Cómo se conectan dos dispositivos](#cómo-se-conectan-dos-dispositivos)
+- [Qué funciona y qué no](#qué-funciona-y-qué-no)
+- [Arquitectura y stack](#arquitectura-y-stack)
+- [Compilar desde el código](#compilar-desde-el-código)
+- [Pruebas y medidas](#pruebas-y-medidas)
+- [Línea de órdenes, relay y FFI](#línea-de-órdenes-relay-y-ffi)
+- [Publicar instalables](#publicar-instalables)
+- [Documentación](#documentación)
 
 ---
 
-## Inicio rápido — Android
+## Qué es
 
-### Instalar el APK (última build)
+- **Pulsa y habla.** Mientras mantienes el botón, te oyen; al soltar, escuchas. Un turno
+  cada vez, como un walkie-talkie.
+- **Directo.** El audio va de un dispositivo al otro por UDP. No pasa por ningún
+  servidor salvo que tú configures uno de respaldo.
+- **Cifrado de extremo a extremo.** Intercambio de claves Noise (`NNpsk0`, X25519) con
+  el secreto de la invitación, y ChaCha20-Poly1305 por paquete.
+- **Sin cuentas.** Un dispositivo se identifica por lo que comparte con otro al
+  emparejarse, nada más.
 
-```bash
-# El CI genera una APK por cada push; están en outputs/android/debug/
-LATEST=$(cat outputs/android/debug/LATEST.txt)
-adb install -r "outputs/android/debug/$LATEST"
+## Instalar
 
-# Abrir directamente en la pantalla de emparejamiento
-adb shell am start -n com.gravitaltalk/.PairingActivity
-```
+No hace falta compilar nada. Los instalables se publican a mano en el release
+[`builds`](https://github.com/angelnereira/Gravital-Talk/releases/tag/builds):
 
-### Usar la app
-
-1. **Persona A → "Crear llamada"** — la app muestra un código QR y espera.
-2. **Persona B → "Unirse a llamada" → escanear QR** — la app se conecta automáticamente.
-3. Ambos están conectados: mantener pulsado el botón PTT para hablar.
-4. Cualquiera puede pulsar **"Colgar"** para desconectarse.
-
-No se requiere ningún servidor intermediario. La app intenta conexión directa LAN → IP pública (STUN) → relay (si se configuró uno).
-
----
-
-## Verificación: ¿esto funciona de verdad?
-
-La suite de tests confirma que el protocolo funciona. El harness `gs-audit` confirma que el
-**audio** funciona: mide la frecuencia, el RMS y la saturación de lo realmente recibido, que es
-lo que separa una transmisión real de un flujo de bytes corruptos.
-
-```bash
-make audit            # par P2P 1:1 con turnos partidos: audio en AMBAS direcciones
-make audit-parallel   # 3 sesiones P2P simultáneas, frecuencias distintas (detecta cruce)
-make docker-audit     # contenedor: añade codec Opus
-```
-
-Resultados medidos (frame de 10 ms PCM, 48 kHz mono):
-
-```
-[PASS] p2p/host      tx=177  rx=175  rx_hz=439.7  rms=0.3453  mos=4.41
-[PASS] p2p/join      tx=175  rx=177  rx_hz=439.8  rms=0.3453  mos=4.41
-[PASS] parallel#0    rx_hz=439.8      # cada sesión mide SU tono: sin cruce de tráfico
-[PASS] parallel#1    rx_hz=499.7
-[PASS] parallel#2    rx_hz=559.8
-```
-
-Escenarios de contenedor (`docker compose --profile audit`):
-
-| Servicio | Qué verifica |
-|---|---|
-| `audit` | P2P directo y N sesiones paralelas, sin relay |
-| `audit-room-host` | Crea la sala y sirve de ancla (`gs ptt`) |
-| `audit-room` | El audit entra como JOIN y verifica el audio a través del relay |
-
-Verificado también vía relay: el audit como JOIN midió **440.4 Hz con 225 frames enviados y 255
-recibidos**, que es la dirección que el perfil `e2e` nunca comprobaba.
-
-Detalle completo en `CHANGELOG.md` bajo `[Unreleased]` y en `AGENTS.md`.
-
----
-
-## Inicio rápido — CLI
-
-```bash
-# Compilar
-cargo build --release -p gravital-talk-cli
-
-# Terminal 1: receptor (abre puerto 9000)
-./target/release/gs receive --bind 0.0.0.0:9000
-
-# Terminal 2: emisor (5 segundos desde el micrófono)
-./target/release/gs send --peer 127.0.0.1:9000 --duration 5
-
-# O: levantar un relay local y conectar desde otro equipo
-./target/release/gs relay --bind 0.0.0.0 --udp-port 9000
-./target/release/gs ptt --relay 192.168.1.5:9000
-```
-
-### Docker (contenedores, pruebas y benchmarks)
-
-```bash
-docker compose up -d relay                        # relay + healthcheck
-make docker-e2e                                   # 2 clientes headless en salas reales
-make docker-audit                                 # auditoría de audio real (gs-audit)
-docker compose --profile audit run --rm audit-room    # + sala vía relay
-make docker-test docker-bench                     # tests y benchmarks en contenedor
-make docker-perf                                  # rendimiento bajo red simulada (tc netem)
-FUZZ_SECONDS=90 make docker-fuzz                  # fuzzing de seguridad
-make docker-obs                                   # Prometheus (:9091) + Grafana (:3001)
-```
-
-Detalles en [`docker/README.md`](docker/README.md).
-
----
-
-## Arquitectura
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│  Aplicaciones                                                       │
-│  App Android (PairingActivity + PttActivity)                        │
-│  CLI gs  ·  Python SDK  ·  JavaScript/WASM                         │
-├─────────────────────────────────────────────────────────────────────┤
-│  gravital-talk          (facade: CodecSession, re-exports)          │
-│  gravital-talk-ffi      (ABI C estable + JNI bridge Android)        │
-│  gravital-talk-cli      (binario gs: send/receive/ptt/relay/bench)  │
-│  gravital-talk-relay    (daemon: UDP + WebSocket + Prometheus)
-│  gravital-talk-audit    (gs-audit: verificación de audio real, no publicado)      │
-├─────────────────────────────────────────────────────────────────────┤
-│  gravital-talk-transport  (Session, UDP, STUN, FEC, jitter buffer)  │
-│  gravital-talk-codec      (Opus, PCM, PLC, negociación)             │
-│  gravital-talk-io         (captura/playback: ALSA/CoreAudio/WASAPI) │
-│  gravital-talk-metrics    (RTT, jitter, pérdida, MOS)               │
-├─────────────────────────────────────────────────────────────────────┤
-│  gravital-talk-core   (no_std: header, crypto X25519+ChaCha20, FSM) │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-El transporte primario es UDP con DSCP EF. El handshake establece claves con **X25519 ECDH**, las deriva con **HKDF-SHA256** y cifra cada paquete con **ChaCha20-Poly1305 AEAD**.
-
----
-
-## Estado del proyecto
-
-| Componente | Estado | Notas |
+| Plataforma | Fichero | Cómo |
 |---|---|---|
-| Protocolo wire v1 | ✅ funcional | handshake 4-way, cifrado por paquete, negociación de codec |
-| `gravital-talk-core` | ✅ funcional | `no_std`, 54 tests unitarios, proptest |
-| `gravital-talk-transport` | ✅ funcional | UDP, STUN, FEC XOR, jitter buffer, congestion control |
-| Modo sala (servidor central) | ✅ funcional | `set_preset_session_id`: handshake enrutado por el relay con `session_id` compartido |
-| `gravital-talk-codec` | ✅ funcional | PCM pass-through, Opus 64 kbps con PLC |
-| `gravital-talk-metrics` | ✅ funcional | RTT EWMA, jitter RFC 3550, pérdida bitmap, MOS estimado |
-| `gravital-talk-ffi` | ✅ funcional | ABI C estable, cbindgen, JNI bridge Android, `gs_session_set_session_id` |
-| `gravital-talk-relay` | ✅ funcional | UDP + WebSocket, /metrics Prometheus, /healthz |
-| `gravital-talk-io` | ✅ funcional | cpal (ALSA/CoreAudio/WASAPI/AAudio) |
-| `gravital-talk-cli` | ✅ funcional | send, receive, ptt (interactivo y headless), relay, devices, bench, info, doctor |
-| App Flutter multiplataforma | ✅ funcional | `app/`: home, servidor (sala+QR escáner), P2P, sesión PTT, ajustes (settings_ui); audio real (record+PCM stream), motor FFI + demo |
-| App Android | ✅ funcional | emparejamiento QR, PTT, wake lock, reconexión automática |
-| Anti-replay | ✅ funcional | Ventana deslizante por sesión (RFC 6479-style) + test de reinyección de datagramas |
-| Rate limiting (relay) | ✅ funcional | Fixed-window por IP en UDP y WebSocket (`--rate-limit`/`GS_RATE_LIMIT`) |
-| gRPC (plano de control) | ✅ funcional | Feature `grpc`: `ServerControl` + `PairingService` + `WatchRoom` stream; cliente Dart con fallback REST |
-| STUN / NAT traversal | ✅ funcional | RFC 5389, stun.l.google.com, fallback P2P → relay |
-| PLC (Packet Loss Concealment) | ✅ funcional | CodecSession: hasta 4 frames de silencio por hueco |
-| Auto-reconexión CLI | ✅ funcional | gs ptt: backoff 2 s→30 s, reconexión por cambio de red |
-| Contratos del plano de control | ✅ definidos | `proto/gravital/v1/*.proto` (rooms, salud, pairing) + `docs/grpc-evaluation.md` |
-| Docker / CI en contenedores | ✅ funcional | `compose.yaml`: e2e multi-contenedor, tests, bench, perf (netem), fuzz, obs, **audit** |
-| Tonos PTT (CLI + Android) | ✅ funcional | beep 880 Hz al presionar, 440 Hz al soltar |
-| Build outputs automático (CI) | ✅ funcional | APK + binarios en outputs/ por cada push |
-| Python SDK | ✅ funcional | PyO3 + maturin |
-| Web/WASM SDK | ✅ funcional | wasm-bindgen + WebSocket transport |
-| Publicación crates.io / PyPI / npm | 🔲 pendiente | roadmap 0.4 |
-| Noise Protocol (forward secrecy) | ✅ funcional | `NN`/`NNpsk0` vía snow, default en modo `Auto` con fallback v1 |
-| Verificación de audio real (`gs-audit`) | ✅ funcional | mide frecuencia/RMS del PCM recibido; perfiles `audit` en Docker y CI |
-| Swift SDK | 🔲 pendiente | roadmap 0.4 |
-| Node.js SDK | 🔲 pendiente | roadmap 0.4 |
-| gRPC plano de control | 🔲 contrato listo | roadmap 0.3.1 |
+| Android (7.0+) | [`gravital-talk-latest.apk`](https://github.com/angelnereira/Gravital-Talk/releases/download/builds/gravital-talk-latest.apk) | Descargar e instalar; hay que permitir «instalar apps desconocidas». |
+| Linux x64 | `gravital-talk-latest-linux-x64.tar.gz` | Descomprimir y ejecutar `gravital-talk/gravital_talk_app`. |
+| Android, versión anterior | `gravital-talk-previous.apk` | Para volver atrás si la última da problemas. |
 
----
+Notas:
 
-## Emparejamiento P2P por QR
+- El APK va firmado con una clave de desarrollo, no con una de publicación. Sirve para
+  instalar y actualizar entre builds de este repositorio; no está en ninguna tienda.
+- **Los dos dispositivos deben llevar el mismo build.** El protocolo todavía cambia, y
+  una versión vieja con una nueva puede conectar y no oírse.
+- iOS, Windows y macOS: la app no se ha compilado ni probado ahí.
 
-Gravital Talk conecta dos dispositivos **sin necesidad de un servidor intermediario**. El relay es siempre opcional (fallback para redes con NAT simétrico).
+## Usar la app
 
-### Cómo funciona
+### Empezar a hablar con alguien
 
-Quien crea la sala **es** el punto de encuentro: su dispositivo dedica un puerto, publica su IP
-pública por STUN y comparte el destino en un QR. No hay nada que desplegar.
+1. En un dispositivo, **Invitar**. Aparece un código QR y un enlace.
+2. En el otro, **Escanear** el código, o abrir el enlace.
+3. Los dos quedan guardados como contactos y, si quien invitó sigue en esa pantalla, la
+   conversación **arranca sola**.
 
-```
-Persona A — "Crear sala y compartir"
-  1. Dedica un puerto local para Gravital Talk (9000 si está libre)
-  2. Genera código de sala (XXXX-NNNN) y un secreto (PSK de Noise)
-  3. Consulta IP pública vía STUN (stun.l.google.com:19302)
-  4. Genera URI:  gravital-talk://pair?v=1&host=203.0.113.45&udp=9000&room=GRVT-A3F2
-  5. Muestra QR + el código en texto
-  6. Llama handshake_open() — acepta el primer cliente de cualquier IP
+El enlace tiene la forma `gravital-talk://i?…`. Formas de abrirlo sin teclear:
 
-Persona B — "Unirse" → escanea QR (o teclea el código)
-  1. Parsea URI → obtiene host, puerto y código
-  2. Conecta directo a ese endpoint y completa el handshake
-  3. PTT activo — y el anfitrión es un participante más, no un servidor
+- **Android**: tocarlo donde el chat lo muestre como enlace; o mantener pulsado el
+  mensaje → *Compartir* → *Gravital Talk*; o copiarlo y tocar **Abrir invitación
+  copiada** en la pantalla de inicio.
+- **Linux**: la app se registra como manejadora de `gravital-talk://`; si ya está
+  abierta, el enlace se le entrega a esa ventana.
+- WhatsApp y otros no convierten `gravital-talk://` en enlace pulsable. No hay página
+  web intermedia que lo resuelva: para eso están el QR y las dos vías anteriores.
 
-Cierre: cualquiera de los dos cierra y vuelve a emparejar cuando quiera.
-```
+### Volver a hablar
 
-El anfitrión **administra** la sala (la creó y conoce el secreto) pero habla y escucha igual que los
-demás. No es un servidor del que dependan los otros participantes.
+Cada contacto tiene un botón de llamada. Al otro le aparece «X quiere hablar» y, al
+aceptar, entra. Con la app en segundo plano llega como notificación si en *Ajustes →
+Contactos* está activado **Recibir llamadas en segundo plano** (Android).
 
-### Cuándo NO funciona directo
+### Durante la conversación
 
-Un solo caso, y merece saberse antes de culpar a la app: si el anfitrión está en **red móvil**, su
-operador le asigna una IP compartida (CGNAT, RFC 6598) y nadie de fuera puede conectarse a él. La app
-lo detecta con STUN y avisa *antes* de que compartas el QR, con dos salidas: reenviar el puerto en el
-router, o usar ese dispositivo como invitado en vez de como anfitrión.
+- **Mantén pulsado** el botón para hablar.
+- **Pausar**: dejas de oír y de poder hablar sin perder la conexión.
+- **Invitar a alguien más** (quien abrió la conversación): más personas pueden sumarse.
+- En Android la conversación sigue con la app oculta o la pantalla apagada; la
+  notificación permite hablar, soltar y salir sin abrir la app.
 
-En los demás casos —misma WiFi, WiFi con puerto reenviado, IP pública— funciona sin configurar nada.
+### Ajustes
 
-### Modo sala (relay)
-
-El relay existe y funciona para quien quiera una sala permanente con varios participantes, pero **ya
-no es necesario para crear una sala**. Se configura aparte:
-
-```bash
-gs relay --bind 0.0.0.0 --udp-port 9000
-```
-
-### Formato del URI QR
-
-```
-gravital-talk://pair?v=1&lan=<ip_lan>:<puerto>&pub=<ip_publica>:<puerto>&relay=<host:port>
-```
-
-Los campos `pub` y `relay` son opcionales. Si STUN falla (ej. sin internet) sólo aparece `lan`. Si no se configura relay, no aparece `relay`.
-
-##### Tamaño de frame y el tope del protocolo
-
-El header es de 24 bytes y el tope duro de payload es `MAX_PAYLOAD_SIZE = 1200 - 24 = 1176`
-bytes (ver `crates/gravital-talk-core/src/constants.rs`). El payload viaja como
-`[audio_seq: 4] || audio` y el AEAD añade 16 bytes de tag, así que:
-
-| Codec | Frame | Payload | ¿Cabe? |
-|---|---|---|---|
-| Opus 64 kbps | 20 ms | ~160 B | sí |
-| PCM16 mono 48 kHz | 10 ms | 960 B | sí |
-| PCM16 mono 48 kHz | 12 ms | 1152 B | sí (el máximo) |
-| PCM16 mono 48 kHz | 20 ms | 1920 B | **no** |
-
-Con PCM, usa `frame_duration_ms <= 12`. Un frame de 20 ms PCM devuelve
-`payload exceeds maximum size`. El core ya tiene `FragmentReassembler` implementado y probado,
-pero `send_audio` todavía no lo usa, así que hoy no hay fragmentación automática en el camino de
-envío.
-
-### Integración STUN (RFC 5389)
-
-```rust
-// Rust
-use gravital_talk::discover_public_addr;
-let addr = discover_public_addr(0).await?;  // 0 = puerto efímero
-println!("IP pública: {addr}");
-
-// C FFI
-char buf[64];
-gs_discover_public_addr(0, buf, sizeof(buf));  // escribe "ip:port"
-
-// Android / Kotlin
-val pubAddr: String? = GravitalTalkJni.nativeDiscoverPublicAddr(localPort)
-```
-
-### Handshake servidor abierto
-
-```rust
-// Acepta el primer cliente de cualquier dirección (modo pairing).
-// El peer queda fijado automáticamente tras el primer ClientHello válido.
-session.handshake_open().await?;
-
-// C FFI
-gs_session_accept_any(handle);
-
-// Android / Kotlin
-GravitalTalkJni.nativeAcceptAny(handle)
-```
-
-Documentación detallada: [`docs/pairing.md`](docs/pairing.md).
-
----
-
-## Requisitos
-
-**Toolchain:**
-
-```
-Rust >= 1.99 (stable)
-Java 17+ (sólo para compilar el APK Android)
-```
-
-**Dependencias del sistema (Ubuntu/Debian):**
-
-```bash
-sudo apt-get install -y libopus-dev libasound2-dev pkg-config
-```
-
-**macOS (Homebrew):**
-
-```bash
-brew install opus
-```
-
-**Android SDK** (sólo para compilar el APK manualmente):
-
-```bash
-# Usar el script incluido (detecta automáticamente Android SDK y NDK)
-./scripts/build-android.sh              # sólo arm64-v8a (más rápido)
-./scripts/build-android.sh --all-abis  # arm64 + armv7 + x86_64
-```
-
----
-
-## Compilar desde fuente
-
-```bash
-git clone https://github.com/angelnereira/Gravital-Talk.git
-cd Gravital-Talk
-
-# Verificar el workspace (no requiere ALSA)
-cargo check -p gravital-talk-core \
-            -p gravital-talk-metrics \
-            -p gravital-talk-transport \
-            -p gravital-talk \
-            -p gravital-talk-ffi
-
-# Build completo (requiere libopus-dev y libasound2-dev)
-cargo build --release
-
-# Tests
-cargo test --lib --tests \
-  -p gravital-talk-core \
-  -p gravital-talk-metrics \
-  -p gravital-talk-transport \
-  -p gravital-talk \
-  -p gravital-talk-ffi
-```
-
-Targets de Makefile disponibles:
-
-```bash
-make check-all     # fmt + clippy + tests
-make bench         # benchmarks con criterion
-make audit         # auditoría: audio bidireccional real sobre UDP
-make ffi-smoke     # genera cabecera C y compila smoke test
-make python-test   # compila SDK Python y ejecuta pytest
-make web-sdk       # compila SDK WASM
-```
-
----
-
-## Binarios pre-compilados
-
-El CI construye y versiona automáticamente los binarios en `outputs/`:
-
-```
-outputs/
-├── android/
-│   ├── debug/    gravital-talk-v<ver>-<sha>-debug.apk
-│   └── release/  gravital-talk-v<ver>-<sha>-release-unsigned.apk
-├── linux/
-│   ├── x86_64/  gs-v<ver>-<sha>-linux-x86_64
-│   └── aarch64/ gs-v<ver>-<sha>-linux-aarch64
-├── macos/
-│   ├── x86_64/  gs-v<ver>-<sha>-macos-x86_64
-│   └── aarch64/ gs-v<ver>-<sha>-macos-aarch64
-└── windows/
-    └── x86_64/  gs-v<ver>-<sha>-windows-x86_64.exe
-```
-
-Cada directorio tiene un `LATEST.txt` con el nombre del último build:
-
-```bash
-# Instalar última APK
-LATEST=$(cat outputs/android/debug/LATEST.txt)
-adb install -r "outputs/android/debug/$LATEST"
-
-# Ejecutar CLI en Linux
-LATEST=$(cat outputs/linux/x86_64/LATEST.txt)
-chmod +x "outputs/linux/x86_64/$LATEST"
-./outputs/linux/x86_64/$LATEST --help
-```
-
-Para versiones con tag, los assets también se publican como **GitHub Releases**.
-
----
-
-## Uso en Rust
-
-Añadir al `Cargo.toml`:
-
-```toml
-[dependencies]
-gravital-talk = { git = "https://github.com/angelnereira/Gravital-Talk" }
-tokio = { version = "1", features = ["full"] }
-```
-
-### Sesión básica (frames de audio raw)
-
-```rust
-use std::sync::Arc;
-use gravital_talk::{Config, Session, SessionRole, UdpConfig, UdpTransport};
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let server_t = Arc::new(UdpTransport::bind(UdpConfig {
-        bind_addr: "0.0.0.0:9000".parse()?,
-        ..Default::default()
-    }).await?);
-    let client_t = Arc::new(UdpTransport::bind(UdpConfig {
-        bind_addr: "0.0.0.0:0".parse()?,
-        ..Default::default()
-    }).await?);
-
-    let server = Arc::new(Session::new(server_t, Config::default()));
-    let client = Arc::new(Session::new(client_t, Config::default()));
-
-    // Handshake concurrente
-    let srv = server.clone();
-    let t = tokio::spawn(async move {
-        srv.handshake(SessionRole::Server, "127.0.0.1:0".parse().unwrap()).await
-    });
-    client.handshake(SessionRole::Client, "127.0.0.1:9000".parse()?).await?;
-    t.await??;
-
-    // Audio — 20 ms a 48 kHz mono = 1920 bytes PCM 16-bit
-    client.ptt_press().await?;
-    client.send_audio(&vec![0u8; 1920]).await?;
-    let frame = server.recv_audio().await?;
-    println!("frame: {} bytes, seq={}", frame.payload.len(), frame.sequence);
-
-    client.ptt_release().await?;
-    client.close().await?;
-    Ok(())
-}
-```
-
-### Emparejamiento P2P sin relay
-
-```rust
-use gravital_talk::{discover_public_addr, Session, UdpConfig, UdpTransport};
-use std::sync::Arc;
-
-// Lado HOST: acepta cualquier cliente
-let transport = Arc::new(UdpTransport::bind(UdpConfig::default()).await?);
-let local_port = transport.local_addr()?.port();
-let public_addr = discover_public_addr(local_port).await?;
-
-println!("QR URI: gravital-talk://pair?v=1&pub={public_addr}");
-
-let session = Arc::new(Session::new(transport, Default::default()));
-session.handshake_open().await?;   // acepta el primer peer de cualquier IP
-println!("¡Conectado!");
-
-// Lado CLIENTE: conectar parseando el URI QR
-let session = Arc::new(Session::new(
-    Arc::new(UdpTransport::bind(UdpConfig::default()).await?),
-    Default::default(),
-));
-session.handshake(SessionRole::Client, "203.0.113.45:48271".parse()?).await?;
-```
-
-### CodecSession (muestras PCM i16 con PLC)
-
-```rust
-use gravital_talk::{CodecId, CodecSession, Config, SessionRole, UdpConfig, UdpTransport};
-
-let transport = Arc::new(UdpTransport::bind(UdpConfig::default()).await?);
-let cs = CodecSession::new(transport, Config::default(), CodecId::Pcm)?;
-cs.handshake(SessionRole::Client, "127.0.0.1:9000".parse()?).await?;
-
-cs.send_samples(&vec![0i16; 480]).await?;
-let samples: Vec<i16> = cs.recv_samples().await?;
-// recv_samples() aplica PLC automáticamente si hay gaps de secuencia
-```
-
-### Descubrir IP pública vía STUN
-
-```rust
-use gravital_talk::discover_public_addr;
-
-let public_addr = discover_public_addr(0).await?;  // 0 = puerto efímero
-println!("IP pública: {public_addr}");
-// → "203.0.113.45:48271"
-```
-
-### Métricas en tiempo real
-
-```rust
-let fill = session.jitter_buffer().fill_percent();
-let snap = session.metrics().snapshot(fill);
-println!("RTT {:.1}ms  Jitter {:.1}ms  Loss {:.1}%  MOS {:.2}",
-    snap.rtt_ms, snap.jitter_ms, snap.loss_percent, snap.estimated_mos);
-```
-
----
-
-## Relay de producción
-
-El relay enruta paquetes entre peers sin descifrarlos. Acepta UDP y WebSocket en el mismo proceso.
-
-| Servicio | Puerto por defecto |
+| Sección | Qué hay |
 |---|---|
-| UDP (protocolo nativo) | 9000 |
-| WebSocket (navegadores) | 9090 |
-| Observabilidad HTTP | 9100 |
+| Permisos | Micrófono, cámara (para escanear) y notificaciones, con su estado. |
+| Audio | Calidad (128, 64, 32 o 16 kbps), reducción de ruido, tonos de turno. |
+| Conexión | Comprobar la red propia; servidor de respaldo opcional. |
+| Contactos | Tu nombre visible; recibir llamadas en segundo plano. |
+| Acerca de | Versión, motor de audio y, si la app se cerró sola, el informe para copiar. |
 
-```bash
-# Docker Compose (relay + Prometheus)
-cd crates/gravital-talk-relay
-docker compose up -d
+## Cómo se conectan dos dispositivos
 
-# Binario directo
-cargo build --release -p gravital-talk-relay
-./target/release/gs-relay --config relay.example.toml
+Tener internet permite **salir**; para hablar directo, al menos uno tiene que poder
+**recibir** del otro. Lo que hace la app, por orden:
 
-# Levantarlo desde el CLI
-./target/release/gs relay --bind 0.0.0.0 --udp-port 9000
-```
+1. **Misma red** (misma wifi): conexión inmediata por la red local.
+2. **Redes distintas**: cada uno averigua su dirección pública (STUN) y ambos envían a
+   la vez para abrir sus routers («perforar el NAT»), con barrido de puertos para los
+   NAT que cambian de puerto. Para esto el anfitrión necesita la dirección del invitado:
+   hoy el invitado se la da enseñándole un **código de respuesta** (QR o enlace).
+3. **Router que abre el puerto solo** (UPnP): si el router lo permite, el anfitrión
+   queda alcanzable sin más pasos.
+4. **Servidor de respaldo** (opcional, `gs-relay` desplegado por ti): presenta a los
+   dos y, si no hay camino directo, reenvía el audio cifrado. Apagado por defecto.
 
-### Modo sala: quién fija el códec
+Límites reales:
 
-En modo sala, **el códec lo negocia el primer cliente** que entra. El servidor de la sala fija su
-preferencia, pero si un cliente pide otro, `CodecSession::handshake` devuelve `CodecMismatch` en
-lugar de degradar en silencio. Si mezclas clientes con códecs distintos en la misma sala, todos
-deben usar el mismo (`--codec` en `gs ptt`, `ROOM_CODEC` en el perfil `audit`).
+- Si los **dos** están tras un NAT simétrico (habitual entre dos móviles con datos), no
+  existe camino directo. Sin servidor de respaldo no conectan.
+- Una llamada a un contacto sólo llega si el otro tiene la app en marcha y es
+  alcanzable. No hay notificaciones *push* de un tercero.
+- Entre redes distintas, la invitación de un solo enlace todavía **no** arranca sola:
+  hace falta el código de respuesta del punto 2. Ver la siguiente sección.
 
----
+## Qué funciona y qué no
 
-## C FFI
+Lo marcado como **medido** se comprobó con dispositivos reales (un Pixel 8 Pro y un
+portátil Linux); lo demás lo cubren pruebas automáticas o no se ha comprobado.
 
-```bash
-cargo build --release -p gravital-talk-ffi
-# → target/release/libgravital_talk_ffi.so  (Linux)
-# → target/release/libgravital_talk_ffi.dylib (macOS)
-# → target/release/gravital_talk_ffi.dll    (Windows)
-```
-
-```c
-#include "gravital_talk.h"
-
-GsConfig cfg;
-gs_config_default(&cfg);
-
-GsSessionHandle *h = NULL;
-gs_session_create(&cfg, "0.0.0.0", 0, &h);
-
-// Descubrir IP pública via STUN
-char pub_addr[64];
-gs_discover_public_addr(0, pub_addr, sizeof(pub_addr));
-
-// Aceptar cualquier cliente (modo QR pairing)
-gs_session_accept_any(h);
-
-// Audio
-uint8_t audio[1920] = {0};
-gs_session_send_audio(h, audio, sizeof(audio));
-
-gs_session_close(h);
-gs_session_destroy(h);
-```
-
-### API C — funciones de pairing
-
-| Función | Descripción |
+| Área | Estado |
 |---|---|
-| `gs_discover_public_addr(port, buf, len)` | Descubre IP pública via STUN; escribe `"ip:port"` |
-| `gs_session_accept_any(handle)` | Handshake servidor sin conocer la IP del cliente |
-| `gs_session_local_port(handle, out_port)` | Puerto UDP local del socket |
+| Audio bidireccional, misma wifi | Funciona. **Medido**: 0–5 % de huecos por turno, ~170–220 ms del aviso al sonido (portátil → teléfono). |
+| Audio entre wifi de casa y datos móviles | Ha funcionado en pruebas puntuales con perforación y barrido de puertos; no hay estadística de fiabilidad. |
+| Invitación de un solo enlace, misma red | Funciona. **Medido**: 4 s desde abrir el enlace hasta estar hablando. |
+| Invitación de un solo enlace, redes distintas | **No.** Hace falta el código de respuesta. Hay un buzón de señalización escrito (MQTT) pero apagado: no se pudo validar contra servidores públicos. |
+| Contactos y llamadas entre ellos | Funciona en la misma red. Entre redes sólo si el otro es alcanzable. |
+| Salas de más de dos | El núcleo lo soporta y hay pruebas automáticas; con tres dispositivos reales no se ha probado. |
+| Segundo plano en Android | Funciona. **Medido** en Android 17: micrófono activo con la app oculta, notificación con hablar/soltar/salir. |
+| Códec de voz | Opus con corrección de pérdidas, ocultación de huecos, tasa adaptativa y reducción de ruido (RNNoise). |
+| Tonos de turno | Suenan en local al empezar y terminar un turno. |
+| Audio de baja latencia en Android (AAudio) | Compilado y **apagado**: en la prueba dio menos retardo pero más cortes. |
+| La app se cierra a los segundos en algunos dispositivos | **Sin resolver.** No se ha podido reproducir; la app guarda el motivo del cierre en *Ajustes → Acerca de* para diagnosticarlo. |
+| App en iOS, Windows, macOS | Sin compilar ni probar. |
+| SDK de Python y de web (WASM) | Existen en `sdks/`; no se han revisado en esta etapa. |
+| Integración continua | Los flujos existen pero **no se ejecutan** (cuenta bloqueada). Todo se verifica y publica en local. |
 
-### API C — funciones de sesión
+## Arquitectura y stack
 
-| Función | Descripción |
+```
+            ┌────────────────────────── app/ (Flutter) ──────────────────────────┐
+            │ pantallas · SessionController · ContactsService · AudioPump         │
+            └───────────────────────────────┬─────────────────────────────────────┘
+                                            │ dart:ffi  (ABI C: gs_*)
+┌───────────────────────────────────────────┴───────────────────────────────────────┐
+│ gravital-talk-ffi   handles, runtime por sesión, códec de voz, audio nativo        │
+├────────────────────────────────────────────────────────────────────────────────────┤
+│ gravital-talk (fachada)                                                             │
+├───────────────┬───────────────────────┬──────────────────┬─────────────────────────┤
+│ core (no_std) │ transport (tokio)     │ codec            │ io (cpal)               │
+│ cabecera 24 B │ UDP, STUN, UPnP, NAT  │ Opus + RNNoise   │ micrófono y altavoz     │
+│ cifrado, FSM  │ jitter, FEC, salas    │ en Rust puro     │ (escritorio)            │
+└───────────────┴───────────────────────┴──────────────────┴─────────────────────────┘
+        metrics (RTT, jitter, pérdida, MOS)   ·   relay   ·   cli   ·   audit
+```
+
+- **Núcleo**: Rust 1.99. `gravital-talk-core` es `no_std`; todo el protocolo vive en
+  Rust y cualquier otro lenguaje lo consume por la ABI C de `gravital-talk-ffi`.
+- **Red**: UDP, tokio. Cabecera de 24 bytes que va autenticada; nonce derivado del
+  número de secuencia y del identificador de sesión.
+- **Cifrado**: Noise `NNpsk0` (X25519, ChaCha20-Poly1305) con el secreto de la sala;
+  anti-repetición por ventana deslizante.
+- **Audio**: Opus (`unsafe-libopus`) y reducción de ruido (`nnnoiseless`), ambos en
+  Rust puro. 48 kHz mono, tramas de 20 ms, 16–128 kbps.
+- **App**: Flutter (Dart). En escritorio el audio lo capta y reproduce la librería
+  nativa (cpal); en Android, los plugins `record` y `flutter_sound`.
+- **Android**: Kotlin para lo que Flutter no cubre: servicio en primer plano, enlaces,
+  compartir, motivo del último cierre.
+
+Carpetas:
+
+```
+crates/    los 10 crates del workspace (core, metrics, transport, codec, io,
+           fachada, ffi, cli, relay, audit)
+app/       la app Flutter (Android y Linux)
+android/   app Android antigua en Kotlin/JNI; ya no es la que se publica
+sdks/      Python (PyO3) y web (wasm-bindgen), fuera del workspace
+docs/      especificación del protocolo, emparejamiento, seguridad, ADRs
+scripts/   compilar el APK, publicar instalables, simulador de NAT
+```
+
+## Compilar desde el código
+
+Requisitos:
+
+- Rust 1.99 (lo fija `rust-toolchain.toml`).
+- Linux: `libasound2-dev libopus-dev pkg-config`, más las dependencias de Flutter para
+  escritorio (`libgtk-3-dev`, `clang`, `cmake`, `ninja-build`).
+- Flutter estable, para la app.
+- Android: JDK 17, SDK y NDK de Android, y `cargo install cargo-ndk --locked` con los
+  targets `aarch64-linux-android armv7-linux-androideabi x86_64-linux-android`.
+
+```bash
+# Núcleo, sin audio ni dependencias del sistema
+cargo test -p gravital-talk-core -p gravital-talk-metrics -p gravital-talk-transport
+
+# App de escritorio Linux (incluye el motor de audio nativo)
+make app-linux
+app/build/linux/x64/release/bundle/gravital_talk_app
+
+# APK instalable → outputs/android/release/
+./scripts/build-apk.sh
+adb install -r "outputs/android/release/$(cat outputs/android/release/LATEST.txt)"
+```
+
+## Pruebas y medidas
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --exclude gravital-talk-audit --all-targets -- \
+  -D warnings -W clippy::perf -W clippy::nursery
+cargo test --workspace --exclude gravital-talk-audit --all-targets
+cargo test -p gravital-talk-codec --no-default-features --features voice
+make ffi-smoke                      # compila y ejecuta una prueba en C contra la ABI
+cd app && flutter analyze && flutter test
+```
+
+Además:
+
+- `make audit` comprueba que el **audio** llega (frecuencia y nivel del PCM recibido),
+  no sólo que llegan paquetes.
+- `make nat-sim` reproduce NAT reales con espacios de nombres de red (pide `sudo`).
+- **Cortes y latencia** se miden de forma acústica: el portátil emite un tono por la
+  conversación y se graba cómo sale por el altavoz del teléfono. El procedimiento está
+  en `AGENTS.md` («Medir audio entrecortado y latencia»).
+
+`gravital-talk-audit` se excluye de `clippy` y de los tests del workspace por un fallo
+propio que ya estaba en la rama principal.
+
+## Línea de órdenes, relay y FFI
+
+- **`gs`** (`gravital-talk-cli`): `send`, `receive`, `ptt`, `peer`, `relay`, `room`,
+  `discover`, `bench`, `info`, `doctor`, `devices`. `gs peer` sirve para probar la
+  conexión entre dos máquinas sin la app.
+- **`gs-relay`** (`gravital-talk-relay`): servidor opcional. Presenta a dos dispositivos
+  y, si no hay camino directo, reenvía el audio cifrado, que no puede leer. Expone
+  `/metrics` y `/healthz`. Nadie tiene que desplegarlo para usar la app en una red
+  local o entre redes que se dejen perforar.
+- **ABI C** (`gravital-talk-ffi`): funciones `gs_*`, cabecera generada en
+  `crates/gravital-talk-ffi/include/gravital_talk.h`. Los cambios son sólo aditivos.
+
+## Publicar instalables
+
+Los binarios no se versionan en git ni dependen de la integración continua:
+
+```bash
+scripts/publish-builds.sh --build   # compila Android y Linux y los sube al release `builds`
+```
+
+El script comprueba que el APK corresponde al commit actual y que el paquete de Linux
+lleva audio nativo, pasa el APK anterior a `previous` y verifica lo publicado.
+
+## Documentación
+
+| Documento | Contenido |
 |---|---|
-| `gs_config_default(out)` | Rellena configuración por defecto |
-| `gs_session_create(cfg, addr, port, out)` | Crea sesión y vincula socket UDP |
-| `gs_session_destroy(handle)` | Libera sesión (NULL es no-op) |
-| `gs_session_connect(handle, addr, port)` | Handshake como cliente |
-| `gs_session_accept(handle, addr, port)` | Handshake como servidor (IP conocida) |
-| `gs_session_send_audio(handle, data, len)` | Envía frame de audio |
-| `gs_session_recv_audio(handle, buf, len_inout)` | Recibe siguiente frame |
-| `gs_session_ptt_press(handle)` | Activa PTT: FloorRequest + ControlResume |
-| `gs_session_ptt_release(handle)` | Desactiva PTT: FloorRelease + ControlPause |
-| `gs_session_close(handle)` | Cierra sesión enviando CLOSE |
-| `gs_session_state(handle, out)` | Estado actual |
-| `gs_session_id(handle, out)` | Session ID negociado |
-| `gs_session_metrics(handle, out)` | Snapshot de métricas |
-| `gs_error_last()` | Último error del hilo (C-string, no liberar) |
+| `AGENTS.md` | Guía de trabajo del repositorio: órdenes, convenciones y trampas conocidas. La más al día. |
+| `CHANGELOG.md` | Qué cambió y por qué, versión a versión. |
+| `docs/pairing.md` | Invitaciones, perforación de NAT, contactos y llamadas. |
+| `docs/protocol-spec.md`, `docs/packet-format.md`, `docs/session-model.md` | El protocolo. |
+| `docs/security.md` | Modelo de amenazas. |
+| `docs/roadmap.md`, `docs/adr/` | Planes y decisiones de diseño. |
 
----
-
-## Python SDK
-
-```bash
-pip install maturin
-cd sdks/python
-maturin develop --release
-```
-
-```python
-import gravital_talk as gt
-
-server = gt.Session(gt.Config(sample_rate=48000), bind_addr="0.0.0.0", bind_port=9000)
-client = gt.Session(gt.Config(sample_rate=48000), bind_addr="0.0.0.0", bind_port=0)
-
-import threading
-t = threading.Thread(target=server.accept, args=("127.0.0.1", client.local_port))
-t.start()
-client.connect("127.0.0.1", 9000)
-t.join()
-
-client.send_audio(bytes(1920))
-data = server.recv_audio()
-
-m = client.metrics()
-print(f"RTT: {m.rtt_ms:.1f} ms  MOS: {m.estimated_mos:.2f}")
-client.close(); server.close()
-```
-
----
-
-## Web / WASM SDK
-
-```bash
-npm install -g wasm-pack
-cd sdks/web
-wasm-pack build --target web --out-dir pkg --release
-```
-
-```typescript
-import init, { GravitalTalkSession } from "./pkg/gravital_talk_web.js";
-
-await init();
-const session = new GravitalTalkSession();
-await session.connect("wss://relay.host:9090/session/abc123");
-await session.sendAudio(new Float32Array(480));
-const pcm = await session.recvAudio();
-session.close();
-```
-
----
-
-## CLI
-
-```bash
-cargo install --path crates/gravital-talk-cli
-```
-
-```
-gs send     --peer <addr:port> [--codec pcm|opus] [--duration 5]
-gs receive  --bind <addr:port> [--output audio.wav]
-gs ptt      --relay <host:port>          # PTT interactivo con reconexión automática
-gs relay    --bind 0.0.0.0               # Levantar relay local
-gs devices                               # Listar dispositivos de audio
-gs bench    --peer <addr:port>           # Benchmark p50/p95/p99
-gs info     --peer <addr:port>
-gs doctor                                # Diagnóstico: audio, red, dependencias
-```
-
-Ejemplo PTT con reconexión automática:
-
-```bash
-# Lado servidor (relay local)
-gs relay --bind 0.0.0.0 --udp-port 9000
-
-# Lado cliente — Ctrl+Space para hablar, Ctrl+C para salir
-# Se reconecta solo si la red cae (backoff 2 s→30 s)
-gs ptt --relay 127.0.0.1:9000
-```
-
----
-
-## Protocolo
-
-Handshake 4-way con X25519 ECDH + HKDF-SHA256:
-
-```
-Cliente                         Servidor
-   |── ClientHello (X25519 pub) ──▶|
-   |◀── ServerHello (X25519 pub) ──|
-   |── KeyExchange (auth_tag) ────▶|
-   |◀── SessionConfirm (sess_id) ──|
-   |◀══════ audio ChaCha20 ═══════▶|
-```
-
-Cabecera de 24 bytes por paquete. Payload cifrado con ChaCha20-Poly1305 AEAD; el nonce de 96 bits deriva de `sequence` + `session_id`. La cabecera es AAD, garantizando su integridad sin firma extra.
-
-Especificación completa: [`docs/protocol-spec.md`](docs/protocol-spec.md).
-
----
-
-## Observabilidad
-
-Métricas Prometheus expuestas en `http://<relay>:9100/metrics`:
-
-```
-gs_relay_packets_in_total       gs_relay_packets_out_total
-gs_relay_bytes_in_total         gs_relay_bytes_out_total
-gs_relay_active_sessions        gs_relay_ws_connections
-gs_relay_dropped_total{reason}
-```
-
-Dashboard Grafana: `infra/grafana/dashboards/gravital-fleet-overview.json`.
-
----
-
-## Tests
-
-```bash
-cargo test -p gravital-talk-core       # 54 tests: FSM, crypto, codec, fragmentación
-cargo test -p gravital-talk-transport  # 35 tests: STUN, jitter, FEC, congestión
-cargo test -p gravital-talk-metrics    # 22 tests: RTT, jitter, pérdida, MOS
-cargo test -p gravital-talk-ffi        # 5 tests: ABI C, null safety
-
-# Integración — loopback UDP real
-cargo test --test ptt_floor_control -p gravital-talk
-cargo test --test handshake_flow    -p gravital-talk
-cargo test --test net_sim           -p gravital-talk
-cargo test --test opus_roundtrip    -p gravital-talk
-
-# Integración — tests de audio bidireccional (miden frecuencia y RMS del PCM)
-cargo test -p gravital-talk-audit                                  # 4 tests P2P
-cargo test -p gravital-talk-audit --features opus                  # + 1 test Opus
-
-# Benchmarks
-cargo bench -p gravital-talk
-```
-
-### Auditoría de audio (gs-audit)
-
-```bash
-# Verifica el CONTENIDO del audio recibido, no sólo que llegan frames
-make audit            # P2P 1:1, turnos partidos, ambas direcciones
-make audit-parallel   # 3 sesiones simultáneas, sin cruce de tráfico
-make docker-audit     # en contenedor, con Opus
-```
-
----
-
-## Infraestructura
-
-```
-infra/
-├── terraform/modules/
-│   ├── relay-aws/         EC2 t4g.small ARM64 (~$12/mes)
-│   ├── relay-hetzner/     CX22 (~€4/mes)
-│   └── relay-digitalocean/ Droplet (~$6/mes)
-├── helm/gravital-talk-relay/   Helm chart Kubernetes
-├── grafana/dashboards/         Dashboard Grafana
-└── cloud-init/raspberry-pi.yml  Pi 4/5 con Pi OS Lite ARM64
-```
-
-```bash
-# Docker
-docker run -p 9000:9000/udp -p 9090:9090 -p 9100:9100 \
-  ghcr.io/angelnereira/gravital-talk-relay:latest
-
-# Kubernetes
-helm install gravital-talk-relay ./infra/helm/gravital-talk-relay \
-  --set image.tag=0.3.0-alpha.1
-```
-
----
-
-## Hoja de ruta
-
-| Versión | Estado | Contenido |
-|---|---|---|
-| **0.1.0-alpha.1** | ✅ | Protocolo core, UDP, FFI, CLI MVP, SDKs Python/WASM |
-| **0.2.0-alpha.1** | ✅ | Codec Opus, audio I/O cpal, CLI con `--device` |
-| **0.2.0-alpha.2** | ✅ | Negociación codec, resampler, relay productivo, Terraform/Helm |
-| **0.2.0-alpha.3** | ✅ | **App Android** (PairingActivity, QR, CameraX), **STUN** RFC 5389, **PLC**, auto-reconexión CLI, tonos PTT, CI auto-build `outputs/` |
-| **0.3.0-alpha.1** | ✅ | **Modo sala/servidor real**, **anti-replay**, **rate limiting**, **gRPC (servidor)**, **app Flutter** con audio real, **contratos** (`proto/`), **Docker** (e2e, bench, perf netem, fuzz), **harness `gs-audit`** |
-| **0.3** | 🔲 | Noise Protocol (forward secrecy), auth de sala, TLS/WSS, relay cluster Redis |
-| **0.4** | 🔲 | SDKs Swift + Node.js, publicación crates.io / PyPI / npm |
-| **1.0** | 🔲 | Protocolo estable, auditoría de seguridad, SemVer |
-
-Detalle con criterios de salida en [`docs/roadmap.md`](docs/roadmap.md).
-
----
-
-## Contribuciones
-
-Ver `CONTRIBUTING.md`. Resumen:
-
-1. Abrir issue antes de implementar cambios grandes.
-2. Ramas con prefijo `feat/`, `fix/` o `refactor/`.
-3. Pasar `cargo fmt --check`, `cargo clippy -- -D warnings` y todos los tests.
-4. El `unsafe` requiere comentario `// SAFETY:` justificando las invariantes.
-5. Commits en Conventional Commits (`feat:`, `fix:`, `docs:`, etc.).
-
-Para vulnerabilidades de seguridad: ver `SECURITY.md`.
-
----
-
-## Licencia
-
-Dual licencia MIT y Apache 2.0.
-
-- [MIT License](LICENSE-MIT)
-- [Apache License 2.0](LICENSE-APACHE)
-
-Copyright 2024–2026 Angel Nereira / Nereira Technology and Business Solutions.
+Parte de `docs/` describe etapas anteriores del proyecto y puede no coincidir con el
+código actual; ante la duda mandan `AGENTS.md`, `CHANGELOG.md` y el propio código.

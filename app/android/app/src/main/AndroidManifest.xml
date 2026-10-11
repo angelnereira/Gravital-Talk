@@ -52,6 +52,13 @@
                 <data android:scheme="gravital-talk" android:host="contact"/>
                 <data android:scheme="gravital-talk" android:host="i"/>
             </intent-filter>
+            <!-- Compartir un mensaje con una invitación desde cualquier chat:
+                 evita copiar y pegar donde el enlace no es pulsable. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="text/plain"/>
+            </intent-filter>
         </activity>
         <!-- Mantiene la sala (o la espera de llamadas) con la app oculta. -->
         <service

@@ -78,7 +78,9 @@ web-sdk: ## Compila el SDK Web a WASM con wasm-pack
 .PHONY: app-linux
 app-linux: ## Compila la app de escritorio Linux con su motor de audio nativo
 	$(CARGO) build --release -p gravital-talk-ffi --features audio
-	cd app && flutter build linux --release
+	# Sin recorte de iconos: en builds incrementales la fuente recortada se
+	# queda con los iconos de una compilación anterior y los nuevos salen en blanco.
+	cd app && flutter build linux --release --no-tree-shake-icons
 
 .PHONY: publish-builds
 publish-builds: ## Compila Android y Linux y sube los instalables al release `builds`
