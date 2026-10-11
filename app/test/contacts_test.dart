@@ -216,7 +216,7 @@ void main() {
     await b.contacts.setDeviceName('Beto');
 
     final link = await a.contacts.contactLink();
-    expect(link, startsWith('gravital-talk://contact?'));
+    expect(link, startsWith('gravital-talk://i?v=2&'));
     // Enseñarlo dos veces no crea dos contactos a medias.
     expect(await a.contacts.contactLink(), link);
     expect(a.contacts.contacts.single.name, ContactsService.pendingName);
@@ -256,5 +256,63 @@ void main() {
     await a.controller.reset();
     // Los reintentos pendientes ya no tienen sala: no deben fallar.
     await Future<void>.delayed(const Duration(seconds: 7));
+  });
+
+  test('abrir la invitación basta: el que invita llama solo y el otro entra',
+      () async {
+    final (a, b) = await pair();
+    await a.contacts.setDeviceName('Ana');
+    final link = await a.contacts.contactLink();
+    a.contacts.startInviting(link!);
+
+    await b.contacts.addFromLink(link);
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    // Ana estaba esperando: le toca llamar, sin que nadie pulse nada.
+    final callee = a.contacts.autoCall.value;
+    expect(callee, isNotNull);
+    expect(callee!.device, b.controller.deviceId);
+    // Los saludos repetidos no vuelven a disparar la llamada.
+    a.contacts.autoCall.value = null;
+    await Future<void>.delayed(const Duration(seconds: 4));
+    expect(a.contacts.autoCall.value, isNull);
+
+    // Ana abre la sala y llama (es lo que hace la pantalla de invitar).
+    final room = a.controller.createRoom();
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    a.contacts.call(callee);
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    // A Beto le entra sin preguntar: acaba de abrir la invitación.
+    final call = b.contacts.incoming.value;
+    expect(call?.auto, isTrue);
+    expect(call!.invite, a.controller.pairingUri?.toUri());
+
+    await room;
+    a.contacts.cancelCall();
+    await a.controller.reset();
+    // Terminada la conversación, la invitación deja de esperar.
+    a.contacts.autoCall.value = null;
+    b.contacts.handleDatagram(b.sent.first, InternetAddress('192.168.1.20'));
+    expect(a.contacts.autoCall.value, isNull);
+  });
+
+  test('sin invitación abierta, un saludo sólo guarda el contacto', () async {
+    final (a, b) = await pair();
+    final link = await a.contacts.contactLink();
+    await b.contacts.addFromLink(link!);
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect(a.contacts.autoCall.value, isNull);
+    expect(a.contacts.contacts.single.device, b.controller.deviceId);
+    // Y una llamada posterior, ya fuera del margen, sí pregunta.
+  });
+
+  test('los enlaces de contacto antiguos siguen valiendo', () {
+    final old = ContactLink.tryParse(
+        'gravital-talk://contact?v=1&s=0123456789abcdefXYZ&n=Ana&dev=aa11&ip=10.0.0.2');
+    expect(old?.name, 'Ana');
+    expect(old?.device, 'aa11');
+    final now = ContactLink.tryParse(old!.toUri());
+    expect(now?.secret, old.secret);
+    expect(now?.device, 'aa11');
+    expect(now?.ip, '10.0.0.2');
   });
 }

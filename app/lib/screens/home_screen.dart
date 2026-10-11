@@ -11,7 +11,9 @@ import '../services/session_controller.dart';
 import '../widgets/active_session_card.dart';
 import '../widgets/common.dart';
 import '../widgets/contacts_section.dart';
+import '../services/contacts.dart';
 import 'about_screen.dart';
+import 'invite_screen.dart';
 import 'pairing_screen.dart';
 import 'settings_screen.dart';
 
@@ -43,6 +45,17 @@ class _HomeScreenState extends State<HomeScreen> {
       _publicIp = pub;
       _diagnosing = false;
     });
+  }
+
+  /// Con contactos disponibles, invitar es un enlace que lo hace todo. Sin
+  /// motor nativo (modo demostración) queda la sala de siempre.
+  void _invite() {
+    final contacts = context.read<ContactsService>();
+    if (!contacts.available) return _open(PairingMode.host);
+    Navigator.push(
+      context,
+      ForwardRoute(builder: (_) => const InviteScreen()),
+    );
   }
 
   void _open(PairingMode mode) {
@@ -121,10 +134,10 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
               _ActionTile(
                 icon: Icons.qr_code_2,
-                title: 'Crear sala',
-                subtitle: 'Enseña un código para que se unan',
+                title: 'Invitar',
+                subtitle: 'Envía un enlace o enseña un código',
                 primary: true,
-                onTap: canPair ? () => _open(PairingMode.host) : null,
+                onTap: canPair ? _invite : null,
               )
                   .animate(delay: 100.ms)
                   .fadeIn(duration: 300.ms)
@@ -132,8 +145,8 @@ class _HomeScreenState extends State<HomeScreen> {
               const SizedBox(height: Spacing.md),
               _ActionTile(
                 icon: Icons.qr_code_scanner,
-                title: 'Unirse',
-                subtitle: 'Escanea el código de otra pantalla',
+                title: 'Escanear',
+                subtitle: 'Lee el código de otra pantalla o pega un enlace',
                 onTap: canPair ? () => _open(PairingMode.join) : null,
               )
                   .animate(delay: 180.ms)

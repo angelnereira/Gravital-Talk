@@ -89,15 +89,18 @@ class Contact {
       };
 }
 
-/// Enlace para añadirse como contacto sin haber hablado antes.
+/// La invitación: el único enlace que hay que compartir.
 ///
 /// ```text
-/// gravital-talk://contact?v=1&s=SECRETO&n=Ana&dev=ID&ip=192.168.1.10
+/// gravital-talk://i?v=2&s=SECRETO&n=Ana&d=ID&ip=192.168.1.10
 /// ```
 ///
-/// Lleva el secreto que compartirán los dos: quien lo abre queda guardado como
-/// contacto de quien lo envió, y al revés. Hay que pasarlo por un canal de
-/// confianza, igual que una invitación a una sala.
+/// Lleva el secreto que compartirán los dos. Quien lo abre queda guardado como
+/// contacto de quien lo envió, y al revés; si quien invitó sigue esperando,
+/// además entran a hablar sin más pasos. Hay que pasarlo por un canal de
+/// confianza.
+///
+/// Se sigue entendiendo la forma anterior (`gravital-talk://contact?…&dev=`).
 @immutable
 class ContactLink {
   const ContactLink({
@@ -117,7 +120,9 @@ class ContactLink {
   /// `null` si `raw` no es un enlace de contacto de Gravital Talk.
   static ContactLink? tryParse(String raw) {
     final uri = Uri.tryParse(raw.trim());
-    if (uri == null || uri.scheme != 'gravital-talk' || uri.host != 'contact') {
+    if (uri == null ||
+        uri.scheme != 'gravital-talk' ||
+        (uri.host != 'i' && uri.host != 'contact')) {
       return null;
     }
     final q = uri.queryParameters;
@@ -128,19 +133,19 @@ class ContactLink {
     return ContactLink(
       secret: secret,
       name: (q['n'] ?? '').trim(),
-      device: (q['dev'] ?? '').trim(),
+      device: (q['d'] ?? q['dev'] ?? '').trim(),
       ip: ip.isEmpty ? null : ip,
     );
   }
 
   String toUri() => Uri(
         scheme: 'gravital-talk',
-        host: 'contact',
+        host: 'i',
         queryParameters: {
-          'v': '1',
+          'v': '2',
           's': secret,
           if (name.isNotEmpty) 'n': name,
-          if (device.isNotEmpty) 'dev': device,
+          if (device.isNotEmpty) 'd': device,
           'ip': ?ip,
         },
       ).toString();
@@ -149,9 +154,17 @@ class ContactLink {
 /// Solicitud de un contacto para hablar, pendiente de aceptar.
 @immutable
 class IncomingCall {
-  const IncomingCall({required this.contact, required this.invite});
+  const IncomingCall({
+    required this.contact,
+    required this.invite,
+    this.auto = false,
+  });
 
   final Contact contact;
+
+  /// `true` si se entra sin preguntar: es la llamada que sigue a abrir una
+  /// invitación, y quien la abrió ya dijo que quería hablar.
+  final bool auto;
 
   /// Invitación a la sala que abrió quien llama.
   final String invite;
@@ -217,6 +230,22 @@ class ContactsService extends ChangeNotifier {
   Timer? _callTimer;
   final Set<String> _dismissed = {};
 
+  /// Invitación que este dispositivo está enseñando ahora (id de contacto).
+  String? _invitingId;
+
+  /// Dispositivos que ya contestaron a esa invitación: cada uno entra una vez.
+  final Set<String> _greeted = {};
+
+  /// Contacto recién añadido por enlace, del que se acepta la llamada sin
+  /// preguntar durante un rato.
+  String? _autoAcceptId;
+  DateTime _autoAcceptUntil = DateTime.fromMillisecondsSinceEpoch(0);
+  Timer? _answerTimer;
+
+  /// Contacto al que hay que llamar ya: abrió la invitación mientras se le
+  /// esperaba. Lo consume la pantalla de invitar.
+  final ValueNotifier<Contact?> autoCall = ValueNotifier(null);
+
   /// Solicitud pendiente de aceptar o rechazar, o `null`.
   final ValueNotifier<IncomingCall?> incoming = ValueNotifier(null);
 
@@ -258,7 +287,8 @@ class ContactsService extends ChangeNotifier {
     _controller
       ..deviceId = _deviceId
       ..deviceName = _deviceName
-      ..onPaired = _onPaired;
+      ..onPaired = _onPaired
+      ..addListener(_onController);
     if (transport == null) await _listen();
     if (_background) unawaited(BackgroundSession.setStandby(true));
     notifyListeners();
@@ -394,6 +424,44 @@ class ContactsService extends ChangeNotifier {
     ).toUri();
   }
 
+  bool _wasLive = false;
+
+  /// La conversación que salió de una invitación ha terminado: ya no se
+  /// espera a nadie más por ella.
+  void _onController() {
+    final live = _controller.isLive;
+    if (_wasLive && !live && _invitingId != null) stopInviting();
+    _wasLive = live;
+  }
+
+  /// Empieza a esperar a quien abra la invitación `link`: en cuanto salude,
+  /// se le llama solo. Dura hasta [stopInviting].
+  void startInviting(String link) {
+    final parsed = ContactLink.tryParse(link);
+    _invitingId = parsed == null ? null : _idFor(parsed.secret);
+    _greeted.clear();
+  }
+
+  /// Deja de esperar (se salió de la pantalla sin que entrara nadie, o la
+  /// conversación que salió de esa invitación terminó).
+  void stopInviting() {
+    _invitingId = null;
+    _greeted.clear();
+    autoCall.value = null;
+  }
+
+  /// Alguien ha contestado a la invitación en curso: a hablar.
+  void _onGreeting(Contact contact) {
+    if (contact.id != _invitingId || contact.device.isEmpty) return;
+    if (!_greeted.add(contact.device)) return;
+    if (_controller.isLive) {
+      // Ya hay conversación: el que llega se suma a ella.
+      ring(contact);
+    } else if (!_controller.busy && _callTimer == null) {
+      autoCall.value = contact;
+    }
+  }
+
   /// Guarda como contacto a quien envió el enlace `raw` y le saluda para que
   /// él sepa quién lo abrió. `null` si aquello no era un enlace de contacto.
   Future<Contact?> addFromLink(String raw) async {
@@ -420,6 +488,9 @@ class ContactsService extends ChangeNotifier {
       lastSeen: known?.lastSeen ?? 0,
     );
     await _put(contact);
+    // Quien abre una invitación quiere hablar: si le llaman enseguida, entra.
+    _autoAcceptId = contact.id;
+    _autoAcceptUntil = DateTime.now().add(const Duration(seconds: 30));
     for (final wait in const [0, 1, 3]) {
       Timer(Duration(seconds: wait), () => _send(contact, 'hello'));
     }
@@ -629,11 +700,22 @@ class ContactsService extends ChangeNotifier {
     unawaited(_put(updated));
 
     final invite = msg['uri'];
+    if (msg['t'] == 'hello') _onGreeting(updated);
+    // El invitado manda solo las direcciones por las que se le alcanza: es
+    // el antiguo "código de respuesta", sin que nadie tenga que enseñarlo.
+    if (msg['t'] == 'answer' && invite is String) {
+      unawaited(_controller.applyAnswer(invite));
+      return;
+    }
     if (msg['t'] != 'call' || invite is! String) return;
     if (_controller.isLive || _controller.busy) return;
     if (_dismissed.contains(invite) || incoming.value?.invite == invite) return;
-    incoming.value = IncomingCall(contact: updated, invite: invite);
-    if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
+    final auto = updated.id == _autoAcceptId &&
+        DateTime.now().isBefore(_autoAcceptUntil);
+    if (auto) _autoAcceptId = null;
+    incoming.value = IncomingCall(contact: updated, invite: invite, auto: auto);
+    if (!auto &&
+        WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
       unawaited(BackgroundSession.notifyCall(updated.name));
     }
   }
@@ -656,7 +738,24 @@ class ContactsService extends ChangeNotifier {
     _dismissed.add(call.invite);
     _activeId = call.contact.id;
     unawaited(BackgroundSession.cancelCall());
+    _sendAnswers(call.contact.id);
     return call.invite;
+  }
+
+  /// Mientras se intenta entrar, manda al que llamó las direcciones por las
+  /// que se alcanza a este dispositivo, para que su router deje pasar.
+  void _sendAnswers(String contactId) {
+    _answerTimer?.cancel();
+    var ticks = 0;
+    _answerTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      final answer = _controller.answerUri;
+      final contact = _byId(contactId);
+      if (++ticks > 25 || _controller.isLive || contact == null) {
+        timer.cancel();
+        return;
+      }
+      if (answer != null) _send(contact, 'answer', invite: answer);
+    });
   }
 
   /// Rechaza la solicitud pendiente: esa llamada no vuelve a avisar.
@@ -670,7 +769,10 @@ class ContactsService extends ChangeNotifier {
 
   @override
   void dispose() {
+    _controller.removeListener(_onController);
     _stopCalling();
+    _answerTimer?.cancel();
+    autoCall.dispose();
     _socket?.close();
     incoming.dispose();
     super.dispose();

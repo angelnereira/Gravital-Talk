@@ -36,8 +36,8 @@ void main() {
     await _pumpApp(tester);
 
     // Dos acciones, y cada una dice lo que hace.
-    expect(find.text('Crear sala'), findsOneWidget);
-    expect(find.text('Unirse'), findsOneWidget);
+    expect(find.text('Invitar'), findsOneWidget);
+    expect(find.text('Escanear'), findsOneWidget);
 
     // Lo que ya NO debe estar: elegir entre "modo servidor" y "modo P2P", ni
     // los perfiles de red a la vista.
@@ -51,7 +51,7 @@ void main() {
       (WidgetTester tester) async {
     await _pumpApp(tester);
 
-    await tester.tap(find.text('Unirse'));
+    await tester.tap(find.text('Escanear'));
     await tester.pumpAndSettle();
 
     // El contrato de la simplificación: cero campos de red. La dirección
@@ -70,7 +70,7 @@ void main() {
       (WidgetTester tester) async {
     final controller = await _pumpApp(tester);
 
-    await tester.tap(find.text('Unirse'));
+    await tester.tap(find.text('Escanear'));
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField), 'GRVT-2847');
     await tester.tap(find.widgetWithText(FilledButton, 'Unirse'));
@@ -88,7 +88,7 @@ void main() {
     // medias y la cerraba. Los dos extremos veían "La conversación terminó".
     final controller = await _pumpApp(tester);
 
-    await tester.tap(find.text('Unirse'));
+    await tester.tap(find.text('Escanear'));
     await tester.pumpAndSettle();
     await tester.enterText(
       find.byType(TextField),
@@ -113,7 +113,7 @@ void main() {
       (WidgetTester tester) async {
     final controller = await _pumpApp(tester);
 
-    await tester.tap(find.text('Crear sala'));
+    await tester.tap(find.text('Invitar'));
     // El motor demo acepta a los 300 ms y da la sesión por activa a los
     // 1,8 s. No se usa `pumpAndSettle`: la sesión viva tiene temporizadores
     // que nunca se asientan.
@@ -138,7 +138,7 @@ void main() {
       (WidgetTester tester) async {
     final controller = await _pumpApp(tester);
 
-    await tester.tap(find.text('Crear sala'));
+    await tester.tap(find.text('Invitar'));
     await tester.pump();
     for (var i = 0; i < 6; i++) {
       await tester.pump(const Duration(milliseconds: 500));
