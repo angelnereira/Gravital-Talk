@@ -55,6 +55,7 @@ class PrefKeys {
   static const noiseSuppression = 'audio.noiseSuppression';
   static const turnTones = 'audio.turnTones';
   static const nativeAudio = 'audio.native';
+  static const mailboxes = 'net.mailboxes';
   // Clave nueva a propósito: la antigua (`audio.maxBitrate`) guardaba 64000
   // como valor por defecto sin que nadie lo hubiera elegido, y arrastrarla
   // dejaría a quien actualiza por debajo de la calidad prevista.
