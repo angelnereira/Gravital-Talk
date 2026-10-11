@@ -330,6 +330,20 @@ Opus y el consumo de pila del códec.
 - La app sólo lo usa con `--dart-define=GT_EXPERIMENTAL=true` y el interruptor de Ajustes.
   Pendiente: validar que suena y medir la latencia frente a `AudioPump` antes de activarlo.
 
+## Medir audio entrecortado y latencia
+
+Método acústico, sin instrumentos: el portátil aloja con
+`GS_AUDIO_TEST_TONE=700 … --host --auto-talk=4`, el teléfono se une, y se graba con
+`arecord` lo que sale por su altavoz. El aviso de turno del portátil marca el inicio; el
+tono de 700 Hz que sale del teléfono, la llegada. Con eso se cuentan huecos por turno y el
+retardo. Referencia (2026-10-11, misma wifi, Pixel 8 Pro, camino `AudioPump`): 0–5 % de
+huecos y 170–220 ms del aviso al sonido. El audio nativo de Android dio menos retardo
+(100–170 ms) pero más cortes: por eso sigue apagado.
+
+Si el audio se corta, mira primero el tráfico (`tcpdump` por el puerto de la sesión): una
+sala sana son ~50 paquetes por segundo y sentido mientras alguien habla, y unos pocos en
+silencio.
+
 ## Tonos de turno
 
 Se generan en Rust (`gravital_talk_transport::tone::turn_start_tone` / `turn_end_tone`) y

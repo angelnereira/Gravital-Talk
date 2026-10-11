@@ -249,6 +249,11 @@ pub struct Session {
     /// Última sonda de recuperación y último registro, en µs desde `epoch`.
     last_probe: AtomicU64,
     last_register: AtomicU64,
+    /// Última ronda de sondas hacia quienes aún no han entrado en la sala.
+    /// Reloj propio: `last_probe` se pone a cero mientras el camino funciona,
+    /// y compartirlo hacía que esta ronda saliera en cada vuelta del lazo de
+    /// recepción (cientos de sondas por segundo en plena conversación).
+    last_room_probe: AtomicU64,
     /// Si la sesión admite que entren más peers una vez establecida.
     multi_peer: AtomicBool,
     /// Ir siempre por el relay, sin intentar caminos directos.
@@ -343,6 +348,7 @@ impl Session {
             path_hints: std::sync::Mutex::new(Vec::new()),
             probe_nonce: std::sync::Mutex::new(rendezvous::random_nonce()),
             last_probe: AtomicU64::new(0),
+            last_room_probe: AtomicU64::new(0),
             last_register: AtomicU64::new(0),
             multi_peer: AtomicBool::new(false),
             relay_only: AtomicBool::new(false),
@@ -843,11 +849,11 @@ impl Session {
             self.drop_peer(peer).await;
         }
 
-        let since = now.saturating_sub(self.last_probe.load(Ordering::Acquire)) / 1_000;
+        let since = now.saturating_sub(self.last_room_probe.load(Ordering::Acquire)) / 1_000;
         if since < KEEPALIVE_INTERVAL_MS {
             return;
         }
-        self.last_probe.store(now, Ordering::Release);
+        self.last_room_probe.store(now, Ordering::Release);
         if let Some(server) = self.rendezvous_server() {
             self.send_rv(&RvMessage::Register, server).await;
         }

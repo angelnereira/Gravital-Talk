@@ -12,6 +12,7 @@ import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.net.wifi.WifiManager
 import android.os.PowerManager
 
 /**
@@ -25,6 +26,7 @@ import android.os.PowerManager
  */
 class SessionService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
+    private var wifiLocks: List<WifiManager.WifiLock> = emptyList()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -56,7 +58,9 @@ class SessionService : Service() {
             // A la espera de llamadas no se retiene la CPU: sólo el proceso.
             wakeLock?.takeIf { it.isHeld }?.release()
             wakeLock = null
+            releaseWifi()
         } else if (wakeLock == null) {
+            holdWifi()
             // Con la pantalla apagada la CPU se duerme y el audio se corta.
             wakeLock = (getSystemService(Context.POWER_SERVICE) as? PowerManager)
                 ?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "gravital-talk:session")
@@ -187,6 +191,36 @@ class SessionService : Service() {
             .build()
     }
 
+    /**
+     * Impide que el wifi ahorre energía mientras dura la sala. En reposo la
+     * radio duerme entre balizas y entrega lo recibido a ráfagas: tras unos
+     * segundos de silencio, el principio de cada turno llegaba a trompicones.
+     */
+    private fun holdWifi() {
+        if (wifiLocks.isNotEmpty()) return
+        val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return
+        val modes = buildList {
+            // Baja latencia sólo actúa con la app a la vista; alto rendimiento
+            // cubre el segundo plano.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) add(WifiManager.WIFI_MODE_FULL_LOW_LATENCY)
+            @Suppress("DEPRECATION")
+            add(WifiManager.WIFI_MODE_FULL_HIGH_PERF)
+        }
+        wifiLocks = modes.mapNotNull { mode ->
+            runCatching {
+                wifi.createWifiLock(mode, "gravital-talk:session").apply {
+                    setReferenceCounted(false)
+                    acquire()
+                }
+            }.getOrNull()
+        }
+    }
+
+    private fun releaseWifi() {
+        wifiLocks.forEach { lock -> runCatching { if (lock.isHeld) lock.release() } }
+        wifiLocks = emptyList()
+    }
+
     override fun onTaskRemoved(rootIntent: Intent?) {
         // Cerrar la app desde recientes es salir de la sala.
         stopSelf()
@@ -195,6 +229,7 @@ class SessionService : Service() {
     override fun onDestroy() {
         wakeLock?.takeIf { it.isHeld }?.release()
         wakeLock = null
+        releaseWifi()
         super.onDestroy()
     }
 
