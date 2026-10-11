@@ -35,11 +35,16 @@ class SessionService : Service() {
             return START_NOT_STICKY
         }
         val room = intent?.getStringExtra(EXTRA_ROOM).orEmpty()
-        if (!enterForeground(notification(room))) {
+        val standby = intent?.getBooleanExtra(EXTRA_STANDBY, false) ?: false
+        if (!enterForeground(notification(room, standby))) {
             stopSelf()
             return START_NOT_STICKY
         }
-        if (wakeLock == null) {
+        if (standby) {
+            // A la espera de llamadas no se retiene la CPU: sólo el proceso.
+            wakeLock?.takeIf { it.isHeld }?.release()
+            wakeLock = null
+        } else if (wakeLock == null) {
             // Con la pantalla apagada la CPU se duerme y el audio se corta.
             wakeLock = (getSystemService(Context.POWER_SERVICE) as? PowerManager)
                 ?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "gravital-talk:session")
@@ -71,7 +76,7 @@ class SessionService : Service() {
         }
     }
 
-    private fun notification(room: String): Notification {
+    private fun notification(room: String, standby: Boolean): Notification {
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             manager.createNotificationChannel(
@@ -97,12 +102,19 @@ class SessionService : Service() {
             @Suppress("DEPRECATION")
             Notification.Builder(this)
         }
-        return builder
+        builder
             .setSmallIcon(android.R.drawable.stat_sys_phone_call)
-            .setContentTitle(if (room.isEmpty()) "Gravital Talk" else "Sala $room")
-            .setContentText("Sigues escuchando. Toca para volver a hablar.")
             .setContentIntent(open)
             .setOngoing(true)
+        if (standby) {
+            return builder
+                .setContentTitle("Gravital Talk")
+                .setContentText("Disponible para tus contactos.")
+                .build()
+        }
+        return builder
+            .setContentTitle(if (room.isEmpty()) "Gravital Talk" else "Sala $room")
+            .setContentText("Sigues escuchando. Toca para volver a hablar.")
             .addAction(Notification.Action.Builder(null, "Salir de la sala", leave).build())
             .build()
     }
@@ -120,9 +132,59 @@ class SessionService : Service() {
 
     companion object {
         const val EXTRA_ROOM = "room"
+        const val EXTRA_STANDBY = "standby"
         const val ACTION_LEAVE = "dev.gravitaltalk.gravital_talk_app.LEAVE"
         private const val CHANNEL_ID = "session"
         private const val NOTIFICATION_ID = 1
+
+        private const val CALL_CHANNEL_ID = "calls"
+        private const val CALL_NOTIFICATION_ID = 2
+
+        /** Avisa de que un contacto quiere hablar; tocarla abre la app. */
+        fun notifyCall(context: Context, name: String) {
+            val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                manager.createNotificationChannel(
+                    NotificationChannel(
+                        CALL_CHANNEL_ID,
+                        "Llamadas de contactos",
+                        NotificationManager.IMPORTANCE_HIGH,
+                    ),
+                )
+            }
+            val open = PendingIntent.getActivity(
+                context,
+                2,
+                Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+            val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                Notification.Builder(context, CALL_CHANNEL_ID)
+            } else {
+                @Suppress("DEPRECATION")
+                Notification.Builder(context)
+            }
+            // Sin permiso de notificaciones no se enseña: la solicitud espera
+            // dentro de la app.
+            runCatching {
+                manager.notify(
+                    CALL_NOTIFICATION_ID,
+                    builder
+                        .setSmallIcon(android.R.drawable.stat_sys_phone_call)
+                        .setContentTitle("$name quiere hablar")
+                        .setContentText("Toca para contestar.")
+                        .setCategory(Notification.CATEGORY_CALL)
+                        .setContentIntent(open)
+                        .setAutoCancel(true)
+                        .build(),
+                )
+            }
+        }
+
+        fun cancelCall(context: Context) {
+            (context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+                .cancel(CALL_NOTIFICATION_ID)
+        }
 
         /** Lo fija la actividad: salir desde la notificación lo decide Dart. */
         var onLeave: (() -> Unit)? = null

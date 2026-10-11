@@ -10,6 +10,7 @@ import 'core/routes.dart';
 import 'screens/onboarding_screen.dart';
 import 'screens/pairing_screen.dart';
 import 'services/background_session.dart';
+import 'services/contacts.dart';
 import 'services/launch_links.dart';
 import 'services/pairing_uri.dart';
 import 'services/event_log.dart';
@@ -28,7 +29,19 @@ class GravitalTalkApp extends StatefulWidget {
     this.initialLink,
     this.startAsHost = false,
     this.autoTalk,
+    this.contacts,
+    this.callFirst = false,
+    this.autoAccept = false,
   });
+
+  /// Prueba: llamar al primer contacto nada más arrancar.
+  final bool callFirst;
+
+  /// Prueba: aceptar las llamadas de contactos sin preguntar.
+  final bool autoAccept;
+
+  /// Contactos y llamadas entre ellos; `null` en pruebas, que van sin ellos.
+  final ContactsService? contacts;
 
   /// Prueba: abrir directamente la pantalla de crear sala.
   final bool startAsHost;
@@ -57,9 +70,48 @@ class GravitalTalkApp extends StatefulWidget {
 
 class _GravitalTalkAppState extends State<GravitalTalkApp> {
   // Quien llega con una invitación viene a hablar, no a leer la presentación.
+  late final ContactsService _contacts =
+      widget.contacts ?? ContactsService(widget.controller);
+  bool _askingCall = false;
+
+  /// Enseña la solicitud de un contacto y, si se acepta, entra en su sala.
+  Future<void> _onIncomingCall() async {
+    final call = _contacts.incoming.value;
+    final context = _navigator.currentContext;
+    if (call == null || context == null || _askingCall) return;
+    _askingCall = true;
+    final accepted = widget.autoAccept || await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialog) => AlertDialog(
+        icon: const Icon(Icons.record_voice_over_outlined),
+        title: Text('${call.contact.name} quiere hablar'),
+        content: const Text('Si aceptas, entras directamente en su sala.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialog, false),
+            child: const Text('Ahora no'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialog, true),
+            child: const Text('Aceptar'),
+          ),
+        ],
+      ),
+    ) == true;
+    _askingCall = false;
+    if (!accepted) {
+      _contacts.reject();
+      return;
+    }
+    final invite = _contacts.accept();
+    if (invite != null) await _openInvite(invite);
+  }
+
   late bool _showOnboarding = widget.showOnboarding &&
       widget.initialLink == null &&
-      !widget.startAsHost;
+      !widget.startAsHost &&
+      !widget.callFirst;
 
   /// El Navigator se alcanza por clave porque las invitaciones llegan desde
   /// fuera del árbol de widgets (un intent, un argumento): no hay `context`.
@@ -69,10 +121,20 @@ class _GravitalTalkAppState extends State<GravitalTalkApp> {
   void initState() {
     super.initState();
     LaunchLinks.listen(_openInvite);
+    _contacts.incoming.addListener(_onIncomingCall);
     BackgroundSession.onLeave(() => widget.controller.reset());
     final link = widget.initialLink;
     if (link != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _openInvite(link));
+    } else if (widget.callFirst && _contacts.contacts.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _navigator.currentState?.push(ForwardRoute(
+          builder: (_) => PairingScreen(
+            mode: PairingMode.host,
+            callee: _contacts.contacts.first,
+          ),
+        ));
+      });
     } else if (widget.startAsHost) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _navigator.currentState?.push(ForwardRoute(
@@ -103,6 +165,7 @@ class _GravitalTalkAppState extends State<GravitalTalkApp> {
   @override
   void dispose() {
     widget.controller.removeListener(_autoTalk);
+    _contacts.incoming.removeListener(_onIncomingCall);
     super.dispose();
   }
 
@@ -165,6 +228,7 @@ class _GravitalTalkAppState extends State<GravitalTalkApp> {
         ChangeNotifierProvider.value(value: widget.controller),
         ChangeNotifierProvider.value(value: widget.log),
         ChangeNotifierProvider.value(value: widget.roomEvents),
+        ChangeNotifierProvider.value(value: _contacts),
       ],
       child: ToastificationWrapper(
         child: Consumer<SessionController>(

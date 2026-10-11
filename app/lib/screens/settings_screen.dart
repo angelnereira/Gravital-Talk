@@ -10,6 +10,7 @@ import '../core/constants.dart';
 import '../core/glass.dart';
 import '../core/tokens.dart';
 import '../models/connection.dart';
+import '../services/contacts.dart';
 import '../services/crash_report.dart';
 import '../services/engine.dart';
 import '../services/session_controller.dart';
@@ -148,6 +149,7 @@ class _SettingsScreenState extends State<SettingsScreen>
   @override
   Widget build(BuildContext context) {
     final c = context.watch<SessionController>();
+    final contacts = context.watch<ContactsService>();
     final s = c.settings;
 
     return Scaffold(
@@ -312,6 +314,33 @@ class _SettingsScreenState extends State<SettingsScreen>
                   ),
                 ],
               ),
+              if (contacts.available)
+                _Section(
+                  title: 'Contactos',
+                  subtitle: 'Quien hable contigo te guarda con este nombre y '
+                      'puede volver a llamarte sin código.',
+                  children: [
+                    _Row(
+                      icon: Icons.badge_outlined,
+                      title: 'Tu nombre',
+                      subtitle: contacts.deviceName,
+                      trailing: const Icon(Icons.edit_outlined, size: 18),
+                      onTap: () => _editDeviceName(contacts),
+                    ),
+                    if (_hasRuntimePermissions)
+                      _Row(
+                        icon: Icons.notifications_active_outlined,
+                        title: 'Recibir llamadas en segundo plano',
+                        subtitle: 'Mantiene la app a la escucha de tus '
+                            'contactos aunque no esté a la vista. Deja una '
+                            'notificación fija y gasta algo de batería.',
+                        trailing: Switch(
+                          value: contacts.backgroundAvailable,
+                          onChanged: contacts.setBackgroundAvailable,
+                        ),
+                      ),
+                  ],
+                ),
               _Section(
                 title: 'Acerca de',
                 children: [
@@ -350,6 +379,34 @@ class _SettingsScreenState extends State<SettingsScreen>
         ),
       ),
     );
+  }
+
+  Future<void> _editDeviceName(ContactsService contacts) async {
+    final ctl = TextEditingController(text: contacts.deviceName);
+    final name = await showDialog<String>(
+      context: context,
+      builder: (dialog) => AlertDialog(
+        title: const Text('Tu nombre'),
+        content: TextField(
+          controller: ctl,
+          autofocus: true,
+          maxLength: 40,
+          textCapitalization: TextCapitalization.words,
+          onSubmitted: (v) => Navigator.pop(dialog, v),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialog),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialog, ctl.text),
+            child: const Text('Guardar'),
+          ),
+        ],
+      ),
+    );
+    if (name != null) await contacts.setDeviceName(name);
   }
 
   Future<void> _copyCrashReport(String report) async {
@@ -592,12 +649,17 @@ class _PermissionRow extends StatelessWidget {
           )
         : FilledButton(
             onPressed: onGrant,
-            style: permission.essential
-                ? null
-                : FilledButton.styleFrom(
-                    backgroundColor: theme.colorScheme.secondaryContainer,
-                    foregroundColor: theme.colorScheme.onSecondaryContainer,
-                  ),
+            // El tema da a los botones todo el ancho disponible; dentro de
+            // una fila eso deja al texto sin sitio y lo parte letra a letra.
+            style: FilledButton.styleFrom(
+              minimumSize: const Size(0, HitSizes.minTouch),
+              backgroundColor: permission.essential
+                  ? null
+                  : theme.colorScheme.secondaryContainer,
+              foregroundColor: permission.essential
+                  ? null
+                  : theme.colorScheme.onSecondaryContainer,
+            ),
             child: Text(blocked ? 'Abrir ajustes' : 'Permitir'),
           );
 

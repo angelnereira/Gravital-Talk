@@ -331,3 +331,28 @@ gs ptt --relay 127.0.0.1:9000 --room test
 # Terminal B (cliente):
 gs ptt --relay <IP_A>:9000 --room test
 ```
+
+## Contactos: llamar sin repetir el emparejamiento
+
+Dos dispositivos que ya compartieron una sala conservan su token como secreto de
+contacto. Para volver a hablar, uno abre una sala nueva y le envía al otro la
+invitación dentro de un datagrama sellado (UDP, puerto 47800):
+
+```text
+[ "GTKN" ][ versión: 1 ][ id de contacto: 8 B ][ nonce: 12 B ][ cifrado + tag: 16 B ]
+```
+
+- `id = SHA-256("gravital-talk/knock/id/v1\0" ‖ secreto)[..8]`: dice de qué contacto
+  viene sin revelar el secreto.
+- `clave = SHA-256("gravital-talk/knock/key/v1\0" ‖ secreto)`, ChaCha20-Poly1305 con
+  nonce aleatorio y la cabecera (13 B) como AAD.
+- El contenido es JSON: `t` (`call` o `hello`), `dev`, `name`, `ts` (ms), `ip` y, en una
+  llamada, `uri` con la invitación. Se descarta si `ts` se aleja más de 5 minutos o
+  si `dev` es el propio dispositivo (difusión que vuelve).
+- Destinos: última IP local y pública conocidas del contacto y la difusión de la red
+  local. `hello` es el saludo del invitado al anfitrión tras emparejar, para que éste
+  sepa su nombre.
+
+Límite: no hay intermediario, así que la llamada sólo llega a un dispositivo con la app
+en marcha y alcanzable en ese puerto. Entre redes distintas detrás de NAT no llega; ahí
+se comparte el enlace de la sala, que sí conecta por las técnicas de arriba.

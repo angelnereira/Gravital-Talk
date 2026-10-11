@@ -13,6 +13,7 @@ import '../core/routes.dart';
 import '../core/states.dart';
 import '../core/tokens.dart';
 import '../models/session.dart';
+import '../services/contacts.dart';
 import '../services/session_controller.dart';
 import 'session_screen.dart';
 
@@ -37,7 +38,16 @@ enum PairingMode {
 /// En ambos, conectar lleva solo a la pantalla de hablar. No hay campos de red
 /// en ningún sitio: la dirección viaja dentro de la invitación.
 class PairingScreen extends StatelessWidget {
-  const PairingScreen({super.key, required this.mode, this.invite});
+  const PairingScreen({
+    super.key,
+    required this.mode,
+    this.invite,
+    this.callee,
+  });
+
+  /// Contacto al que se llama (modo anfitrión): la sala se abre igual, pero
+  /// la invitación se le envía sola en vez de esperar a que la escanee.
+  final Contact? callee;
 
   final PairingMode mode;
 
@@ -49,7 +59,7 @@ class PairingScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return switch (mode) {
-      PairingMode.host => const _HostView(),
+      PairingMode.host => _HostView(callee: callee),
       PairingMode.join => _JoinView(invite: invite),
     };
   }
@@ -65,7 +75,9 @@ void _goToSession(BuildContext context) {
 // ── Crear ──────────────────────────────────────────────────────────────────
 
 class _HostView extends StatefulWidget {
-  const _HostView();
+  const _HostView({this.callee});
+
+  final Contact? callee;
 
   @override
   State<_HostView> createState() => _HostViewState();
@@ -85,7 +97,12 @@ class _HostViewState extends State<_HostView> {
     // Tras el primer frame: crear la sala notifica a los oyentes, y eso no
     // puede ocurrir mientras el árbol se está construyendo.
     WidgetsBinding.instance.addPostFrameCallback((_) => _open());
+    _contacts = context.read<ContactsService>();
+    final callee = widget.callee;
+    if (callee != null) _contacts.call(callee);
   }
+
+  late final ContactsService _contacts;
 
   Future<void> _open() async {
     final ok = await _controller.createRoom();
@@ -100,6 +117,7 @@ class _HostViewState extends State<_HostView> {
   void dispose() {
     // Salir sin que haya entrado nadie cierra la sala: dejarla abierta en
     // segundo plano sería un puerto escuchando sin que el usuario lo sepa.
+    if (widget.callee != null) _contacts.cancelCall();
     if (!_handedOff) _controller.reset();
     super.dispose();
   }
@@ -179,7 +197,11 @@ class _HostViewState extends State<_HostView> {
     final invite = c.pairingUri?.toUri();
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Tu sala')),
+      appBar: AppBar(
+        title: Text(widget.callee == null
+            ? 'Tu sala'
+            : 'Llamando a ${widget.callee!.name}'),
+      ),
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
@@ -264,7 +286,10 @@ class _HostViewState extends State<_HostView> {
                               const SizedBox(width: Spacing.md),
                               Flexible(
                                 child: Text(
-                                  'Esperando a que alguien se una…',
+                                  widget.callee == null
+                                      ? 'Esperando a que alguien se una…'
+                                      : 'Esperando a que acepte. Si no le '
+                                          'llega, que escanee el código.',
                                   style: theme.textTheme.bodyMedium
                                       ?.copyWith(color: glass.secondary),
                                 ),

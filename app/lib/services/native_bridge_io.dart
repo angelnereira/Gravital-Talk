@@ -163,6 +163,12 @@ typedef _PreferredPortC = Int32 Function(Uint16, Pointer<Uint16>);
 typedef _ReachD = int Function(int, Pointer<Int32>);
 typedef _PreferredPortD = int Function(int, Pointer<Uint16>);
 typedef _DiscoverStunD = int Function(int, Pointer<Utf8>, int);
+typedef _ContactIdC = Int32 Function(Pointer<Uint8>, UintPtr, Pointer<Uint8>);
+typedef _ContactIdD = int Function(Pointer<Uint8>, int, Pointer<Uint8>);
+typedef _KnockC = Int32 Function(Pointer<Uint8>, UintPtr, Pointer<Uint8>,
+    UintPtr, Pointer<Uint8>, UintPtr, Pointer<UintPtr>);
+typedef _KnockD = int Function(Pointer<Uint8>, int, Pointer<Uint8>, int,
+    Pointer<Uint8>, int, Pointer<UintPtr>);
 typedef _CrashLogC = Int32 Function(Pointer<Utf8>);
 typedef _CrashLogD = int Function(Pointer<Utf8>);
 typedef _DiscoverLocalC = Int32 Function(Pointer<Utf8>, UintPtr);
@@ -257,6 +263,10 @@ class NativeBridge {
             'gs_session_map_port'),
         _rxIdleMs =
             lib.lookupFunction<_RxIdleC, _RxIdleD>('gs_session_rx_idle_ms'),
+        _contactId =
+            lib.lookupFunction<_ContactIdC, _ContactIdD>('gs_contact_id'),
+        _knockSeal = lib.lookupFunction<_KnockC, _KnockD>('gs_knock_seal'),
+        _knockOpen = lib.lookupFunction<_KnockC, _KnockD>('gs_knock_open'),
         _crashLog = lib.lookupFunction<_CrashLogC, _CrashLogD>(
             'gs_crash_log_set_path'),
         _isRelayed =
@@ -325,6 +335,9 @@ class NativeBridge {
   final _RxIdleD _rxIdleMs;
   final _HandleD _isRelayed;
   final _CrashLogD _crashLog;
+  final _ContactIdD _contactId;
+  final _KnockD _knockSeal;
+  final _KnockD _knockOpen;
   final _HandleD _peerCount;
   final _ConnectAnyTimeoutD _connectAnyTimeout;
   final _AudioSetPttD _setNoiseSuppression;
@@ -561,6 +574,49 @@ class NativeBridge {
   ///
   /// El puerto no viene de aquí a propósito: es el de la sesión. El socket con
   /// el que se averigua la IP es desechable.
+  /// Identificador público del contacto que comparte `secret`.
+  Uint8List? contactId(Uint8List secret) {
+    final s = calloc<Uint8>(secret.length + 1);
+    final out = calloc<Uint8>(8);
+    try {
+      s.asTypedList(secret.length).setAll(0, secret);
+      if (_contactId(s, secret.length, out) != 0) return null;
+      return Uint8List.fromList(out.asTypedList(8));
+    } finally {
+      calloc.free(s);
+      calloc.free(out);
+    }
+  }
+
+  /// Sella una llamada para el contacto que comparte `secret`.
+  Uint8List? knockSeal(Uint8List secret, Uint8List payload) =>
+      _knock(_knockSeal, secret, payload);
+
+  /// Abre una llamada; `null` si no viene de quien comparte `secret`.
+  Uint8List? knockOpen(Uint8List secret, Uint8List datagram) =>
+      _knock(_knockOpen, secret, datagram);
+
+  Uint8List? _knock(_KnockD fn, Uint8List secret, Uint8List input) {
+    const cap = 1500;
+    final s = calloc<Uint8>(secret.length + 1);
+    final i = calloc<Uint8>(input.length + 1);
+    final out = calloc<Uint8>(cap);
+    final len = calloc<UintPtr>();
+    try {
+      s.asTypedList(secret.length).setAll(0, secret);
+      i.asTypedList(input.length).setAll(0, input);
+      if (fn(s, secret.length, i, input.length, out, cap, len) != 0) {
+        return null;
+      }
+      return Uint8List.fromList(out.asTypedList(len.value));
+    } finally {
+      calloc.free(s);
+      calloc.free(i);
+      calloc.free(out);
+      calloc.free(len);
+    }
+  }
+
   /// Fichero donde la librería anota un fallo interno antes de morir.
   void setCrashLogPath(String path) {
     final cPath = path.toNativeUtf8();

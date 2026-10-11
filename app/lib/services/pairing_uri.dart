@@ -99,6 +99,8 @@ class PairingUri {
     this.token,
     this.publicEndpoint,
     this.rendezvous,
+    this.name,
+    this.device,
   });
 
   /// Intenta interpretar un valor escaneado.
@@ -142,6 +144,8 @@ class PairingUri {
       token: uri.queryParameters['token']?.trim(),
       publicEndpoint: _nonEmpty(uri.queryParameters['pub']),
       rendezvous: _nonEmpty(uri.queryParameters['rv']),
+      name: _nonEmpty(uri.queryParameters['n']),
+      device: _nonEmpty(uri.queryParameters['dev']),
     );
   }
 
@@ -184,6 +188,11 @@ class PairingUri {
   /// configurarlo: los dos tienen que registrarse en el mismo sitio.
   final String? rendezvous;
 
+  /// Nombre e identificador del dispositivo que invita, para guardarlo como
+  /// contacto. Opcionales: una invitación antigua no los trae.
+  final String? name;
+  final String? device;
+
   /// Direcciones del anfitrión por las que intentar conectar, de la más
   /// cercana a la más lejana.
   List<String> candidates(int defaultPort) {
@@ -218,6 +227,8 @@ class PairingUri {
     if (token != null && token!.isNotEmpty) params['token'] = token!;
     if (publicEndpoint != null) params['pub'] = publicEndpoint!;
     if (rendezvous != null) params['rv'] = rendezvous!;
+    if (name != null && name!.isNotEmpty) params['n'] = name!;
+    if (device != null && device!.isNotEmpty) params['dev'] = device!;
 
     final query = params.entries
         .map((e) =>

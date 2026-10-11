@@ -16,6 +16,29 @@ import 'room_api.dart';
 import 'room_events.dart';
 import 'settings_store.dart';
 
+/// Lo que se sabe del otro extremo al conectar: con esto se guarda como
+/// contacto.
+class PairedEvent {
+  const PairedEvent({
+    required this.isHost,
+    required this.token,
+    required this.room,
+    this.peerName = '',
+    this.peerDevice = '',
+    this.peerHost,
+  });
+
+  final bool isHost;
+  final String token;
+  final String room;
+  final String peerName;
+  final String peerDevice;
+
+  /// IP de red local del otro, si se conoce (el invitado conoce la del
+  /// anfitrión por la invitación).
+  final String? peerHost;
+}
+
 /// Orquesta el ciclo de vida de la conexión (servidor o P2P) sobre un motor.
 class SessionController extends ChangeNotifier {
   SessionController(
@@ -37,6 +60,27 @@ class SessionController extends ChangeNotifier {
   /// construyen el controller sin él. Quien no lo pase verá la lista de
   /// participantes vacía siempre: el stream no se conecta con nadie.
   final RoomEvents? _roomEvents;
+
+  /// Nombre e identificador de este dispositivo: viajan en la invitación
+  /// para que quien entre pueda guardarlo como contacto.
+  String deviceName = '';
+  String deviceId = '';
+
+  /// Se llama cada vez que una sala conecta.
+  void Function(PairedEvent event)? onPaired;
+
+  /// Invitación con la que se entró en la sala en curso, si fue así.
+  PairingUri? _joinedWith;
+
+  /// IP de este dispositivo en la red local, o `null` sin red.
+  Future<String?> localIp() async {
+    try {
+      final ip = await _engine.discoverLocalEndpoint();
+      return ip == null || ip.isEmpty ? null : ip;
+    } catch (_) {
+      return null;
+    }
+  }
 
   SettingsStore get store => _store;
   EventLog get log => _log;
@@ -350,6 +394,8 @@ class SessionController extends ChangeNotifier {
       token: _server.token,
       publicEndpoint: _stunEndpoint,
       rendezvous: _rendezvousActive ? _settings.rendezvous : null,
+      name: deviceName,
+      device: deviceId,
     );
   }
 
@@ -376,6 +422,7 @@ class SessionController extends ChangeNotifier {
       udpPort: parsed.udpPort ?? _server.udpPort,
       token: parsed.token ?? '',
     ));
+    _joinedWith = parsed;
     return _joinCandidates(
       parsed.candidates(_server.udpPort),
       rendezvous: parsed.rendezvous,
@@ -684,6 +731,7 @@ class SessionController extends ChangeNotifier {
     _relayed = false;
     _peerCount = 0;
     _paused = false;
+    _joinedWith = null;
     unawaited(BackgroundSession.stop());
     if (_busy) _cancelled = true;
     // Dejar de observar la sala: si no, el stream sigue abierto tras colgar y
@@ -805,6 +853,16 @@ class SessionController extends ChangeNotifier {
     _startLevelTicker();
     // A partir de aquí la sala debe aguantar con la app oculta.
     unawaited(BackgroundSession.start(_roomCode ?? ''));
+    final isHost = _role == ConnectionRole.host;
+    final invite = isHost ? null : _joinedWith;
+    onPaired?.call(PairedEvent(
+      isHost: isHost,
+      token: _server.token,
+      room: _roomCode ?? invite?.room ?? '',
+      peerName: invite?.name ?? '',
+      peerDevice: invite?.device ?? '',
+      peerHost: invite == null || invite.host.isEmpty ? null : invite.host,
+    ));
     notifyListeners();
   }
 

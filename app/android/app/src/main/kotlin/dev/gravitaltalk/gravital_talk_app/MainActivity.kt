@@ -60,6 +60,7 @@ class MainActivity : FlutterActivity() {
             when (call.method) {
                 "start" -> {
                     service.putExtra(SessionService.EXTRA_ROOM, call.argument<String>("room").orEmpty())
+                    service.putExtra(SessionService.EXTRA_STANDBY, call.argument<String>("mode") == "standby")
                     // Arrancar el servicio puede fallar (app ya en segundo
                     // plano, restricciones del fabricante): la sala sigue,
                     // sólo que sin esa protección.
@@ -74,6 +75,14 @@ class MainActivity : FlutterActivity() {
                 }
                 "stop" -> {
                     stopService(service)
+                    result.success(true)
+                }
+                "notifyCall" -> {
+                    SessionService.notifyCall(this, call.argument<String>("name").orEmpty())
+                    result.success(true)
+                }
+                "cancelCall" -> {
+                    SessionService.cancelCall(this)
                     result.success(true)
                 }
                 else -> result.notImplemented()

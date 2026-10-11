@@ -139,7 +139,7 @@ class SessionScreen extends StatelessWidget {
                       if (!c.paused) ...[
                         OutlinedButton.icon(
                           onPressed: () => c.setPaused(true),
-                          icon: const Icon(Icons.pause),
+                          icon: const Icon(Icons.pause_circle_outline),
                           label: const Text('Pausar'),
                         ),
                         const SizedBox(height: Spacing.md),

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'app.dart';
+import 'services/contacts.dart';
 import 'services/crash_report.dart';
 import 'services/engine.dart';
 import 'services/event_log.dart';
@@ -50,6 +51,15 @@ Future<void> main(List<String> args) async {
   );
   await controller.init();
 
+  // Contactos: dispositivos con los que ya se habló, y las llamadas entre
+  // ellos. Sin motor nativo no hay con qué cifrarlas y queda inactivo.
+  final contacts = ContactsService(
+    controller,
+    codec: engine is FfiSessionEngine ? engine : null,
+    prefs: prefs,
+  );
+  await contacts.init();
+
   // Onboarding solo la primera vez.
   final seenOnboarding = prefs.getBool('onboarding.done') ?? false;
 
@@ -68,10 +78,13 @@ Future<void> main(List<String> args) async {
   runApp(GravitalTalkApp(
     initialLink: initialLink,
     startAsHost: args.contains('--host'),
+    callFirst: args.contains('--call-first'),
+    autoAccept: args.contains('--auto-accept'),
     autoTalk: autoTalk == null || autoTalk <= 0
         ? null
         : Duration(seconds: autoTalk),
     controller: controller,
+    contacts: contacts,
     log: log,
     roomEvents: roomEvents,
     showOnboarding: !seenOnboarding,

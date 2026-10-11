@@ -19,7 +19,42 @@ class BackgroundSession {
 
   /// Empieza a proteger la sala `room`. Que falle no impide conversar: sólo
   /// se pierde la escucha con la app oculta.
+  static bool _standby = false;
+  static bool _inSession = false;
+
+  /// Mantiene la app despierta sin sala, para recibir llamadas de contactos.
+  static Future<void> setStandby(bool on) async {
+    _standby = on;
+    if (!_supported || _inSession) return;
+    try {
+      await _channel.invokeMethod<bool>(on ? 'start' : 'stop', {
+        'mode': 'standby',
+      });
+    } on PlatformException {
+      // Sin servicio: las llamadas sólo llegan con la app abierta.
+    } on MissingPluginException {
+      // Idem.
+    }
+  }
+
+  /// Notificación de "te llaman" para cuando la app no está a la vista.
+  static Future<void> notifyCall(String name) => _plain('notifyCall', name);
+
+  static Future<void> cancelCall() => _plain('cancelCall', '');
+
+  static Future<void> _plain(String method, String name) async {
+    if (!_supported) return;
+    try {
+      await _channel.invokeMethod<bool>(method, {'name': name});
+    } on PlatformException {
+      // Sin notificación: la solicitud se ve al abrir la app.
+    } on MissingPluginException {
+      // Idem.
+    }
+  }
+
   static Future<void> start(String room) async {
+    _inSession = true;
     if (!_supported) return;
     try {
       // La notificación es desde donde se vuelve o se sale; sin permiso el
@@ -36,8 +71,15 @@ class BackgroundSession {
   }
 
   static Future<void> stop() async {
+    _inSession = false;
     if (!_supported) return;
     try {
+      // Con las llamadas en segundo plano activas, el servicio no se para:
+      // vuelve a la espera.
+      if (_standby) {
+        await _channel.invokeMethod<bool>('start', {'mode': 'standby'});
+        return;
+      }
       await _channel.invokeMethod<bool>('stop');
     } on PlatformException {
       // Ya estaba parado.

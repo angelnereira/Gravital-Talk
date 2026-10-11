@@ -318,6 +318,20 @@ Ante un "se cierra sola", pedir ese informe antes de suponer la causa. Descartad
 con pruebas: el códec en ARM de 32 bits (pasa bajo `qemu-arm`), paquetes que no son
 Opus y el consumo de pila del códec.
 
+## Contactos y llamadas entre ellos
+
+- El secreto de un contacto es el token de la sala en la que se conocieron. De él salen
+  (en Rust, `gravital_talk_transport::knock`) el id público y la clave con la que se sellan
+  las llamadas; Dart sólo guarda la lista (`app/lib/services/contacts.dart`) y mueve los
+  datagramas por UDP 47800.
+- No hay servidor ni push de terceros, a propósito: una llamada sólo llega si el otro tiene
+  la app viva y es alcanzable. No prometas más que eso.
+- Para probarlo sin clics: dos instancias con `XDG_DATA_HOME` distinto (cada una su
+  identidad); una con `--host` y la otra con el enlace para emparejar, y después
+  `--auto-accept` en una y `--call-first` en la otra.
+- Los botones del tema ocupan todo el ancho (`Size.fromHeight`): dentro de un `Row` hay que
+  darles `minimumSize: Size(0, …)` o aplastan al resto.
+
 ## Sala en segundo plano (Android)
 
 `SessionService` es un servicio en primer plano (`microphone|mediaPlayback`) que arranca

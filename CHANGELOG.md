@@ -6,6 +6,30 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
 
 ### Added
 
+**Contactos: volver a hablar sin código**
+- Al conectar, cada dispositivo **guarda al otro como contacto** (con el nombre
+  que cada uno se pone en Ajustes → Contactos). Aparecen en la pantalla de
+  inicio; se pueden renombrar y eliminar.
+- **Llamar** a un contacto abre una sala y le envía la invitación cifrada
+  directamente: al otro le aparece «X quiere hablar» y, al aceptar, entra sin
+  escanear nada. Con la app en segundo plano llega como notificación (Android,
+  opción «Recibir llamadas en segundo plano»).
+- Sin servidor: la solicitud viaja por UDP (puerto 47800) a la última
+  dirección conocida del contacto y a la red local. Llega si el otro tiene la
+  app en marcha y es alcanzable (misma red, o dirección pública con entrada);
+  si no, la pantalla de llamada sigue enseñando el código y el enlace.
+- FFI: `gs_contact_id`, `gs_knock_seal`, `gs_knock_open` (ChaCha20-Poly1305
+  con clave derivada del secreto compartido). Formato en `docs/pairing.md`.
+- La invitación lleva ahora el nombre y el identificador del dispositivo que
+  invita (`n=`, `dev=`); las antiguas siguen valiendo.
+
+### Fixed
+- Ajustes: el texto de un permiso sin conceder (p. ej. Notificaciones) salía
+  en vertical, letra a letra, porque el botón ocupaba todo el ancho.
+- El rótulo del botón de hablar se partía en dos líneas al transmitir.
+
+### Added
+
 **Salas de más de dos, en segundo plano y con pausa**
 - El anfitrión puede **invitar a más gente sin cortar la conversación**:
   «Invitar a alguien más» enseña el mismo código QR y enlace de la sala desde

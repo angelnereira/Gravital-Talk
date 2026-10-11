@@ -1,0 +1,532 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:math';
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'background_session.dart';
+import 'knock_codec.dart';
+import 'session_controller.dart';
+
+/// Un dispositivo con el que ya se habló y al que se puede volver a llamar.
+@immutable
+class Contact {
+  const Contact({
+    required this.id,
+    required this.secret,
+    required this.name,
+    this.device = '',
+    this.custom = false,
+    this.lastLocal,
+    this.lastPublic,
+    this.lastSeen = 0,
+  });
+
+  factory Contact.fromJson(Map<String, dynamic> j) => Contact(
+        id: j['id'] as String,
+        secret: j['secret'] as String,
+        name: j['name'] as String? ?? 'Contacto',
+        device: j['device'] as String? ?? '',
+        custom: j['custom'] as bool? ?? false,
+        lastLocal: j['lastLocal'] as String?,
+        lastPublic: j['lastPublic'] as String?,
+        lastSeen: j['lastSeen'] as int? ?? 0,
+      );
+
+  /// Id público derivado del secreto (hex): viaja en claro en cada llamada.
+  final String id;
+
+  /// Secreto compartido: el token de la sala en la que se conocieron.
+  final String secret;
+  final String name;
+
+  /// Identificador estable del otro dispositivo, si lo ha dicho. Sirve para
+  /// no duplicar el contacto al volver a emparejar por código.
+  final String device;
+
+  /// `true` si el nombre lo puso el usuario: ya no se pisa con el que diga el
+  /// otro dispositivo.
+  final bool custom;
+
+  /// Última IP de red local y pública conocidas del contacto.
+  final String? lastLocal;
+  final String? lastPublic;
+
+  /// Última vez que se habló o se supo de él (ms desde época).
+  final int lastSeen;
+
+  Contact copyWith({
+    String? name,
+    String? device,
+    bool? custom,
+    String? lastLocal,
+    String? lastPublic,
+    int? lastSeen,
+  }) =>
+      Contact(
+        id: id,
+        secret: secret,
+        name: name ?? this.name,
+        device: device ?? this.device,
+        custom: custom ?? this.custom,
+        lastLocal: lastLocal ?? this.lastLocal,
+        lastPublic: lastPublic ?? this.lastPublic,
+        lastSeen: lastSeen ?? this.lastSeen,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'secret': secret,
+        'name': name,
+        'device': device,
+        'custom': custom,
+        if (lastLocal != null) 'lastLocal': lastLocal,
+        if (lastPublic != null) 'lastPublic': lastPublic,
+        'lastSeen': lastSeen,
+      };
+}
+
+/// Solicitud de un contacto para hablar, pendiente de aceptar.
+@immutable
+class IncomingCall {
+  const IncomingCall({required this.contact, required this.invite});
+
+  final Contact contact;
+
+  /// Invitación a la sala que abrió quien llama.
+  final String invite;
+}
+
+/// Contactos y llamadas entre ellos.
+///
+/// Dos dispositivos que se emparejan guardan el secreto de aquella sala. Con
+/// él, volver a hablar no pide código: quien llama abre una sala nueva y le
+/// manda la invitación cifrada al otro, directamente a su última dirección
+/// conocida y a la red local. El otro la ve como una solicitud y la acepta.
+///
+/// No hay servidor en medio, y eso marca el alcance: la solicitud llega si el
+/// otro dispositivo tiene la app en marcha (abierta o en segundo plano) y es
+/// alcanzable —misma red, o una dirección pública que acepte entrada—. Para
+/// el resto de casos sigue estando la invitación por enlace.
+class ContactsService extends ChangeNotifier {
+  ContactsService(
+    this._controller, {
+    this.codec,
+    this.prefs,
+    this.transport,
+  });
+
+  /// Quien cifra las llamadas; `null` sin librería nativa.
+  final KnockCodec? codec;
+  final SharedPreferences? prefs;
+
+  /// Sustituye al envío por UDP en las pruebas: recibe el datagrama sellado y
+  /// la dirección de destino.
+  @visibleForTesting
+  final void Function(Uint8List datagram, String address)? transport;
+
+  /// Puerto UDP fijo en el que cada dispositivo escucha a sus contactos.
+  static const port = 47800;
+
+  static const _contactsKey = 'contacts.v1';
+  static const _deviceIdKey = 'device.id';
+  static const _deviceNameKey = 'device.name';
+  static const _backgroundKey = 'contacts.background';
+
+  /// Margen para la fecha de una llamada: tolera relojes desajustados, pero
+  /// una capturada ayer no vuelve a hacer sonar el teléfono.
+  static const _maxAge = Duration(minutes: 5);
+  static const _callTimeout = Duration(seconds: 45);
+
+  final SessionController _controller;
+
+  RawDatagramSocket? _socket;
+  List<Contact> _contacts = const [];
+  String _deviceId = '';
+  String _deviceName = '';
+  bool _background = false;
+
+  /// Contacto de la llamada en curso (hecha o aceptada): al conectar no se
+  /// crea uno nuevo, se actualiza ese.
+  String? _activeId;
+  Timer? _callTimer;
+  final Set<String> _dismissed = {};
+
+  /// Solicitud pendiente de aceptar o rechazar, o `null`.
+  final ValueNotifier<IncomingCall?> incoming = ValueNotifier(null);
+
+  /// `false` sin librería nativa (modo demostración): no hay con qué cifrar.
+  bool get available => codec != null && prefs != null;
+
+  List<Contact> get contacts => _contacts;
+  String get deviceName => _deviceName;
+
+  /// `true` si se aceptan llamadas con la app en segundo plano (Android).
+  bool get backgroundAvailable => _background;
+
+  /// Contacto al que se está llamando, o `null`.
+  Contact? get calling =>
+      _callTimer == null ? null : _byId(_activeId ?? '');
+
+  Future<void> init() async {
+    final prefs = this.prefs;
+    if (prefs == null || codec == null) return;
+    _deviceId = prefs.getString(_deviceIdKey) ?? '';
+    if (_deviceId.isEmpty) {
+      final rnd = Random.secure();
+      _deviceId = List.generate(
+          8, (_) => rnd.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
+      await prefs.setString(_deviceIdKey, _deviceId);
+    }
+    _deviceName = prefs.getString(_deviceNameKey) ??
+        'Dispositivo ${_deviceId.substring(0, 4).toUpperCase()}';
+    _background = prefs.getBool(_backgroundKey) ?? false;
+    try {
+      final raw = jsonDecode(prefs.getString(_contactsKey) ?? '[]') as List;
+      _contacts = [
+        for (final c in raw) Contact.fromJson(c as Map<String, dynamic>),
+      ];
+    } on Object {
+      // Lista ilegible: mejor empezar vacía que no arrancar.
+      _contacts = const [];
+    }
+    _controller
+      ..deviceId = _deviceId
+      ..deviceName = _deviceName
+      ..onPaired = _onPaired;
+    if (transport == null) await _listen();
+    if (_background) unawaited(BackgroundSession.setStandby(true));
+    notifyListeners();
+  }
+
+  Future<void> _listen() async {
+    try {
+      final socket = await RawDatagramSocket.bind(
+        InternetAddress.anyIPv4,
+        port,
+        // En escritorio permite dos copias de la app en la misma máquina.
+        reusePort: Platform.isLinux || Platform.isMacOS,
+      );
+      socket.broadcastEnabled = true;
+      socket.listen((event) {
+        if (event != RawSocketEvent.read) return;
+        Datagram? d;
+        while ((d = socket.receive()) != null) {
+          _onDatagram(d!);
+        }
+      }, onError: (Object _) {});
+      _socket = socket;
+    } on SocketException {
+      // Puerto ocupado: se puede llamar (con un socket de paso) pero no
+      // recibir llamadas.
+      _socket = null;
+    }
+  }
+
+  // ── Datos del dispositivo ────────────────────────────────────────────────
+
+  Future<void> setDeviceName(String name) async {
+    final clean = name.trim();
+    if (clean.isEmpty || clean == _deviceName) return;
+    _deviceName = clean.length > 40 ? clean.substring(0, 40) : clean;
+    _controller.deviceName = _deviceName;
+    await prefs?.setString(_deviceNameKey, _deviceName);
+    notifyListeners();
+  }
+
+  Future<void> setBackgroundAvailable(bool on) async {
+    _background = on;
+    await prefs?.setBool(_backgroundKey, on);
+    await BackgroundSession.setStandby(on);
+    notifyListeners();
+  }
+
+  // ── Lista ────────────────────────────────────────────────────────────────
+
+  Contact? _byId(String id) {
+    for (final c in _contacts) {
+      if (c.id == id) return c;
+    }
+    return null;
+  }
+
+  Future<void> rename(Contact contact, String name) async {
+    final clean = name.trim();
+    if (clean.isEmpty) return;
+    await _put(contact.copyWith(name: clean, custom: true));
+  }
+
+  Future<void> remove(Contact contact) async {
+    _contacts = [
+      for (final c in _contacts)
+        if (c.id != contact.id) c,
+    ];
+    await _save();
+  }
+
+  /// Guarda `contact` el primero de la lista, sustituyendo al que tuviera su
+  /// id y a los que fueran el mismo dispositivo con un secreto anterior.
+  Future<void> _put(Contact contact) async {
+    _contacts = [
+      contact,
+      for (final c in _contacts)
+        if (c.id != contact.id &&
+            (contact.device.isEmpty || c.device != contact.device))
+          c,
+    ];
+    await _save();
+  }
+
+  Future<void> _save() async {
+    await prefs?.setString(
+      _contactsKey,
+      jsonEncode([for (final c in _contacts) c.toJson()]),
+    );
+    notifyListeners();
+  }
+
+  String? _idFor(String secret) {
+    final id = codec?.contactId(Uint8List.fromList(utf8.encode(secret)));
+    return id == null ? null : _hex(id);
+  }
+
+  static String _hex(List<int> bytes) =>
+      bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+
+  // ── Al emparejar ─────────────────────────────────────────────────────────
+
+  Future<void> _onPaired(PairedEvent e) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final active = _byId(_activeId ?? '');
+    _stopCalling();
+    _activeId = null;
+    if (active != null) {
+      // Era una llamada entre contactos: sólo se anota que se habló.
+      await _put(active.copyWith(lastSeen: now, lastLocal: e.peerHost));
+      return;
+    }
+    if (e.token.isEmpty) return;
+    final id = _idFor(e.token);
+    if (id == null) return;
+    final known = e.peerDevice.isEmpty
+        ? null
+        : _contacts.where((c) => c.device == e.peerDevice).firstOrNull;
+    final contact = Contact(
+      id: id,
+      secret: e.token,
+      // Si ya se le conocía con un nombre puesto a mano, se conserva.
+      name: known != null && known.custom
+          ? known.name
+          : e.peerName.isNotEmpty
+              ? e.peerName
+              : e.isHost
+                  ? 'Invitado de ${e.room}'
+                  : 'Sala ${e.room}',
+      custom: known?.custom ?? false,
+      device: e.peerDevice,
+      lastLocal: e.peerHost,
+      lastSeen: now,
+    );
+    await _put(contact);
+    // El anfitrión no sabe quién ha entrado: el invitado se presenta. Varias
+    // veces porque es UDP y el anfitrión puede estar aún ocupado conectando.
+    if (!e.isHost) {
+      for (final wait in const [0, 1, 3]) {
+        Timer(Duration(seconds: wait), () => _send(contact, 'hello'));
+      }
+    }
+  }
+
+  // ── Llamar ───────────────────────────────────────────────────────────────
+
+  /// Empieza a llamar a `contact`. La sala la abre quien llama (la pantalla
+  /// de crear sala); esto envía la invitación en cuanto existe y la repite
+  /// hasta que el otro entra, se cancela o pasa el plazo.
+  void call(Contact contact) {
+    _stopCalling();
+    _activeId = contact.id;
+    final started = DateTime.now();
+    var hadRoom = false;
+    void tick() {
+      final invite = _controller.pairingUri?.toUri();
+      final expired = DateTime.now().difference(started) > _callTimeout;
+      // Sala cerrada sin conectar: no seguir llamando con la siguiente.
+      if (_controller.isLive || expired || (hadRoom && invite == null)) {
+        _stopCalling();
+        if (!_controller.isLive) _activeId = null;
+        notifyListeners();
+        return;
+      }
+      if (invite == null) return;
+      hadRoom = true;
+      final target = _byId(contact.id);
+      if (target != null) _send(target, 'call', invite: invite);
+    }
+
+    _callTimer = Timer.periodic(const Duration(seconds: 1), (_) => tick());
+    tick();
+    notifyListeners();
+  }
+
+  /// Deja de llamar (el usuario salió de la pantalla de espera).
+  void cancelCall() {
+    if (_callTimer == null) return;
+    _stopCalling();
+    _activeId = null;
+    notifyListeners();
+  }
+
+  void _stopCalling() {
+    _callTimer?.cancel();
+    _callTimer = null;
+  }
+
+  Future<void> _send(Contact contact, String type, {String? invite}) async {
+    final codec = this.codec;
+    if (codec == null) return;
+    final ip = await _controller.localIp();
+    final payload = utf8.encode(jsonEncode({
+      't': type,
+      'dev': _deviceId,
+      'name': _deviceName,
+      'ts': DateTime.now().millisecondsSinceEpoch,
+      'ip': ?ip,
+      'uri': ?invite,
+    }));
+    final sealed = codec.knockSeal(
+      Uint8List.fromList(utf8.encode(contact.secret)),
+      Uint8List.fromList(payload),
+    );
+    if (sealed == null) return;
+    final targets = <String>{
+      ?contact.lastLocal,
+      ?contact.lastPublic,
+      // Por si cambió de IP dentro de la misma red.
+      '255.255.255.255',
+      if (ip != null && ip.contains('.'))
+        '${ip.substring(0, ip.lastIndexOf('.'))}.255',
+    };
+    final fake = transport;
+    if (fake != null) {
+      for (final target in targets) {
+        fake(sealed, target);
+      }
+      return;
+    }
+    RawDatagramSocket? temporary;
+    try {
+      final socket = _socket ??
+          (temporary = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0)
+            ..broadcastEnabled = true);
+      for (final target in targets) {
+        final address = InternetAddress.tryParse(target);
+        if (address == null || address.type != InternetAddressType.IPv4) {
+          continue;
+        }
+        try {
+          socket.send(sealed, address, port);
+        } on SocketException {
+          // Sin ruta hacia esa dirección: las demás siguen valiendo.
+        }
+      }
+    } on SocketException {
+      // Sin red: no hay a quién llamar.
+    } finally {
+      temporary?.close();
+    }
+  }
+
+  // ── Recibir ──────────────────────────────────────────────────────────────
+
+  void _onDatagram(Datagram d) => handleDatagram(d.data, d.address);
+
+  /// Procesa un datagrama llegado de `address`.
+  @visibleForTesting
+  void handleDatagram(Uint8List data, InternetAddress address) {
+    final codec = this.codec;
+    // "GTKN", versión, 8 bytes de id: lo justo para saber de quién es.
+    if (codec == null || data.length < 41 || data[0] != 0x47) return;
+    final contact = _byId(_hex(data.sublist(5, 13)));
+    if (contact == null) return;
+    final plain = codec.knockOpen(
+      Uint8List.fromList(utf8.encode(contact.secret)),
+      data,
+    );
+    if (plain == null) return;
+    final Map<String, dynamic> msg;
+    try {
+      msg = jsonDecode(utf8.decode(plain)) as Map<String, dynamic>;
+    } on Object {
+      return;
+    }
+    final device = msg['dev'];
+    final ts = msg['ts'];
+    // Una difusión propia vuelve por la red local: no es una llamada.
+    if (device is! String || device == _deviceId || ts is! int) return;
+    final age = DateTime.now().millisecondsSinceEpoch - ts;
+    if (age.abs() > _maxAge.inMilliseconds) return;
+
+    final name = msg['name'];
+    final from = address.address;
+    final updated = contact.copyWith(
+      device: device,
+      name: !contact.custom && name is String && name.trim().isNotEmpty
+          ? name.trim()
+          : null,
+      lastLocal: _isPrivate(address) ? from : null,
+      lastPublic: _isPrivate(address) ? null : from,
+      lastSeen: DateTime.now().millisecondsSinceEpoch,
+    );
+    unawaited(_put(updated));
+
+    final invite = msg['uri'];
+    if (msg['t'] != 'call' || invite is! String) return;
+    if (_controller.isLive || _controller.busy) return;
+    if (_dismissed.contains(invite) || incoming.value?.invite == invite) return;
+    incoming.value = IncomingCall(contact: updated, invite: invite);
+    if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
+      unawaited(BackgroundSession.notifyCall(updated.name));
+    }
+  }
+
+  static bool _isPrivate(InternetAddress a) {
+    final b = a.rawAddress;
+    if (b.length != 4) return false;
+    return b[0] == 10 ||
+        (b[0] == 172 && b[1] >= 16 && b[1] < 32) ||
+        (b[0] == 192 && b[1] == 168) ||
+        (b[0] == 169 && b[1] == 254) ||
+        b[0] == 127;
+  }
+
+  /// Acepta la solicitud pendiente y devuelve la invitación con la que entrar.
+  String? accept() {
+    final call = incoming.value;
+    if (call == null) return null;
+    incoming.value = null;
+    _dismissed.add(call.invite);
+    _activeId = call.contact.id;
+    unawaited(BackgroundSession.cancelCall());
+    return call.invite;
+  }
+
+  /// Rechaza la solicitud pendiente: esa llamada no vuelve a avisar.
+  void reject() {
+    final call = incoming.value;
+    if (call == null) return;
+    _dismissed.add(call.invite);
+    incoming.value = null;
+    unawaited(BackgroundSession.cancelCall());
+  }
+
+  @override
+  void dispose() {
+    _stopCalling();
+    _socket?.close();
+    incoming.dispose();
+    super.dispose();
+  }
+}

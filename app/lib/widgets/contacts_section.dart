@@ -1,0 +1,181 @@
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+import '../core/glass.dart';
+import '../core/routes.dart';
+import '../core/tokens.dart';
+import '../screens/pairing_screen.dart';
+import '../services/contacts.dart';
+
+/// Lista de contactos de la home: un toque para volver a hablar con alguien.
+class ContactsSection extends StatelessWidget {
+  const ContactsSection({super.key, required this.enabled});
+
+  /// `false` mientras hay una sala en curso: no se puede llamar a otro.
+  final bool enabled;
+
+  @override
+  Widget build(BuildContext context) {
+    final contacts = context.watch<ContactsService>();
+    if (!contacts.available) return const SizedBox.shrink();
+    final theme = Theme.of(context);
+    final glass = GlassTextTheme.of(context);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Contactos',
+          style: theme.textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.w800,
+            color: glass.primary,
+          ),
+        ),
+        const SizedBox(height: Spacing.sm),
+        if (contacts.contacts.isEmpty)
+          Text(
+            'Cuando hables con alguien se guardará aquí, para volver a '
+            'llamarle con un toque.',
+            style:
+                theme.textTheme.bodyMedium?.copyWith(color: glass.secondary),
+          )
+        else
+          GlassSurface(
+            padding: const EdgeInsets.symmetric(
+                horizontal: Spacing.lg, vertical: Spacing.xs),
+            child: Column(
+              children: [
+                for (final contact in contacts.contacts)
+                  _ContactRow(contact: contact, enabled: enabled),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _ContactRow extends StatelessWidget {
+  const _ContactRow({required this.contact, required this.enabled});
+
+  final Contact contact;
+  final bool enabled;
+
+  void _call(BuildContext context) {
+    Navigator.push(
+      context,
+      ForwardRoute(
+        builder: (_) =>
+            PairingScreen(mode: PairingMode.host, callee: contact),
+      ),
+    );
+  }
+
+  Future<void> _rename(BuildContext context) async {
+    final service = context.read<ContactsService>();
+    final ctl = TextEditingController(text: contact.name);
+    final name = await showDialog<String>(
+      context: context,
+      builder: (dialog) => AlertDialog(
+        title: const Text('Nombre del contacto'),
+        content: TextField(
+          controller: ctl,
+          autofocus: true,
+          maxLength: 40,
+          textCapitalization: TextCapitalization.words,
+          onSubmitted: (v) => Navigator.pop(dialog, v),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialog),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialog, ctl.text),
+            child: const Text('Guardar'),
+          ),
+        ],
+      ),
+    );
+    if (name != null) await service.rename(contact, name);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final glass = GlassTextTheme.of(context);
+    final initial =
+        contact.name.isEmpty ? '?' : contact.name.characters.first.toUpperCase();
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: Spacing.sm),
+      child: Row(
+        children: [
+          CircleAvatar(
+            radius: 20,
+            backgroundColor: theme.colorScheme.primary.withValues(alpha: 0.18),
+            child: Text(
+              initial,
+              style: TextStyle(
+                color: glass.primary,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+          const SizedBox(width: Spacing.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  contact.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodyLarge?.copyWith(
+                    fontWeight: FontWeight.w600,
+                    color: glass.primary,
+                  ),
+                ),
+                Text(
+                  _lastSeen(contact.lastSeen),
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: glass.secondary),
+                ),
+              ],
+            ),
+          ),
+          PopupMenuButton<String>(
+            tooltip: 'Más',
+            icon: Icon(Icons.more_vert, color: glass.secondary),
+            onSelected: (action) {
+              if (action == 'rename') {
+                _rename(context);
+              } else {
+                context.read<ContactsService>().remove(contact);
+              }
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 'rename', child: Text('Cambiar nombre')),
+              PopupMenuItem(value: 'remove', child: Text('Eliminar')),
+            ],
+          ),
+          IconButton.filled(
+            tooltip: 'Llamar a ${contact.name}',
+            onPressed: enabled ? () => _call(context) : null,
+            icon: const Icon(Icons.call),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static String _lastSeen(int ms) {
+    if (ms == 0) return 'Sin conversaciones todavía';
+    final ago = DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(ms));
+    if (ago.inMinutes < 2) return 'Hablasteis hace un momento';
+    if (ago.inHours < 1) return 'Hablasteis hace ${ago.inMinutes} min';
+    if (ago.inDays < 1) return 'Hablasteis hace ${ago.inHours} h';
+    if (ago.inDays == 1) return 'Hablasteis ayer';
+    return 'Hablasteis hace ${ago.inDays} días';
+  }
+}

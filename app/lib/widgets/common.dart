@@ -491,7 +491,7 @@ class _PttButtonState extends State<PttButton> {
                     ),
                     const SizedBox(height: Spacing.sm),
                     Text(
-                      pressed ? 'TRANSMITIENDO' : 'PULSA PARA HABLAR',
+                      pressed ? 'HABLANDO' : 'PULSA PARA HABLAR',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         color: enabled ? signalColor : scheme.outline,

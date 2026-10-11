@@ -14,6 +14,7 @@ pub mod discovery;
 pub mod error;
 pub mod fec;
 pub mod jitter_buffer;
+pub mod knock;
 #[cfg(feature = "noise")]
 pub mod noise;
 pub mod pairing;
