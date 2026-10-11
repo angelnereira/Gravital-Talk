@@ -111,8 +111,57 @@ class AudioPump {
       _rxFrames++;
       _rxLevel = _rxLevel * 0.5 + pcmLevel(message) * 0.5;
       _lastRx = DateTime.now();
-      if (!_muted) _speaker.feed(message);
+      if (_muted) return;
+      _speaker.feed(_mixTone(message));
     }
+  }
+
+  Uint8List? _tone;
+  int _tonePos = 0;
+
+  /// Suena `mono` (PCM de 16 bits) por el altavoz. Si está llegando voz se
+  /// suma a ella en vez de encolarse detrás: un aviso no debe retrasarla.
+  void playTone(Uint8List mono, int channels) {
+    if (_stopped || _muted) return;
+    final Uint8List tone;
+    if (channels <= 1) {
+      tone = mono;
+    } else {
+      tone = Uint8List(mono.length * channels);
+      for (var i = 0; i + 1 < mono.length; i += 2) {
+        for (var ch = 0; ch < channels; ch++) {
+          tone[(i * channels) + ch * 2] = mono[i];
+          tone[(i * channels) + ch * 2 + 1] = mono[i + 1];
+        }
+      }
+    }
+    final receiving = DateTime.now().difference(_lastRx) <
+        const Duration(milliseconds: 100);
+    if (receiving) {
+      _tone = tone;
+      _tonePos = 0;
+    } else {
+      _tone = null;
+      _speaker.feed(tone);
+    }
+  }
+
+  /// Suma a `frame` el tramo pendiente del tono, si lo hay.
+  Uint8List _mixTone(Uint8List frame) {
+    final tone = _tone;
+    if (tone == null) return frame;
+    final out = Uint8List.fromList(frame);
+    final data = ByteData.sublistView(out);
+    final src = ByteData.sublistView(tone);
+    var i = 0;
+    for (; i + 1 < out.length && _tonePos + 1 < tone.length; i += 2) {
+      final sum = data.getInt16(i, Endian.little) +
+          src.getInt16(_tonePos, Endian.little);
+      data.setInt16(i, sum.clamp(-32768, 32767), Endian.little);
+      _tonePos += 2;
+    }
+    if (_tonePos + 1 >= tone.length) _tone = null;
+    return out;
   }
 
   Future<void> _openMic(int sampleRate, int channels) async {

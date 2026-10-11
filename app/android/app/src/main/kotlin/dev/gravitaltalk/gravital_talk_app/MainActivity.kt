@@ -63,12 +63,14 @@ class MainActivity : FlutterActivity() {
     private fun bindBackground(flutterEngine: FlutterEngine) {
         val background = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "gravital_talk/background")
         SessionService.onLeave = { runOnUiThread { background.invokeMethod("leave", null) } }
+        SessionService.onTogglePtt = { runOnUiThread { background.invokeMethod("togglePtt", null) } }
         background.setMethodCallHandler { call, result ->
             val service = Intent(this, SessionService::class.java)
             when (call.method) {
                 "start" -> {
                     service.putExtra(SessionService.EXTRA_ROOM, call.argument<String>("room").orEmpty())
                     service.putExtra(SessionService.EXTRA_STANDBY, call.argument<String>("mode") == "standby")
+                    call.argument<String>("status")?.let { service.putExtra(SessionService.EXTRA_STATUS, it) }
                     // Arrancar el servicio puede fallar (app ya en segundo
                     // plano, restricciones del fabricante): la sala sigue,
                     // sólo que sin esa protección.
@@ -101,6 +103,7 @@ class MainActivity : FlutterActivity() {
     override fun onDestroy() {
         // Sin actividad no hay Dart que mantenga la sesión.
         SessionService.onLeave = null
+        SessionService.onTogglePtt = null
         stopService(Intent(this, SessionService::class.java))
         super.onDestroy()
     }

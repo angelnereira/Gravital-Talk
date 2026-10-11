@@ -114,11 +114,11 @@ pub use imp::Engine;
 mod imp {
     use std::sync::atomic::Ordering;
     use std::sync::mpsc::{self, RecvTimeoutError};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::thread::JoinHandle;
     use std::time::{Duration, Instant};
 
-    use gravital_talk_io::{VoiceCapture, VoicePlayback};
+    use gravital_talk_io::{PlayoutMixer, VoiceCapture, VoicePlayback};
     use tokio::runtime::Runtime;
 
     use super::{level, Shared};
@@ -134,6 +134,9 @@ mod imp {
     pub struct Engine {
         shared: Arc<Shared>,
         threads: Vec<JoinHandle<()>>,
+        /// Altavoz ya abierto, para sonar avisos desde el hilo que los pide.
+        mixer: Arc<Mutex<Option<PlayoutMixer>>>,
+        sample_rate: u32,
     }
 
     impl Engine {
@@ -174,8 +177,10 @@ mod imp {
                     })
                     .map_err(|e| format!("hilo de captura: {e}"))?
             };
+            let mixer_slot = Arc::new(Mutex::new(None));
             let rx_thread = {
                 let (shared, ready) = (shared.clone(), ready_tx);
+                let mixer = mixer_slot.clone();
                 std::thread::Builder::new()
                     .name("gs-audio-rx".into())
                     .spawn(move || {
@@ -183,10 +188,9 @@ mod imp {
                             &shared,
                             &runtime,
                             &pipeline,
-                            sample_rate,
-                            frame_samples,
-                            channels,
+                            (sample_rate, frame_samples, channels),
                             &ready,
+                            &mixer,
                         );
                     })
                     .map_err(|e| format!("hilo de reproducción: {e}"))?
@@ -201,7 +205,28 @@ mod imp {
             Ok(Self {
                 shared,
                 threads: vec![tx_thread, rx_thread],
+                mixer: mixer_slot,
+                sample_rate,
             })
+        }
+
+        /// Suena un tono de turno por el altavoz, sobre lo que haya. `false`
+        /// si no hay altavoz abierto.
+        pub fn play_tone(&self, end_of_turn: bool) -> bool {
+            let mixer = match self.mixer.lock() {
+                Ok(g) => g.clone(),
+                Err(p) => p.into_inner().clone(),
+            };
+            let Some(mixer) = mixer else {
+                return false;
+            };
+            let tone = if end_of_turn {
+                gravital_talk::tone::turn_end_tone(self.sample_rate)
+            } else {
+                gravital_talk::tone::turn_start_tone(self.sample_rate)
+            };
+            mixer.mix(&tone);
+            true
         }
 
         pub const fn shared(&self) -> &Arc<Shared> {
@@ -331,10 +356,9 @@ mod imp {
         shared: &Shared,
         runtime: &Runtime,
         pipeline: &Arc<Pipeline>,
-        sample_rate: u32,
-        frame_samples: usize,
-        channels: usize,
+        (sample_rate, frame_samples, channels): (u32, usize, usize),
         ready: &mpsc::Sender<()>,
+        mixer: &Mutex<Option<PlayoutMixer>>,
     ) {
         let playback = match VoicePlayback::start(sample_rate, frame_samples) {
             Ok(p) => Some(p),
@@ -347,6 +371,9 @@ mod imp {
         shared
             .playback_ok
             .store(playback.is_some(), Ordering::Release);
+        if let Ok(mut slot) = mixer.lock() {
+            *slot = playback.as_ref().map(VoicePlayback::mixer);
+        }
         let _ = ready.send(());
 
         let mut mono: Vec<i16> = Vec::with_capacity(frame_samples * 2);
@@ -405,6 +432,10 @@ pub struct Engine {
 impl Engine {
     pub const fn shared(&self) -> &std::sync::Arc<Shared> {
         &self.shared
+    }
+
+    pub const fn play_tone(&self, _end_of_turn: bool) -> bool {
+        false
     }
 }
 

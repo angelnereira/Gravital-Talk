@@ -16,6 +16,16 @@
 #define GS_ABI_VERSION 1
 
 /*
+ Tono de "empieza un turno" para `gs_tone_pcm` y `gs_audio_play_tone`.
+ */
+#define GS_TONE_TURN_START 0
+
+/*
+ Tono de "termina el turno".
+ */
+#define GS_TONE_TURN_END 1
+
+/*
  Estado dinámico de una sesión para consumidores C.
  */
 enum GsSessionState
@@ -503,6 +513,33 @@ GsStatus gs_session_connect_any(GsSessionHandle *handle, const char *candidates)
 int gs_session_peer_count(GsSessionHandle *handle);
 
 /*
+ Escribe en `out` las muestras (PCM 16 bits, mono) de un tono de turno.
+
+ Es para embebedores que ponen su propio audio (móvil): el tono se
+ reproduce en local, no se envía. `out` necesita sitio para 85 ms de audio
+ a `sample_rate`; `out_len` recibe las muestras escritas.
+
+ # Safety
+ `out` debe apuntar a `out_cap` muestras escribibles y `out_len` a un
+ `size_t` escribible.
+ */
+GsStatus gs_tone_pcm(int kind,
+                     uint32_t sample_rate,
+                     int16_t *out,
+                     uintptr_t out_cap,
+                     uintptr_t *out_len);
+
+/*
+ Suena un tono de turno por el altavoz del audio nativo, mezclado con lo
+ que esté sonando. `GS_ERR_INVALID_STATE` si el audio nativo no está en
+ marcha o no hay altavoz.
+
+ # Safety
+ `handle` debe ser un handle válido de `gs_session_create`.
+ */
+GsStatus gs_audio_play_tone(GsSessionHandle *handle, int kind);
+
+/*
  Identificador público (8 bytes) del contacto que comparte `secret`.
 
  # Safety
@@ -573,7 +610,7 @@ GsStatus gs_session_set_noise_suppression(GsSessionHandle *handle, int on);
 /*
  Fija el tope de la tasa de bits del audio, en bits por segundo.
 
- Se acota a 24 000–128 000. La tasa real baja por debajo del tope si la red
+ Se acota a 16 000–128 000. La tasa real baja por debajo del tope si la red
  pierde paquetes y vuelve a subir cuando se recupera.
 
  # Safety

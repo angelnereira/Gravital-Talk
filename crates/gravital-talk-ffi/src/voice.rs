@@ -15,7 +15,9 @@ use std::sync::{Arc, Mutex};
 
 use gravital_talk::constants::MAX_PAYLOAD_SIZE;
 use gravital_talk::{Session, TransportError};
-use gravital_talk_codec::voice::{VoiceDecoder, VoiceEncoder, MAX_BITRATE, MAX_PACKET};
+use gravital_talk_codec::voice::{
+    VoiceDecoder, VoiceEncoder, MAX_BITRATE, MAX_PACKET, MIN_BITRATE,
+};
 use gravital_talk_codec::CodecId;
 
 /// Bytes que la sesión añade a cada frame: secuencia de audio + tag AEAD.
@@ -29,7 +31,8 @@ const ADAPT_EVERY: u32 = 100;
 /// quien recibe.
 const MAX_CONCEALED: u32 = 3;
 
-/// Suelo de la tasa cuando la red pierde paquetes.
+/// Suelo de la tasa cuando la red pierde paquetes. Un tope elegido por
+/// debajo (el perfil de 16 kbps) manda sobre él.
 const FLOOR_BITRATE: u32 = 24_000;
 
 struct Tx {
@@ -95,7 +98,7 @@ impl Pipeline {
             // una vez, creando un codificador de prueba.
             format_ok: channels == 1
                 && VoiceEncoder::new(sample_rate, frame_ms, MAX_BITRATE).is_ok(),
-            bitrate_cap: AtomicU32::new(max_bitrate.clamp(FLOOR_BITRATE, MAX_BITRATE)),
+            bitrate_cap: AtomicU32::new(max_bitrate.clamp(MIN_BITRATE, MAX_BITRATE)),
             noise_suppression: AtomicBool::new(true),
             tx: Mutex::new(None),
             rx: Mutex::new(None),
@@ -120,7 +123,7 @@ impl Pipeline {
     /// Fija el tope de tasa de bits. La tasa real puede ser menor si la red
     /// pierde paquetes.
     pub fn set_bitrate_cap(&self, bitrate: u32) {
-        let cap = bitrate.clamp(FLOOR_BITRATE, MAX_BITRATE);
+        let cap = bitrate.clamp(MIN_BITRATE, MAX_BITRATE);
         self.bitrate_cap.store(cap, Ordering::Release);
         if let Some(tx) = lock(&self.tx).as_mut() {
             tx.bitrate = tx.bitrate.min(cap);

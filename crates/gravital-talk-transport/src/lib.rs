@@ -35,7 +35,10 @@ pub use fec::{FecDecoder, FecEncoder, FecParity};
 pub use jitter_buffer::JitterBuffer;
 pub use session::{Config, Session, SessionRole};
 pub use stun::{discover_local_addr, discover_public_addr, discover_public_addr_on, StunError};
-pub use tone::{generate_pcm_tone, pcm_to_bytes, ptt_press_tone, ptt_release_tone};
+pub use tone::{
+    generate_pcm_tone, pcm_to_bytes, ptt_press_tone, ptt_release_tone, turn_end_tone,
+    turn_start_tone,
+};
 pub use traits::{LatencyClass, Transport};
 pub use udp::UdpTransport;
 

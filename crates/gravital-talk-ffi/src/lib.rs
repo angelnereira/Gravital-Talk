@@ -1324,6 +1324,80 @@ pub unsafe extern "C" fn gs_session_peer_count(handle: *mut GsSessionHandle) -> 
     c_int::try_from(count).unwrap_or(c_int::MAX)
 }
 
+// ─── Tonos de turno ────────────────────────────────────────────────────
+
+/// Tono de "empieza un turno" para `gs_tone_pcm` y `gs_audio_play_tone`.
+pub const GS_TONE_TURN_START: c_int = 0;
+/// Tono de "termina el turno".
+pub const GS_TONE_TURN_END: c_int = 1;
+
+/// Escribe en `out` las muestras (PCM 16 bits, mono) de un tono de turno.
+///
+/// Es para embebedores que ponen su propio audio (móvil): el tono se
+/// reproduce en local, no se envía. `out` necesita sitio para 85 ms de audio
+/// a `sample_rate`; `out_len` recibe las muestras escritas.
+///
+/// # Safety
+/// `out` debe apuntar a `out_cap` muestras escribibles y `out_len` a un
+/// `size_t` escribible.
+#[no_mangle]
+pub unsafe extern "C" fn gs_tone_pcm(
+    kind: c_int,
+    sample_rate: u32,
+    out: *mut i16,
+    out_cap: usize,
+    out_len: *mut usize,
+) -> GsStatus {
+    if out.is_null() || out_len.is_null() {
+        return GsStatus::GS_ERR_NULL_POINTER;
+    }
+    if !(8_000..=48_000).contains(&sample_rate) {
+        return GsStatus::GS_ERR_INVALID_ARGUMENT;
+    }
+    let tone = match kind {
+        GS_TONE_TURN_START => gravital_talk::tone::turn_start_tone(sample_rate),
+        GS_TONE_TURN_END => gravital_talk::tone::turn_end_tone(sample_rate),
+        _ => return GsStatus::GS_ERR_INVALID_ARGUMENT,
+    };
+    if tone.len() > out_cap {
+        return GsStatus::GS_ERR_BUFFER_TOO_SMALL;
+    }
+    // SAFETY: `out` tiene `out_cap` muestras escribibles, se acaba de
+    // comprobar que el tono cabe, y `out_len` es válido (contrato).
+    unsafe {
+        ptr::copy_nonoverlapping(tone.as_ptr(), out, tone.len());
+        *out_len = tone.len();
+    }
+    GsStatus::GS_OK
+}
+
+/// Suena un tono de turno por el altavoz del audio nativo, mezclado con lo
+/// que esté sonando. `GS_ERR_INVALID_STATE` si el audio nativo no está en
+/// marcha o no hay altavoz.
+///
+/// # Safety
+/// `handle` debe ser un handle válido de `gs_session_create`.
+#[no_mangle]
+pub unsafe extern "C" fn gs_audio_play_tone(handle: *mut GsSessionHandle, kind: c_int) -> GsStatus {
+    if handle.is_null() {
+        return GsStatus::GS_ERR_NULL_POINTER;
+    }
+    if kind != GS_TONE_TURN_START && kind != GS_TONE_TURN_END {
+        return GsStatus::GS_ERR_INVALID_ARGUMENT;
+    }
+    // SAFETY: `handle` no es nulo y viene de `gs_session_create` (contrato).
+    let inner = unsafe { &*(handle as *mut SessionInner) };
+    let played = inner
+        .audio()
+        .as_ref()
+        .is_some_and(|engine| engine.play_tone(kind == GS_TONE_TURN_END));
+    if played {
+        GsStatus::GS_OK
+    } else {
+        GsStatus::GS_ERR_INVALID_STATE
+    }
+}
+
 // ─── Contactos ─────────────────────────────────────────────────────────
 
 /// Lee `len` bytes de `ptr`, o `None` si el puntero es nulo.
@@ -1553,7 +1627,7 @@ pub unsafe extern "C" fn gs_session_set_noise_suppression(
 
 /// Fija el tope de la tasa de bits del audio, en bits por segundo.
 ///
-/// Se acota a 24 000–128 000. La tasa real baja por debajo del tope si la red
+/// Se acota a 16 000–128 000. La tasa real baja por debajo del tope si la red
 /// pierde paquetes y vuelve a subir cuando se recupera.
 ///
 /// # Safety
@@ -1971,6 +2045,51 @@ mod tests {
             .map(|b| f64::from(i16::from_le_bytes(*b)))
             .collect();
         (samples.iter().map(|s| s * s).sum::<f64>() / samples.len().max(1) as f64).sqrt()
+    }
+
+    #[test]
+    fn los_tonos_de_turno_se_entregan_como_pcm() {
+        let mut out = [0i16; 48 * 85];
+        let mut len = 0usize;
+        // SAFETY: `out` y `len` viven durante las llamadas.
+        unsafe {
+            assert_eq!(
+                gs_tone_pcm(
+                    GS_TONE_TURN_START,
+                    48_000,
+                    out.as_mut_ptr(),
+                    out.len(),
+                    &mut len
+                ),
+                GsStatus::GS_OK
+            );
+            assert_eq!(len, 48 * 40);
+            assert!(out[..len].iter().any(|&s| s.abs() > 4_000));
+            assert_eq!(
+                gs_tone_pcm(
+                    GS_TONE_TURN_END,
+                    48_000,
+                    out.as_mut_ptr(),
+                    out.len(),
+                    &mut len
+                ),
+                GsStatus::GS_OK
+            );
+            assert_eq!(len, 48 * 85);
+            // Sin sitio, sin tono conocido o con una frecuencia absurda.
+            assert_eq!(
+                gs_tone_pcm(GS_TONE_TURN_END, 48_000, out.as_mut_ptr(), 10, &mut len),
+                GsStatus::GS_ERR_BUFFER_TOO_SMALL
+            );
+            assert_eq!(
+                gs_tone_pcm(7, 48_000, out.as_mut_ptr(), out.len(), &mut len),
+                GsStatus::GS_ERR_INVALID_ARGUMENT
+            );
+            assert_eq!(
+                gs_tone_pcm(GS_TONE_TURN_START, 1, out.as_mut_ptr(), out.len(), &mut len),
+                GsStatus::GS_ERR_INVALID_ARGUMENT
+            );
+        }
     }
 
     #[test]

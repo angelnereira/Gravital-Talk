@@ -122,7 +122,15 @@ class _GravitalTalkAppState extends State<GravitalTalkApp> {
     super.initState();
     LaunchLinks.listen(_openInvite);
     _contacts.incoming.addListener(_onIncomingCall);
-    BackgroundSession.onLeave(() => widget.controller.reset());
+    BackgroundSession.onLeave(
+      () => widget.controller.reset(),
+      // Desde la notificación no se puede mantener pulsado: un toque abre
+      // el micrófono y otro lo cierra.
+      togglePtt: () {
+        final c = widget.controller;
+        c.pttActive ? c.pttUp() : c.pttDown();
+      },
+    );
     final link = widget.initialLink;
     if (link != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _openInvite(link));

@@ -6,6 +6,22 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
 
 ### Added
 
+**Tonos de turno, perfil de 16 kbps y notificación con controles**
+- **Tonos de turno**: un aviso corto al empezar (barrido ascendente de 40 ms)
+  y al terminar (dos pulsos descendentes) cada turno de palabra, propio o del
+  otro. Se generan y suenan en cada dispositivo; no viajan por la red, donde
+  el códec y la reducción de ruido los deformarían. Se mezclan con la voz sin
+  retrasarla. Se apagan en Ajustes → Audio.
+- **16 kbps** como cuarta calidad («mínimo de datos»), para coberturas malas.
+  128 kbps sigue siendo el valor por defecto.
+- Android: la notificación de la sala pasa a **estilo de llamada en curso**
+  (Android 12+) y añade **Hablar / Soltar**, que abre y cierra el micrófono
+  sin entrar en la app. Muestra si se está hablando, escuchando o en pausa.
+- FFI: `gs_tone_pcm`, `gs_audio_play_tone`, `GS_TONE_TURN_START/END`;
+  `gs_session_set_bitrate` admite desde 16 000.
+
+### Added
+
 **Añadir contactos por enlace, compartir salas e invitar contactos**
 - **Añadir contacto** (pantalla de inicio → Contactos → Añadir): genera un
   enlace `gravital-talk://contact?…` con su QR. Quien lo abre con la app
