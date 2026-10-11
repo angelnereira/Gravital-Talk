@@ -4,6 +4,11 @@ library;
 /// Versión mostrada en la UI (independiente de la versión nativa).
 const appVersion = '0.3.0-alpha.1';
 
+/// Funciones aún sin validar en dispositivos reales. Sólo aparecen en builds
+/// hechos con `--dart-define=GT_EXPERIMENTAL=true`; en los publicados quedan
+/// apagadas aunque el ajuste se hubiera activado antes.
+const experimentalFeatures = bool.fromEnvironment('GT_EXPERIMENTAL');
+
 /// Versión del ABI C soportada por esta app.
 const supportedAbiVersion = 1;
 
@@ -49,6 +54,7 @@ class PrefKeys {
   static const rendezvous = 'net.rendezvous';
   static const noiseSuppression = 'audio.noiseSuppression';
   static const turnTones = 'audio.turnTones';
+  static const nativeAudio = 'audio.native';
   // Clave nueva a propósito: la antigua (`audio.maxBitrate`) guardaba 64000
   // como valor por defecto sin que nadie lo hubiera elegido, y arrastrarla
   // dejaría a quien actualiza por debajo de la calidad prevista.

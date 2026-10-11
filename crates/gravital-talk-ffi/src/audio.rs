@@ -439,6 +439,68 @@ impl Engine {
     }
 }
 
+/// `true` si el audio nativo se puede arrancar en esta plataforma.
+///
+/// En Android hace falta que la app haya entregado antes su contexto (ver
+/// `android`): sin él, `cpal` no puede consultar los dispositivos y lo que
+/// haría es abortar el proceso.
+#[cfg(target_os = "android")]
+pub fn platform_ready() -> bool {
+    android::READY.load(Ordering::Acquire)
+}
+
+/// Fuera de Android no hay nada que inicializar.
+#[cfg(not(target_os = "android"))]
+pub const fn platform_ready() -> bool {
+    true
+}
+
+#[cfg(target_os = "android")]
+pub mod android {
+    use std::sync::atomic::AtomicBool;
+    #[cfg(feature = "android-audio")]
+    use std::sync::atomic::Ordering;
+
+    pub(super) static READY: AtomicBool = AtomicBool::new(false);
+
+    /// Entrega a la librería el contexto de Android. Lo llama `MainActivity`
+    /// al arrancar, una sola vez por proceso.
+    ///
+    /// Devuelve `true` si el audio nativo queda disponible.
+    #[cfg(feature = "android-audio")]
+    #[no_mangle]
+    pub extern "system" fn Java_dev_gravitaltalk_gravital_1talk_1app_MainActivity_nativeInitAudio<
+        'local,
+    >(
+        env: jni::JNIEnv<'local>,
+        _this: jni::objects::JObject<'local>,
+        context: jni::objects::JObject<'local>,
+    ) -> jni::sys::jboolean {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            let (Ok(vm), Ok(global)) = (env.get_java_vm(), env.new_global_ref(&context)) else {
+                return;
+            };
+            let raw = global.as_obj().as_raw();
+            // La referencia global tiene que vivir lo que el proceso: es la
+            // que `cpal` usará desde cualquier hilo.
+            std::mem::forget(global);
+            // SAFETY: `vm` es la JavaVM de este proceso y `raw` una referencia
+            // global a un `android.content.Context` que no se libera nunca;
+            // el `Once` garantiza que se inicializa una sola vez, que es lo
+            // que exige `ndk_context`.
+            unsafe {
+                ndk_context::initialize_android_context(
+                    vm.get_java_vm_pointer().cast(),
+                    raw.cast(),
+                );
+            }
+            READY.store(true, Ordering::Release);
+        });
+        jni::sys::jboolean::from(READY.load(Ordering::Acquire))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

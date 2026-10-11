@@ -266,6 +266,19 @@ class _SettingsScreenState extends State<SettingsScreen>
                       s.copyWith(noiseSuppression: !s.noiseSuppression),
                     ),
                   ),
+                  if (_hasRuntimePermissions && experimentalFeatures)
+                    _Row(
+                      icon: Icons.speed,
+                      title: 'Audio de baja latencia (experimental)',
+                      subtitle: 'Capta y reproduce dentro del motor, sin '
+                          'pasar por la app. Se aplica en la siguiente sala; '
+                          'si algo suena mal, apágalo.',
+                      trailing: Switch(
+                        value: s.nativeAudio,
+                        onChanged: (on) =>
+                            c.updateSettings(s.copyWith(nativeAudio: on)),
+                      ),
+                    ),
                   _Row(
                     icon: Icons.graphic_eq,
                     title: 'Tonos de turno',

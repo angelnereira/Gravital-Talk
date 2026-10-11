@@ -318,6 +318,18 @@ Ante un "se cierra sola", pedir ese informe antes de suponer la causa. Descartad
 con pruebas: el códec en ARM de 32 bits (pasa bajo `qemu-arm`), paquetes que no son
 Opus y el consumo de pila del códec.
 
+## Audio nativo en Android (experimental, apagado)
+
+- Las libs de Android se compilan con `--features android-audio` (cpal sobre Oboe). El
+  runtime de C++ va enlazado estático desde `build.rs`: sin eso `dlopen` falla con
+  `cannot locate symbol "__cxa_pure_virtual"` y la app cae al motor demo **sin avisar**.
+  Tras tocar dependencias nativas, comprueba en el teléfono que Ajustes → Acerca de no
+  dice «Demo».
+- `MainActivity` llama a `nativeInitAudio(context)`; sin esa llamada `gs_audio_supported`
+  devuelve 0 en Android (cpal abortaría al preguntar por los dispositivos).
+- La app sólo lo usa con `--dart-define=GT_EXPERIMENTAL=true` y el interruptor de Ajustes.
+  Pendiente: validar que suena y medir la latencia frente a `AudioPump` antes de activarlo.
+
 ## Tonos de turno
 
 Se generan en Rust (`gravital_talk_transport::tone::turn_start_tone` / `turn_end_tone`) y

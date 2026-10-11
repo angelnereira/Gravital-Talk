@@ -55,6 +55,7 @@ class AppSettings {
     this.rendezvous = '',
     this.noiseSuppression = true,
     this.turnTones = true,
+    this.nativeAudio = false,
   });
 
   /// Tasas de audio que se pueden elegir, de más calidad a más ligera.
@@ -90,6 +91,10 @@ class AppSettings {
   /// Tonos cortos al empezar y terminar un turno de palabra.
   final bool turnTones;
 
+  /// Android: captar y reproducir dentro de la librería nativa en vez de con
+  /// los plugins. Menos latencia; experimental hasta probarlo en más equipos.
+  final bool nativeAudio;
+
   AppSettings copyWith({
     int? sampleRate,
     int? channels,
@@ -102,6 +107,7 @@ class AppSettings {
     String? rendezvous,
     bool? noiseSuppression,
     bool? turnTones,
+    bool? nativeAudio,
   }) {
     return AppSettings(
       sampleRate: sampleRate ?? this.sampleRate,
@@ -115,6 +121,7 @@ class AppSettings {
       rendezvous: rendezvous ?? this.rendezvous,
       noiseSuppression: noiseSuppression ?? this.noiseSuppression,
       turnTones: turnTones ?? this.turnTones,
+      nativeAudio: nativeAudio ?? this.nativeAudio,
     );
   }
 

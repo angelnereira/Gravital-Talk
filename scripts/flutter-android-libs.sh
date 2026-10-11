@@ -54,9 +54,9 @@ for abi in "${ABIS[@]}"; do
   # `--debug` no es un argumento válido de cargo (debug es el perfil por
   # defecto): sólo se pasa la bandera cuando el perfil es release.
   if [ "$PROFILE" = "release" ]; then
-    cargo ndk -t "$abi" -o "$OUT" build -p gravital-talk-ffi --release
+    cargo ndk -t "$abi" -o "$OUT" build -p gravital-talk-ffi --features android-audio --release
   else
-    cargo ndk -t "$abi" -o "$OUT" build -p gravital-talk-ffi
+    cargo ndk -t "$abi" -o "$OUT" build -p gravital-talk-ffi --features android-audio
   fi
 done
 

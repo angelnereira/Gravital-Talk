@@ -1140,6 +1140,7 @@ dependencies = [
  "gravital-talk-codec",
  "gravital-talk-io",
  "jni",
+ "ndk-context",
  "tokio",
  "tracing",
 ]

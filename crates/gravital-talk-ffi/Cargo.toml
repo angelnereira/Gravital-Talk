@@ -19,6 +19,7 @@ gravital-talk          = { workspace = true, default-features = false, features 
 tokio                   = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync", "macros"] }
 jni                     = { version = "0.21", default-features = false, optional = true }
 gravital-talk-io        = { workspace = true, optional = true }
+ndk-context             = { version = "0.1", optional = true }
 # Códec de voz en Rust puro: Opus + reducción de ruido, para todos los targets.
 gravital-talk-codec     = { workspace = true, default-features = false, features = ["voice"] }
 tracing                 = { workspace = true }
@@ -33,6 +34,10 @@ android = ["dep:jni"]
 # audio lo pone la app, y sin la feature esas funciones devuelven
 # `GS_ERR_UNSUPPORTED`.
 audio = ["dep:gravital-talk-io"]
+# Audio nativo en Android (AAudio/Oboe vía cpal). Además de `audio` trae el
+# punto de entrada JNI con el que la app entrega el contexto de Android, sin
+# el cual cpal no puede preguntar por los dispositivos.
+android-audio = ["audio", "dep:jni", "dep:ndk-context"]
 
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

@@ -41,11 +41,13 @@ class GravitalTheme {
       appBarTheme: AppBarTheme(
         centerTitle: false,
         elevation: GravitalElevation.flat,
-        scrolledUnderElevation: GravitalElevation.overlay,
-        backgroundColor: scheme.surface,
+        // Transparente: la cabecera deja ver el mismo degradado que el resto
+        // de la pantalla. Con `scheme.surface` en oscuro quedaba una franja
+        // casi negra encima del fondo.
+        scrolledUnderElevation: GravitalElevation.flat,
+        backgroundColor: Colors.transparent,
+        shadowColor: Colors.transparent,
         foregroundColor: scheme.onSurface,
-        // La barra se vuelve opaca al hacer scroll. Sin `surfaceTint` 
-        // Material añade un velo de color que con el teal se ve sucio.
         surfaceTintColor: Colors.transparent,
       ),
 
