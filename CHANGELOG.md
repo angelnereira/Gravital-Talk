@@ -6,6 +6,40 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
 
 ### Added
 
+**Audio comprimido, tolerante a pérdidas y con reducción de ruido**
+- Las apps mandaban PCM sin comprimir: unos 800 kbps, un paquete de 1 KB cada
+  10 ms. Ahora viaja **Opus**, con la tasa a elegir en Ajustes: **128, 64 o
+  32 kbps** (128 por defecto). Paquetes de 80–320 B y la mitad de paquetes por
+  segundo.
+- **Pérdida de paquetes**: cada paquete lleva una copia reducida del anterior,
+  así que uno perdido se reconstruye con el siguiente; si se pierden varios
+  seguidos, el decodificador sintetiza una continuación en vez de dejar un
+  hueco.
+- **La tasa se adapta sola**: con pérdidas baja (hasta 24 kbps) y dedica más
+  bits a la copia de respaldo; cuando la red se recupera, vuelve a subir hasta
+  la elegida. Calidad a cambio de solidez, y sólo cuando hace falta.
+- **Reducción de ruido** (RNNoise) con puerta de voz, activable en Ajustes:
+  quita el ruido de fondo continuo antes de codificar. Medido: un ruido grave
+  tipo ventilador queda por debajo del 10 % de su nivel. Limitación medida: el
+  ruido blanco puro lo toma por una consonante y apenas lo reduce.
+- Todo en Rust (`unsafe-libopus`, `nnnoiseless`), dentro de la librería
+  nativa: compila igual para Android y escritorio, y las apps siguen
+  entregando y recibiendo PCM sin saber que hay un códec.
+- ABI nueva (aditiva): `gs_session_set_noise_suppression`,
+  `gs_session_set_bitrate`, `gs_session_bitrate`, `gs_session_codec`.
+- `gravital_talk_codec::voice::{VoiceEncoder, VoiceDecoder}` (feature `voice`).
+
+### Changed
+
+- La espera por un frame perdido baja de 180 ms a 60 ms (el tamaño del jitter
+  buffer): con un códec que reconstruye el frame a partir del siguiente,
+  esperar más sólo retenía el audio posterior.
+- El frame de audio de las apps vuelve a ser de 20 ms. Si el otro extremo sólo
+  habla PCM, la librería parte cada frame en trozos que quepan en un paquete.
+- **Compatibilidad**: una app de esta versión y una anterior negocian Opus,
+  que la anterior anuncia pero no implementa: no se entienden. Hay que
+  actualizar los dos extremos.
+
 **Conexión directa entre redes distintas, sin servidor**
 - Medido con una red fija tras CGNAT y un móvil en LTE con NAT simétrico:
   conectan directo, sin ningún servidor de por medio.

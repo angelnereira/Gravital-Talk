@@ -112,15 +112,11 @@ mod imp {
     use std::thread::JoinHandle;
     use std::time::{Duration, Instant};
 
-    use gravital_talk::constants::MAX_PAYLOAD_SIZE;
-    use gravital_talk::Session;
     use gravital_talk_io::{VoiceCapture, VoicePlayback};
     use tokio::runtime::Runtime;
 
     use super::{level, Shared};
-
-    /// Bytes que la sesión añade a cada frame: secuencia de audio + tag AEAD.
-    const FRAME_OVERHEAD: usize = 4 + 16;
+    use crate::voice::Pipeline;
 
     /// Variable de entorno de diagnóstico: sustituye el micrófono por un tono
     /// de esa frecuencia (Hz). Permite medir el camino de ida sin depender de
@@ -137,7 +133,7 @@ mod imp {
     impl Engine {
         pub fn start(
             runtime: Arc<Runtime>,
-            session: Arc<Session>,
+            pipeline: Arc<Pipeline>,
             sample_rate: u32,
             channels: u8,
             frame_ms: u8,
@@ -147,23 +143,14 @@ mod imp {
             if frame_samples == 0 {
                 return Err("frame de audio vacío: revisa sample_rate y frame_duration_ms".into());
             }
-            let frame_bytes = frame_samples * channels * 2;
-            if frame_bytes + FRAME_OVERHEAD > MAX_PAYLOAD_SIZE {
-                return Err(format!(
-                    "un frame PCM de {frame_ms} ms son {frame_bytes} B y el tope por paquete es \
-                     {} B: usa un frame más corto",
-                    MAX_PAYLOAD_SIZE - FRAME_OVERHEAD
-                ));
-            }
-
             let shared = Arc::new(Shared::default());
             let (ready_tx, ready_rx) = mpsc::channel::<()>();
 
             let tx_thread = {
-                let (shared, runtime, session, ready) = (
+                let (shared, runtime, pipeline, ready) = (
                     shared.clone(),
                     runtime.clone(),
-                    session.clone(),
+                    pipeline.clone(),
                     ready_tx.clone(),
                 );
                 std::thread::Builder::new()
@@ -172,7 +159,7 @@ mod imp {
                         tx_loop(
                             &shared,
                             &runtime,
-                            &session,
+                            &pipeline,
                             sample_rate,
                             frame_samples,
                             channels,
@@ -189,7 +176,7 @@ mod imp {
                         rx_loop(
                             &shared,
                             &runtime,
-                            &session,
+                            &pipeline,
                             sample_rate,
                             frame_samples,
                             channels,
@@ -244,7 +231,7 @@ mod imp {
     fn tx_loop(
         shared: &Shared,
         runtime: &Runtime,
-        session: &Arc<Session>,
+        pipeline: &Arc<Pipeline>,
         sample_rate: u32,
         frame_samples: usize,
         channels: usize,
@@ -254,6 +241,11 @@ mod imp {
             .ok()
             .and_then(|v| v.parse::<f64>().ok())
             .filter(|hz| *hz > 0.0);
+        // Un tono puro es, para el reductor de ruido, ruido: lo eliminaría y
+        // la prueba mediría silencio.
+        if tone_hz.is_some() {
+            pipeline.set_noise_suppression(false);
+        }
         let open_mic = || match VoiceCapture::start(sample_rate, frame_samples) {
             Ok((capture, frames)) => Source::Mic {
                 _capture: capture,
@@ -323,7 +315,7 @@ mod imp {
                     bytes[o + 1] = le[1];
                 }
             }
-            if runtime.block_on(session.send_audio(&bytes)).is_ok() {
+            if runtime.block_on(pipeline.send_pcm(&bytes)).is_ok() {
                 shared.tx_frames.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -332,7 +324,7 @@ mod imp {
     fn rx_loop(
         shared: &Shared,
         runtime: &Runtime,
-        session: &Arc<Session>,
+        pipeline: &Arc<Pipeline>,
         sample_rate: u32,
         frame_samples: usize,
         channels: usize,
@@ -354,12 +346,12 @@ mod imp {
         let mut mono: Vec<i16> = Vec::with_capacity(frame_samples * 2);
         while !shared.stop.load(Ordering::Acquire) {
             let res = runtime.block_on(async {
-                tokio::time::timeout(Duration::from_millis(200), session.recv_audio()).await
+                tokio::time::timeout(Duration::from_millis(200), pipeline.recv_pcm()).await
             });
             match res {
                 Ok(Ok(frame)) => {
                     mono.clear();
-                    mono.extend(frame.payload.chunks_exact(2 * channels).map(|c| {
+                    mono.extend(frame.chunks_exact(2 * channels).map(|c| {
                         // Varios canales se mezclan a mono: el altavoz se abre
                         // en mono y reparte él a sus canales.
                         let sum: i32 = c

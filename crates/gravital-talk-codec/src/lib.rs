@@ -16,6 +16,8 @@ pub mod negotiation;
 #[cfg(feature = "opus")]
 pub mod opus;
 pub mod pcm;
+#[cfg(feature = "voice")]
+pub mod voice;
 
 pub use error::CodecError;
 pub use negotiation::CodecId;
@@ -23,6 +25,8 @@ pub use pcm::PcmCodec;
 
 #[cfg(feature = "opus")]
 pub use opus::OpusCodec;
+#[cfg(feature = "voice")]
+pub use voice::{VoiceDecoder, VoiceEncoder};
 
 /// Alias corto del resultado del crate.
 pub type Result<T> = core::result::Result<T, CodecError>;

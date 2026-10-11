@@ -118,6 +118,10 @@ class NativeSession {
   void addPathHints(List<String> addrs) => _unavailable();
   int? rxIdleMs() => null;
   bool isRelayed() => false;
+  void setNoiseSuppression(bool on) => _unavailable();
+  void setBitrate(int bitsPerSecond) => _unavailable();
+  int bitrate() => 0;
+  bool get compressed => false;
   bool audioStart() => false;
   String? audioProblems() => null;
   void audioStop() {}

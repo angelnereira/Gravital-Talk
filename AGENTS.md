@@ -157,6 +157,22 @@ app/build/linux/x64/release/bundle/gravital_talk_app [--host] [--auto-talk=N] [g
 - `cargo run -p gravital-talk-io --example voice_probe` comprueba que el
   micrófono y el altavoz abren, sin protocolo de por medio.
 
+## Códec de voz
+
+- Las apps usan `gravital_talk_codec::voice` (feature `voice`): Opus y RNNoise
+  en Rust puro, integrados en la FFI (`crates/gravital-talk-ffi/src/voice.rs`).
+  El embebedor sigue viendo PCM en `gs_session_send_audio`/`recv_audio`.
+- `OpusCodec` (feature `opus`, libopus en C vía `audiopus`) sigue existiendo
+  para el CLI y `CodecSession`, pero **no compila para Android** con cargo-ndk
+  ("Failed to autogen Opus"). No intentes meterlo en la FFI.
+- Un `recv` puede devolver hasta 4 frames de golpe cuando reconstruye audio
+  perdido: el buffer de quien llama tiene que dar para eso (7680 B a 48 kHz,
+  20 ms).
+- Los tests del códec se corren aparte, porque la feature no está en los
+  defaults: `cargo test -p gravital-talk-codec --no-default-features --features voice`.
+- Con tonos puros hay que apagar la reducción de ruido (`GS_AUDIO_TEST_TONE` y
+  los tests lo hacen): RNNoise trata un tono como ruido y lo elimina.
+
 ## Conexión entre redes (perforación de NAT)
 
 ```bash

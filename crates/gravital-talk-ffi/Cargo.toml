@@ -19,6 +19,8 @@ gravital-talk          = { workspace = true, default-features = false, features 
 tokio                   = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync", "macros"] }
 jni                     = { version = "0.21", default-features = false, optional = true }
 gravital-talk-io        = { workspace = true, optional = true }
+# Códec de voz en Rust puro: Opus + reducción de ruido, para todos los targets.
+gravital-talk-codec     = { workspace = true, default-features = false, features = ["voice"] }
 tracing                 = { workspace = true }
 
 [build-dependencies]

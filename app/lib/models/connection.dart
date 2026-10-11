@@ -49,11 +49,15 @@ class AppSettings {
     this.frameDurationMs = 20,
     this.jitterBufferMs = 60,
     this.mtu = 1200,
-    this.maxBitrate = 64000,
+    this.maxBitrate = 128000,
     this.codec = AudioCodec.opus,
     this.themeMode = AppThemeMode.system,
     this.rendezvous = '',
+    this.noiseSuppression = true,
   });
+
+  /// Tasas de audio que se pueden elegir, de más calidad a más ligera.
+  static const bitrateOptions = <int>[128000, 64000, 32000];
 
   /// Valores que usa la app cuando nadie ha configurado nada.
   ///
@@ -79,6 +83,9 @@ class AppSettings {
   /// fuera).
   final String rendezvous;
 
+  /// Quitar el ruido de fondo del micrófono antes de enviar.
+  final bool noiseSuppression;
+
   AppSettings copyWith({
     int? sampleRate,
     int? channels,
@@ -89,6 +96,7 @@ class AppSettings {
     AudioCodec? codec,
     AppThemeMode? themeMode,
     String? rendezvous,
+    bool? noiseSuppression,
   }) {
     return AppSettings(
       sampleRate: sampleRate ?? this.sampleRate,
@@ -100,6 +108,7 @@ class AppSettings {
       codec: codec ?? this.codec,
       themeMode: themeMode ?? this.themeMode,
       rendezvous: rendezvous ?? this.rendezvous,
+      noiseSuppression: noiseSuppression ?? this.noiseSuppression,
     );
   }
 

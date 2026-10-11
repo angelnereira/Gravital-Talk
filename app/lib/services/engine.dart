@@ -36,23 +36,14 @@ class AudioLevels {
   static const silent = AudioLevels();
 }
 
-/// Mayor frame PCM que cabe en un paquete: tope de payload (1176 B) menos la
-/// secuencia de audio (4 B) y el tag AEAD (16 B).
-const maxPcmFrameBytes = 1156;
-
-/// Duración de frame que de verdad se puede enviar con [settings].
+/// Duración de frame con la que se captura y reproduce.
 ///
-/// La app manda PCM sin comprimir, y un frame de 20 ms a 48 kHz son 1920 B:
-/// no cabe en un paquete y cada envío fallaba. Se acorta el frame hasta que
-/// quepa en vez de dejar que la sesión conecte y no transmita nada.
-int effectiveFrameMs(AppSettings settings) {
-  for (final ms in [settings.frameDurationMs, 10, 5]) {
-    if (ms > settings.frameDurationMs) continue;
-    final bytes = (settings.sampleRate * ms ~/ 1000) * settings.channels * 2;
-    if (bytes > 0 && bytes <= maxPcmFrameBytes) return ms;
-  }
-  return 5;
-}
+/// 20 ms es el frame natural del códec de voz: la mitad de paquetes por
+/// segundo que con 10 ms, y cada uno lleva además la copia de respaldo del
+/// anterior. Si el otro extremo sólo habla PCM, la librería nativa parte el
+/// frame en trozos que quepan en un paquete.
+int effectiveFrameMs(AppSettings settings) =>
+    settings.frameDurationMs <= 10 ? 10 : 20;
 
 /// Parte `host:puerto` (o `[ipv6]:puerto`). `null` si no tiene esa forma.
 (String, int)? splitHostPort(String text) {
@@ -106,6 +97,13 @@ abstract class SessionEngine {
   /// Milisegundos sin recibir nada del otro extremo, o `null` si aún no se
   /// ha recibido nada.
   int? rxIdleMs();
+
+  /// Tasa de bits a la que se está enviando el audio (0 si aún no se envía o
+  /// va sin comprimir).
+  int audioBitrate();
+
+  /// Aplica en caliente los ajustes de audio que no requieren reconectar.
+  void applyAudioSettings(AppSettings settings);
 
   /// `true` si el audio va por un relay y no directo.
   bool get relayed;
@@ -259,13 +257,14 @@ class FfiSessionEngine implements SessionEngine {
       channels: settings.channels,
       frameDurationMs: _frameMs,
       maxBitrate: settings.maxBitrate,
-      // Lo que viaja es PCM: esta librería no trae el codificador Opus, y
-      // anunciar un codec que no se usa confundiría al otro extremo.
-      codecPreferred: AudioCodec.pcm.code,
+      // Voz comprimida: la librería codifica y decodifica por dentro, y la
+      // app sigue viendo PCM. Si el otro extremo no la admite, se negocia PCM.
+      codecPreferred: AudioCodec.opus.code,
       jitterBufferMs: settings.jitterBufferMs,
       mtu: settings.mtu,
       bindPort: bindPort,
     );
+    _session!.setNoiseSuppression(settings.noiseSuppression);
   }
 
   /// Arranca el audio de la sesión recién conectada.
@@ -356,6 +355,21 @@ class FfiSessionEngine implements SessionEngine {
 
   @override
   int? rxIdleMs() => _session?.rxIdleMs();
+
+  @override
+  int audioBitrate() => _session?.bitrate() ?? 0;
+
+  @override
+  void applyAudioSettings(AppSettings settings) {
+    final session = _session;
+    if (session == null) return;
+    try {
+      session.setNoiseSuppression(settings.noiseSuppression);
+      session.setBitrate(settings.maxBitrate);
+    } on NativeException {
+      // Sesión ya cerrada: los ajustes se aplicarán a la siguiente.
+    }
+  }
 
   @override
   bool get relayed {
@@ -593,6 +607,12 @@ class DemoSessionEngine implements SessionEngine {
 
   @override
   int? rxIdleMs() => null;
+
+  @override
+  int audioBitrate() => 0;
+
+  @override
+  void applyAudioSettings(AppSettings settings) {}
 
   @override
   bool get relayed => false;

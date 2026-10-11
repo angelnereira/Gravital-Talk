@@ -22,6 +22,7 @@ use std::ptr;
 use std::sync::{Arc, Mutex};
 
 mod audio;
+mod voice;
 
 use gravital_talk::{
     discover_local_addr, discover_public_addr, reach, Config as RustConfig, HandshakeMode,
@@ -51,6 +52,8 @@ struct SessionInner {
     /// En `Arc` porque los hilos de audio también hacen `block_on` sobre él.
     runtime: Arc<tokio::runtime::Runtime>,
     session: Arc<Session>,
+    /// Camino de audio: comprime y descomprime lo que viaja por la sesión.
+    pipeline: Arc<voice::Pipeline>,
     config: GsConfig,
     /// Puerto abierto en el router por UPnP, para cerrarlo al terminar.
     port_mapping: Mutex<Option<gravital_talk::upnp::PortMapping>>,
@@ -302,10 +305,18 @@ pub unsafe extern "C" fn gs_session_create(
     };
 
     let session = Arc::new(Session::new(transport, rust_cfg));
+    let pipeline = Arc::new(voice::Pipeline::new(
+        session.clone(),
+        cfg_c.sample_rate,
+        cfg_c.channels,
+        cfg_c.frame_duration_ms,
+        cfg_c.max_bitrate,
+    ));
     let inner = Box::new(SessionInner {
         audio: Mutex::new(None),
         runtime: Arc::new(runtime),
         session,
+        pipeline,
         config: *cfg_c,
         port_mapping: Mutex::new(None),
     });
@@ -395,11 +406,11 @@ pub unsafe extern "C" fn gs_session_send_audio(
     }
     let inner = unsafe { &*(handle as *mut SessionInner) };
     let slice = unsafe { std::slice::from_raw_parts(data, len) };
-    let session = inner.session.clone();
+    let pipeline = inner.pipeline.clone();
     let payload = slice.to_vec();
     match inner
         .runtime
-        .block_on(async move { session.send_audio(&payload).await })
+        .block_on(async move { pipeline.send_pcm(&payload).await })
     {
         Ok(()) => GsStatus::GS_OK,
         Err(e) => {
@@ -446,15 +457,15 @@ unsafe fn recv_audio_impl(
     }
     let inner = unsafe { &*(handle as *mut SessionInner) };
     let cap = unsafe { *len_inout };
-    let session = inner.session.clone();
+    let pipeline = inner.pipeline.clone();
 
     let recv = async move {
         match timeout_ms {
             Some(ms) => {
                 let dur = std::time::Duration::from_millis(u64::from(ms));
-                tokio::time::timeout(dur, session.recv_audio()).await
+                tokio::time::timeout(dur, pipeline.recv_pcm()).await
             }
-            None => Ok(session.recv_audio().await),
+            None => Ok(pipeline.recv_pcm().await),
         }
     };
 
@@ -466,13 +477,13 @@ unsafe fn recv_audio_impl(
         }
         Err(_) => return GsStatus::GS_ERR_TIMEOUT,
     };
-    let n = frame.payload.len();
+    let n = frame.len();
     if n > cap {
         unsafe { *len_inout = n };
         return GsStatus::GS_ERR_BUFFER_TOO_SMALL;
     }
     unsafe {
-        ptr::copy_nonoverlapping(frame.payload.as_ptr(), buf, n);
+        ptr::copy_nonoverlapping(frame.as_ptr(), buf, n);
         *len_inout = n;
     }
     GsStatus::GS_OK
@@ -488,6 +499,7 @@ pub unsafe extern "C" fn gs_session_close(handle: *mut GsSessionHandle) -> GsSta
     // El audio se para antes de cerrar: sus hilos leen y escriben la sesión.
     drop(inner.audio().take());
     inner.close_port_mapping();
+    inner.pipeline.reset();
     let session = inner.session.clone();
     let _ = inner.runtime.block_on(async move { session.close().await });
     GsStatus::GS_OK
@@ -1288,6 +1300,88 @@ pub unsafe extern "C" fn gs_session_connect_any(
     }
 }
 
+// ─── Códec de voz ──────────────────────────────────────────────────────
+
+/// Activa (`on != 0`) o desactiva la reducción de ruido del micrófono.
+///
+/// Activa por defecto. Sólo actúa cuando la sesión viaja comprimida (ver
+/// `gs_session_codec`) a 48 kHz.
+///
+/// # Safety
+/// `handle` debe ser un handle válido de `gs_session_create`.
+#[no_mangle]
+pub unsafe extern "C" fn gs_session_set_noise_suppression(
+    handle: *mut GsSessionHandle,
+    on: c_int,
+) -> GsStatus {
+    if handle.is_null() {
+        return GsStatus::GS_ERR_NULL_POINTER;
+    }
+    // SAFETY: `handle` no es nulo y viene de `gs_session_create` (contrato).
+    let inner = unsafe { &*(handle as *mut SessionInner) };
+    inner.pipeline.set_noise_suppression(on != 0);
+    GsStatus::GS_OK
+}
+
+/// Fija el tope de la tasa de bits del audio, en bits por segundo.
+///
+/// Se acota a 24 000–128 000. La tasa real baja por debajo del tope si la red
+/// pierde paquetes y vuelve a subir cuando se recupera.
+///
+/// # Safety
+/// `handle` debe ser un handle válido de `gs_session_create`.
+#[no_mangle]
+pub unsafe extern "C" fn gs_session_set_bitrate(
+    handle: *mut GsSessionHandle,
+    bitrate: u32,
+) -> GsStatus {
+    if handle.is_null() {
+        return GsStatus::GS_ERR_NULL_POINTER;
+    }
+    // SAFETY: `handle` no es nulo y viene de `gs_session_create` (contrato).
+    let inner = unsafe { &*(handle as *mut SessionInner) };
+    inner.pipeline.set_bitrate_cap(bitrate);
+    GsStatus::GS_OK
+}
+
+/// Tasa de bits a la que se está enviando el audio ahora mismo, o `0` si
+/// viaja PCM sin comprimir (o aún no se ha enviado nada).
+///
+/// # Safety
+/// `handle` debe ser un handle válido de `gs_session_create`.
+#[no_mangle]
+pub unsafe extern "C" fn gs_session_bitrate(handle: *mut GsSessionHandle) -> u32 {
+    if handle.is_null() {
+        return 0;
+    }
+    // SAFETY: `handle` no es nulo y viene de `gs_session_create` (contrato).
+    let inner = unsafe { &*(handle as *mut SessionInner) };
+    inner.pipeline.current_bitrate()
+}
+
+/// Códec negociado para la sesión: `1` = PCM sin comprimir, `2` = Opus,
+/// `0` = aún sin negociar.
+///
+/// Con Opus, `gs_session_send_audio` y `gs_session_recv_audio` siguen
+/// trabajando en PCM: la compresión ocurre dentro. Un `recv` puede devolver
+/// más de un frame (hasta cuatro) cuando reconstruye audio perdido.
+///
+/// # Safety
+/// `handle` debe ser un handle válido de `gs_session_create`.
+#[no_mangle]
+pub unsafe extern "C" fn gs_session_codec(handle: *mut GsSessionHandle) -> c_int {
+    if handle.is_null() {
+        return 0;
+    }
+    // SAFETY: `handle` no es nulo y viene de `gs_session_create` (contrato).
+    let inner = unsafe { &*(handle as *mut SessionInner) };
+    if inner.pipeline.compressed() {
+        2
+    } else {
+        c_int::from(inner.session.negotiated_codec().min(1))
+    }
+}
+
 // ─── Audio nativo ──────────────────────────────────────────────────────
 
 /// Estado del audio nativo de una sesión.
@@ -1346,7 +1440,7 @@ fn audio_start(inner: &SessionInner) -> GsStatus {
     // `gs_audio_stats` no debe quedarse esperando mientras tanto.
     match audio::Engine::start(
         inner.runtime.clone(),
-        inner.session.clone(),
+        inner.pipeline.clone(),
         inner.config.sample_rate,
         inner.config.channels,
         inner.config.frame_duration_ms,
@@ -1563,6 +1657,148 @@ mod tests {
         assert_eq!(unsafe { gs_audio_stop(handle) }, GsStatus::GS_OK);
 
         unsafe { gs_session_destroy(handle) };
+    }
+
+    /// Dos sesiones FFI conectadas por loopback con la configuración dada.
+    fn connected_pair(cfg: &GsConfig) -> (*mut GsSessionHandle, *mut GsSessionHandle) {
+        let bind = CString::new("127.0.0.1").unwrap();
+        let (mut host, mut guest) = (std::ptr::null_mut(), std::ptr::null_mut());
+        unsafe {
+            assert_eq!(
+                gs_session_create(cfg, bind.as_ptr(), 0, &mut host),
+                GsStatus::GS_OK
+            );
+            assert_eq!(
+                gs_session_create(cfg, bind.as_ptr(), 0, &mut guest),
+                GsStatus::GS_OK
+            );
+        }
+        let mut port = 0u16;
+        unsafe { gs_session_local_port(host, &mut port) };
+
+        let host_addr = host as usize;
+        let accepting = std::thread::spawn(move || unsafe {
+            gs_session_accept_any(host_addr as *mut GsSessionHandle)
+        });
+        let st = unsafe { gs_session_connect(guest, bind.as_ptr(), port) };
+        assert_eq!(st, GsStatus::GS_OK);
+        assert_eq!(accepting.join().unwrap(), GsStatus::GS_OK);
+        (host, guest)
+    }
+
+    fn voice_config(codec: u8) -> GsConfig {
+        GsConfig {
+            sample_rate: 48_000,
+            channels: 1,
+            frame_duration_ms: 20,
+            max_bitrate: 64_000,
+            codec_preferred: codec,
+            capability_flags: 0,
+            jitter_buffer_ms: 60,
+            mtu: 1200,
+        }
+    }
+
+    /// Un frame de 20 ms de tono a 440 Hz, en PCM16 LE.
+    fn tone_frame(phase: &mut f32) -> Vec<u8> {
+        let mut out = Vec::with_capacity(1920);
+        for _ in 0..960 {
+            let s = (phase.sin() * 9000.0) as i16;
+            *phase += core::f32::consts::TAU * 440.0 / 48_000.0;
+            out.extend_from_slice(&s.to_le_bytes());
+        }
+        out
+    }
+
+    fn rms(pcm: &[u8]) -> f64 {
+        let samples: Vec<f64> = pcm
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|b| f64::from(i16::from_le_bytes(*b)))
+            .collect();
+        (samples.iter().map(|s| s * s).sum::<f64>() / samples.len().max(1) as f64).sqrt()
+    }
+
+    #[test]
+    fn con_opus_negociado_el_embebedor_sigue_viendo_pcm() {
+        let cfg = voice_config(2);
+        let (host, guest) = connected_pair(&cfg);
+        assert_eq!(unsafe { gs_session_codec(guest) }, 2);
+        assert_eq!(unsafe { gs_session_codec(host) }, 2);
+        // Con un tono puro el reductor de ruido lo trataría como ruido.
+        unsafe { gs_session_set_noise_suppression(guest, 0) };
+
+        let mut phase = 0.0;
+        let mut buf = vec![0u8; 8192];
+        let mut level = 0.0;
+        let before = unsafe {
+            let mut m = GsMetrics::default();
+            gs_session_metrics(guest, &mut m);
+            m.bytes_sent
+        };
+        for i in 0..40 {
+            let frame = tone_frame(&mut phase);
+            assert_eq!(
+                unsafe { gs_session_send_audio(guest, frame.as_ptr(), frame.len()) },
+                GsStatus::GS_OK
+            );
+            let mut len = buf.len();
+            let st =
+                unsafe { gs_session_recv_audio_timeout(host, buf.as_mut_ptr(), &mut len, 1000) };
+            assert_eq!(st, GsStatus::GS_OK, "frame {i}");
+            // Lo que sale es PCM del mismo tamaño que entró.
+            assert_eq!(len, 1920, "frame {i}");
+            if i >= 20 {
+                level = rms(&buf[..len]);
+            }
+        }
+        assert!((4000.0..9000.0).contains(&level), "rms {level}");
+
+        // Y por la red ha viajado una fracción: 40 frames PCM son 76 800 B.
+        let sent = unsafe {
+            let mut m = GsMetrics::default();
+            gs_session_metrics(guest, &mut m);
+            m.bytes_sent - before
+        };
+        assert!(sent < 20_000, "bytes enviados por 40 frames: {sent}");
+        assert!(unsafe { gs_session_bitrate(guest) } <= 64_000);
+
+        unsafe {
+            gs_session_destroy(host);
+            gs_session_destroy(guest);
+        }
+    }
+
+    #[test]
+    fn un_peer_que_pide_pcm_recibe_pcm_aunque_el_frame_no_quepa_en_un_paquete() {
+        // 20 ms de PCM son 1920 B y el tope por paquete es 1156 B. Antes eso
+        // hacía fallar cada envío; ahora se parte en dos y llega entero.
+        let cfg = voice_config(1);
+        let (host, guest) = connected_pair(&cfg);
+        assert_eq!(unsafe { gs_session_codec(guest) }, 1);
+
+        let mut phase = 0.0;
+        let frame = tone_frame(&mut phase);
+        assert_eq!(
+            unsafe { gs_session_send_audio(guest, frame.as_ptr(), frame.len()) },
+            GsStatus::GS_OK
+        );
+        let mut received = Vec::new();
+        let mut buf = vec![0u8; 8192];
+        while received.len() < frame.len() {
+            let mut len = buf.len();
+            let st =
+                unsafe { gs_session_recv_audio_timeout(host, buf.as_mut_ptr(), &mut len, 1000) };
+            assert_eq!(st, GsStatus::GS_OK);
+            received.extend_from_slice(&buf[..len]);
+        }
+        assert_eq!(received, frame);
+
+        unsafe {
+            gs_session_destroy(host);
+            gs_session_destroy(guest);
+        }
     }
 
     #[test]
