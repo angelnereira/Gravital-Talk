@@ -828,3 +828,40 @@ async fn un_anuncio_de_direcciones_de_un_tercero_se_ignora() {
         "la víctima no debe recibir sondas"
     );
 }
+
+#[tokio::test(start_paused = true)]
+async fn un_extremo_callado_manda_latidos_aunque_se_lea_con_plazo_corto() {
+    // La app lee con un timeout de 20 ms. Los latidos los manda el lazo de
+    // recepción, así que tienen que salir también con ese patrón de llamada:
+    // sin ellos, el otro extremo da el camino por caído cada pocos segundos.
+    let net = Arc::new(Net::default());
+    let host_t = net.join("203.0.113.1:40000", Mapping::Open, Filter::PortRestricted);
+    let guest_t = net.join("203.0.113.2:50000", Mapping::Open, Filter::PortRestricted);
+    let host_addr = host_t.public();
+    let (joined, host, guest) = pair(host_t, guest_t, None, vec![host_addr]).await;
+    joined.expect("conexión inicial");
+
+    for session in [host.clone(), guest.clone()] {
+        tokio::spawn(async move {
+            loop {
+                let _ = timeout(Duration::from_millis(20), session.recv_audio()).await;
+            }
+        });
+    }
+    net.tap.lock().unwrap().clear();
+    tokio::time::sleep(Duration::from_secs(5)).await;
+
+    // 24 de cabecera + 16 de tag + 4 de cola.
+    let beats = net
+        .tap
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(bytes, dest)| *dest == host_addr && bytes.len() == 44)
+        .count();
+    assert!(
+        (4..=6).contains(&beats),
+        "latidos del invitado en 5 s: {beats}"
+    );
+    assert!(host.rx_idle_ms().is_some_and(|ms| ms < 1_500));
+}
