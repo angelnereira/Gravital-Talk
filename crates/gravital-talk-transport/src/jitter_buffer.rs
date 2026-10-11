@@ -128,7 +128,24 @@ impl JitterBuffer {
             }
             // Demasiado lejos en el futuro: no cabe en la ventana.
             if frame.sequence.wrapping_sub(next) >= self.capacity {
-                return false;
+                // Si aún hay audio pendiente, el que no cabe es este: el
+                // emisor va más rápido de lo que se consume, y lo pendiente
+                // debe sonar antes.
+                if self
+                    .slots
+                    .iter()
+                    .any(|s| s.occupied.load(Ordering::Acquire))
+                {
+                    return false;
+                }
+                // Con el buffer vacío es otra cosa: entre lo que se esperaba y
+                // esto se ha perdido más de una ventana entera (un corte, un
+                // cambio de red). Lo que falta ya no va a llegar a tiempo de
+                // sonar, así que se retoma desde aquí. Rechazarlo dejaba al
+                // receptor avanzando de frame perdido en frame perdido
+                // mientras descartaba todo el audio nuevo: segundos de
+                // silencio tras un corte de décimas.
+                self.resync(frame.sequence);
             }
         }
 
@@ -148,6 +165,41 @@ impl JitterBuffer {
         slot.sequence.store(frame.sequence, Ordering::Release);
         slot.occupied.store(true, Ordering::Release);
         true
+    }
+
+    /// `true` si hay algún frame recibido aún sin entregar.
+    #[must_use]
+    pub fn has_pending(&self) -> bool {
+        self.slots
+            .iter()
+            .any(|s| s.occupied.load(Ordering::Acquire))
+    }
+
+    /// Pasa a esperar `sequence`. Sólo con el buffer vacío.
+    fn resync(&self, sequence: u32) {
+        self.next_seq.store(sequence, Ordering::Release);
+    }
+
+    /// Avanza el cursor hasta el primer frame que sí está en el buffer.
+    ///
+    /// Es lo que hay que hacer cuando se da por perdido lo que se esperaba:
+    /// saltar de uno en uno hace esperar un plazo entero por cada frame de
+    /// una ráfaga perdida. Si no hay ninguno, avanza una posición.
+    pub fn skip_to_available(&self) {
+        if !self.primed.load(Ordering::Acquire) {
+            return;
+        }
+        let next = self.next_seq.load(Ordering::Acquire);
+        for ahead in 1..self.capacity {
+            let seq = next.wrapping_add(ahead);
+            let slot = &self.slots[(seq & self.mask) as usize];
+            if slot.occupied.load(Ordering::Acquire) && slot.sequence.load(Ordering::Acquire) == seq
+            {
+                self.skip(ahead);
+                return;
+            }
+        }
+        self.skip(1);
     }
 
     /// Extrae el frame correspondiente a `next_sequence`. Si no está
@@ -182,7 +234,7 @@ impl JitterBuffer {
             return Some(frame);
         }
         if now_us >= deadline_us {
-            self.skip(1);
+            self.skip_to_available();
         }
         None
     }
@@ -219,6 +271,40 @@ impl core::fmt::Debug for JitterBuffer {
 mod tests {
     use super::*;
 
+    fn frame_at(sequence: u32) -> Frame {
+        Frame {
+            sequence,
+            timestamp: 0,
+            payload: bytes::Bytes::from_static(b"x"),
+        }
+    }
+
+    #[test]
+    fn tras_un_corte_largo_se_retoma_desde_el_audio_nuevo() {
+        let jb = JitterBuffer::new(16);
+        assert!(jb.push(frame_at(10)));
+        assert_eq!(jb.pop().unwrap().sequence, 10);
+        // Se pierden cientos de frames (un cambio de red): el siguiente que
+        // llega tiene que sonar, no rechazarse por "demasiado futuro".
+        assert!(jb.push(frame_at(500)));
+        assert_eq!(jb.pop().unwrap().sequence, 500);
+        // Y lo que quedara de antes del corte ya no se entrega.
+        assert!(!jb.push(frame_at(12)));
+    }
+
+    #[test]
+    fn una_rafaga_perdida_se_salta_de_una_vez() {
+        let jb = JitterBuffer::new(16);
+        assert!(jb.push(frame_at(0)));
+        assert_eq!(jb.pop().unwrap().sequence, 0);
+        // Se pierden 1..=5 y llega el 6.
+        assert!(jb.push(frame_at(6)));
+        assert!(jb.pop().is_none());
+        // Vencido el plazo, un solo salto lleva hasta el 6: no cinco plazos.
+        assert!(jb.pop_with_deadline(10, 5).is_none());
+        assert_eq!(jb.pop().unwrap().sequence, 6);
+    }
+
     fn frame(seq: u32) -> Frame {
         Frame {
             sequence: seq,
@@ -253,11 +339,16 @@ mod tests {
     }
 
     #[test]
-    fn rejects_too_far_future() {
+    fn far_future_resyncs_instead_of_stalling() {
         let jb = JitterBuffer::new(16);
         jb.push(frame(100));
-        // 100 + 16 = 116 queda fuera de la ventana.
+        // 100 + 16 = 116 queda fuera de la ventana. Con el 100 aún pendiente
+        // se rechaza: lo pendiente suena primero.
         assert!(!jb.push(frame(200)));
+        assert_eq!(jb.pop().unwrap().sequence, 100);
+        // Ya vacío, el mismo salto es un corte: se retoma desde el nuevo.
+        assert!(jb.push(frame(200)));
+        assert_eq!(jb.pop().unwrap().sequence, 200);
     }
 
     #[test]

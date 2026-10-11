@@ -9,8 +9,8 @@ import 'screens/home_screen.dart';
 import 'core/routes.dart';
 import 'screens/onboarding_screen.dart';
 import 'screens/pairing_screen.dart';
-import 'screens/session_screen.dart';
 import 'services/launch_links.dart';
+import 'services/pairing_uri.dart';
 import 'services/event_log.dart';
 import 'services/room_events.dart';
 import 'services/session_controller.dart';
@@ -108,6 +108,18 @@ class _GravitalTalkAppState extends State<GravitalTalkApp> {
   /// hablar.
   Future<void> _openInvite(String link) async {
     final c = widget.controller;
+    // Una respuesta a la invitación no abre una sala: se le entrega al
+    // anfitrión que la está esperando.
+    if (PairingAnswer.tryParse(link) != null) {
+      final ok = await c.acceptAnswer(link);
+      toastification.show(
+        type: ok ? ToastificationType.success : ToastificationType.error,
+        title: Text(ok ? 'Respuesta recibida' : 'No se pudo usar la respuesta'),
+        description: Text(ok ? 'Buscando camino hacia el invitado…' : c.error ?? ''),
+        autoCloseDuration: const Duration(seconds: 4),
+      );
+      return;
+    }
     if (c.busy || c.isLive) {
       toastification.show(
         title: const Text('Ya estás en una sala'),
@@ -117,20 +129,15 @@ class _GravitalTalkAppState extends State<GravitalTalkApp> {
       return;
     }
     if (_showOnboarding) _finishOnboarding();
-    final ok = await c.joinFromUri(link);
+    // Se entra por la misma pantalla que al escanear: muestra el progreso y,
+    // si hace falta, el código de respuesta. Ella misma pasa a la de hablar
+    // al conectar y enseña el error si falla.
     final nav = _navigator.currentState;
     if (nav == null) return;
-    if (ok && c.isLive) {
-      nav.popUntil((route) => route.isFirst);
-      await nav.push(ForwardRoute(builder: (_) => const SessionScreen()));
-    } else if (c.error != null) {
-      toastification.show(
-        type: ToastificationType.error,
-        title: const Text('No se pudo entrar en la sala'),
-        description: Text(c.error!),
-        autoCloseDuration: const Duration(seconds: 6),
-      );
-    }
+    nav.popUntil((route) => route.isFirst);
+    await nav.push(ForwardRoute(
+      builder: (_) => PairingScreen(mode: PairingMode.join, invite: link),
+    ));
   }
 
   /// Termina el onboarding y muestra la home.

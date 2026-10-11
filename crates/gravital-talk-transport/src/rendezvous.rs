@@ -80,6 +80,10 @@ const KIND_REGISTER: u8 = 1;
 const KIND_PEERS: u8 = 2;
 const KIND_PUNCH: u8 = 3;
 const KIND_PUNCH_ACK: u8 = 4;
+const KIND_ADDRS: u8 = 5;
+
+/// Direcciones que caben en un anuncio.
+pub const MAX_ADVERTISED: usize = 4;
 const FAMILY_V4: u8 = 4;
 const FAMILY_V6: u8 = 6;
 
@@ -108,6 +112,24 @@ impl RoomKey {
     }
 }
 
+impl RoomKey {
+    /// `session_id` con el que los dos extremos se encuentran en el relay
+    /// cuando el audio tiene que pasar por él.
+    ///
+    /// Sale de la clave para que ninguno tenga que comunicárselo al otro: el
+    /// relay enruta por `session_id`, y los dos tienen que presentarse con el
+    /// mismo desde el primer paquete. Nunca es cero, que el relay descarta.
+    #[must_use]
+    pub const fn relay_session_id(&self) -> u32 {
+        let id = u32::from_be_bytes([self.0[0], self.0[1], self.0[2], self.0[3]]);
+        if id == 0 {
+            1
+        } else {
+            id
+        }
+    }
+}
+
 /// Un mensaje de encuentro ya interpretado.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Message {
@@ -123,6 +145,9 @@ pub enum Message {
     Punch { nonce: [u8; 8] },
     /// Confirmación de una sonda: el camino funciona en los dos sentidos.
     PunchAck { nonce: [u8; 8] },
+    /// "Estas son mis direcciones": lo manda cada extremo al otro con la
+    /// sesión en marcha, para que sepa por dónde buscarlo si cambia de red.
+    Addrs { addrs: Vec<SocketAddr> },
 }
 
 /// `true` si el datagrama empieza como un mensaje de encuentro.
@@ -146,6 +171,7 @@ impl Message {
             Self::Peers { .. } => KIND_PEERS,
             Self::Punch { .. } => KIND_PUNCH,
             Self::PunchAck { .. } => KIND_PUNCH_ACK,
+            Self::Addrs { .. } => KIND_ADDRS,
         });
         out.extend_from_slice(&key.0);
         match self {
@@ -159,6 +185,13 @@ impl Message {
                 }
             }
             Self::Punch { nonce } | Self::PunchAck { nonce } => out.extend_from_slice(nonce),
+            Self::Addrs { addrs } => {
+                let addrs = &addrs[..addrs.len().min(MAX_ADVERTISED)];
+                out.push(addrs.len() as u8);
+                for addr in addrs {
+                    put_addr(&mut out, *addr);
+                }
+            }
         }
         out
     }
@@ -196,6 +229,17 @@ impl Message {
             KIND_PUNCH_ACK => Self::PunchAck {
                 nonce: body.get(..8)?.try_into().ok()?,
             },
+            KIND_ADDRS => {
+                let (&count, mut rest) = body.split_first()?;
+                if usize::from(count) > MAX_ADVERTISED {
+                    return None;
+                }
+                let mut addrs = Vec::with_capacity(usize::from(count));
+                for _ in 0..count {
+                    addrs.push(take_addr(&mut rest)?);
+                }
+                Self::Addrs { addrs }
+            }
             _ => return None,
         };
         Some((RoomKey(key), msg))
@@ -361,6 +405,9 @@ mod tests {
             },
             Message::Punch { nonce: [7; 8] },
             Message::PunchAck { nonce: [9; 8] },
+            Message::Addrs {
+                addrs: vec![addr("192.168.0.13:40000"), addr("203.0.113.7:40001")],
+            },
         ];
         for msg in cases {
             let bytes = msg.encode(key);

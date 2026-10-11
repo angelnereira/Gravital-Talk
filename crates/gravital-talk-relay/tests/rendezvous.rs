@@ -83,9 +83,53 @@ async fn el_relay_presenta_a_los_extremos_y_no_enruta_el_audio() {
         .unwrap();
     assert_eq!(&got.payload[..], &frame[..]);
 
-    // Y el relay no ha enrutado nada: sólo presentó.
-    assert_eq!(router.active_sessions(), 0);
+    // Y el relay no ha enrutado nada: sólo presentó. El anfitrión se dio de
+    // alta en la ruta por si hacía falta reenviar, pero el invitado encontró
+    // camino directo y nunca llegó a ella.
+    assert_eq!(router.total_peers(), 1);
     assert_eq!(router.rendezvous().rooms(), 1);
+}
+
+#[tokio::test]
+async fn sin_camino_directo_el_audio_pasa_por_el_relay() {
+    // `relay_only` fuerza lo que en una red real provoca el NAT simétrico:
+    // que ningún camino directo sirva.
+    let (relay, router) = spawn_relay().await;
+    let host = bind_session(relay).await;
+    let guest = bind_session(relay).await;
+    guest.set_relay_only(true);
+
+    let accepting = {
+        let host = host.clone();
+        tokio::spawn(async move { host.handshake_open().await })
+    };
+    // Dar tiempo a que el anfitrión se dé de alta en la ruta.
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    timeout(Duration::from_secs(15), guest.handshake_any(&[]))
+        .await
+        .expect("el invitado no debe colgarse")
+        .expect("debe conectar por el relay");
+    timeout(Duration::from_secs(5), accepting)
+        .await
+        .expect("el anfitrión debe terminar")
+        .unwrap()
+        .expect("handshake del anfitrión");
+
+    // Cada uno habla con el relay, no con el otro.
+    assert_eq!(guest.peers().await, vec![relay]);
+    assert_eq!(host.peers().await, vec![relay]);
+    assert!(guest.is_relayed().await);
+
+    for (from, to) in [(&guest, &host), (&host, &guest)] {
+        let frame = vec![0x33u8; 960];
+        from.send_audio(&frame).await.unwrap();
+        let got = timeout(Duration::from_secs(3), to.recv_audio())
+            .await
+            .expect("el audio debe llegar por el relay")
+            .unwrap();
+        assert_eq!(&got.payload[..], &frame[..]);
+    }
+    assert_eq!(router.total_peers(), 2);
 }
 
 #[tokio::test]

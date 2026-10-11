@@ -174,6 +174,17 @@ cargo test -p gravital-talk-transport --test nat_punch   # red simulada, sin pri
   su puerto no es el de la sala.
 - Si cambias cómo se sondan o eligen los caminos, corre las dos pruebas: la red
   simulada no reproduce el estado de conntrack, y el NAT del kernel sí.
+- Sin servidor, lo que conecta dos redes distintas es el intercambio
+  invitación ↔ respuesta (`PairingAnswer`, `Session::add_path_hints`) más el
+  barrido de puertos. Para reproducirlo con el CLI: `gs peer --bind 0.0.0.0
+  --hint IP:PUERTO` en un lado y `gs peer --host IP --port PUERTO` en el otro.
+- Para clasificar un NAT: STUN desde el **mismo puerto local** a varios
+  servidores de IP distinta. Mismo puerto público en todos = cono; distinto =
+  simétrico. En el teléfono, con `toybox nc -u -p PUERTO` por adb.
+- `recv_audio` es el dueño del socket y quien mantiene el camino (latidos,
+  sondas de recuperación, plazo de pérdida). Lo que tenga que sobrevivir entre
+  llamadas vive en `Session`, no en variables locales: quien lo llama suele
+  usar un timeout corto y cancela el futuro.
 
 ## REGLA: cada cambio deja un APK instalable en `outputs/`
 

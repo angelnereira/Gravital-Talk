@@ -6,6 +6,38 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
 
 ### Added
 
+**Conexión directa entre redes distintas, sin servidor**
+- Medido con una red fija tras CGNAT y un móvil en LTE con NAT simétrico:
+  conectan directo, sin ningún servidor de por medio.
+- **Código de respuesta.** Al unirse desde otra red, el invitado enseña un
+  código con su dirección; el anfitrión lo lee ("Escanear su respuesta" o
+  pegándolo) y los dos se abren paso el uno hacia el otro. La invitación
+  lleva al invitado hasta el anfitrión; la respuesta hace el camino inverso.
+- **Barrido de puertos.** Las redes móviles suelen usar un puerto público
+  distinto para cada destino, pero dentro de una ventana estrecha. Los dos
+  extremos sondan los puertos vecinos del conocido y aprenden el real.
+- **Apertura de puerto en el router (UPnP).** Si el router lo admite y tiene
+  IP pública, la sala es alcanzable desde cualquier red sin más pasos. El
+  doble NAT se detecta y no se publica una dirección que no funcionaría.
+- **Cambio de red en caliente.** Si un dispositivo pasa de wifi a datos (o
+  cambia de IP), la sesión sigue: su siguiente latido, autenticado, le dice al
+  otro dónde está ahora. Si el camino cae, se prueban las demás direcciones
+  conocidas. La pantalla avisa mientras se recupera.
+- **Relay como último recurso, opcional.** Con un `gs-relay` propio
+  configurado, si ningún camino directo contesta el audio pasa por él, cifrado
+  de extremo a extremo. Es lo único que resuelve dos redes con NAT simétrico a
+  la vez. Sin configurar, no se usa ningún servidor.
+- `gs peer --upnp` y `--hint IP:PUERTO`.
+
+**Permisos en Ajustes**
+- Ajustes muestra el estado del micrófono y la cámara, para qué se usa cada
+  uno y un botón para concederlo. Si el sistema ya no deja preguntar, lleva a
+  sus ajustes. Antes, sin micrófono la app conectaba y no se oía nada, sin
+  decir por qué.
+- Los permisos van declarados en el manifest de la app en vez de depender de
+  los que aporte cada plugin.
+- Pantalla de Ajustes rehecha con el mismo vidrio que el resto.
+
 **Conexión entre redes distintas: perforación de NAT**
 - Hasta ahora una sala sólo servía dentro de la misma red. Con un **servidor de
   encuentro** dos dispositivos tras NAT conectan directo: el servidor le dice a
@@ -74,6 +106,20 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
 - La sala usa un puerto libre que elige el sistema, no el 9000 fijo.
 
 ### Fixed
+
+**Un paquete perdido paraba el audio en el móvil**
+- El plazo para dar un frame por perdido era local a cada lectura. La app lee
+  cada 20 ms y el plazo es de 180 ms, así que no vencía nunca: tras una sola
+  pérdida no recuperable, el audio se quedaba esperando para siempre. En wifi
+  sin pérdidas no se veía.
+- Tras un corte de red, el buffer rechazaba todo el audio nuevo por "demasiado
+  futuro" y tardaba segundos en ponerse al día. Ahora retoma desde lo nuevo.
+
+**Un handshake reenviado rompía la sesión en curso**
+- Quien capturase el primer mensaje del handshake podía reenviarlo desde otra
+  dirección: la sesión lo trataba como un participante nuevo, rehacía el
+  handshake y sustituía sus claves, dejando la conversación sin descifrar.
+  Admitir participantes nuevos pasa a ser opt-in (`Session::set_multi_peer`).
 
 **El QR de la sala no llevaba a ningún sitio**
 - Publicaba `host=red-local&udp=0`: ni una dirección ni un puerto. Ahora lleva

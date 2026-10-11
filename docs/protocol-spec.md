@@ -110,6 +110,14 @@ Si el `session_id` no coincide en `CONFIRM`, el servidor descarta el paquete sil
 - Cada extremo mantiene un `sequence` monotónicamente creciente (`u32`, envuelve cada 2³²).
 - `timestamp` es microsegundos desde la creación de la sesión (`u64`).
 - Un `HEARTBEAT` se envía cada 1 s si no ha habido otro tráfico.
+- Con la sesión establecida, el `HEARTBEAT` va **autenticado**: lleva el flag
+  `ENCRYPTED` y, como payload, el tag AEAD (16 B) de un cuerpo vacío, con el
+  header como AAD y el nonce habitual (`sequence` + `session_id`). Quien lo
+  recibe de una dirección desconocida puede así comprobar que viene del peer de
+  la sesión y actualizar su dirección (cambio de red). Un receptor que no
+  conozca esta variante lo trata como un `HEARTBEAT` normal: el payload no se
+  interpretaba. Detalle en `docs/pairing.md`, "Cambio de red con la sesión en
+  marcha".
 - Si no se recibe nada durante 10 s, la sesión se cierra con `ERROR` código `PEER_TIMEOUT`.
 
 ## 8. Fragmentación

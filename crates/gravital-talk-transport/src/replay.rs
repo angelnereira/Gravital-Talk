@@ -20,7 +20,7 @@ const WINDOW: usize = BITMAP_WORDS * 64;
 /// Convención interna: el bit de la posición `0` corresponde a la secuencia
 /// más reciente (`highest`); las anteriores ocupan posiciones crecientes.
 /// Avanzar el `highest` desplaza el bitmap a la izquierda.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ReplayWindow {
     highest: u32,
     /// `false` hasta el primer paquete: cualquier secuencia inicial es válida.

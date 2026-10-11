@@ -46,6 +46,12 @@ enum Filter {
 }
 
 struct Node {
+    /// Segunda dirección por la que también se llega a este extremo (su IP
+    /// en otra red).
+    alias: Option<SocketAddr>,
+    /// Con qué dirección propia se habló por última vez con cada peer: las
+    /// respuestas salen de la misma por la que entró la pregunta.
+    reached_via: HashMap<SocketAddr, SocketAddr>,
     inbox: mpsc::UnboundedSender<Datagram>,
     mapping: Mapping,
     filter: Filter,
@@ -61,6 +67,12 @@ struct Node {
 #[derive(Default)]
 struct Net {
     nodes: Mutex<Vec<Node>>,
+    /// Todo lo entregado, para poder reinyectarlo (ataques de repetición).
+    tap: Mutex<Vec<(Vec<u8>, SocketAddr)>>,
+    /// Mientras esté activo, la red se traga todo lo que se envía.
+    blackout: std::sync::atomic::AtomicBool,
+    /// Destinos a los que ya no se llega (aunque desde ellos sí se reciba).
+    dead_destinations: Mutex<HashSet<SocketAddr>>,
 }
 
 impl Net {
@@ -68,6 +80,8 @@ impl Net {
         let (tx, rx) = mpsc::unbounded_channel();
         let mut nodes = self.nodes.lock().unwrap();
         nodes.push(Node {
+            alias: None,
+            reached_via: HashMap::new(),
             inbox: tx,
             mapping,
             filter,
@@ -82,14 +96,32 @@ impl Net {
         })
     }
 
+    /// Cambia de red a un extremo: dirección pública nueva y un NAT que aún
+    /// no ha visto salir nada.
+    fn rehome(&self, id: usize, public: &str) {
+        let mut nodes = self.nodes.lock().unwrap();
+        nodes[id].public = public.parse().unwrap();
+        nodes[id].sent_to.clear();
+        nodes[id].ports.clear();
+    }
+
     fn deliver(&self, from: usize, bytes: &[u8], dest: SocketAddr) {
+        if self.blackout.load(std::sync::atomic::Ordering::Acquire)
+            || self.dead_destinations.lock().unwrap().contains(&dest)
+        {
+            return;
+        }
         let mut nodes = self.nodes.lock().unwrap();
 
         // Dirección con la que sale este datagrama.
         let sender = &mut nodes[from];
         sender.sent_to.insert(dest);
         let source = match sender.mapping {
-            Mapping::Open | Mapping::Cone => sender.public,
+            Mapping::Open | Mapping::Cone => sender
+                .reached_via
+                .get(&dest)
+                .copied()
+                .unwrap_or(sender.public),
             Mapping::Symmetric => {
                 let next = sender.public.port() + 1 + sender.ports.len() as u16;
                 let port = *sender.ports.entry(dest).or_insert(next);
@@ -99,7 +131,7 @@ impl Net {
 
         // A quién pertenece la dirección de destino.
         let target = nodes.iter().position(|n| match n.mapping {
-            Mapping::Open | Mapping::Cone => n.public == dest,
+            Mapping::Open | Mapping::Cone => n.public == dest || n.alias == Some(dest),
             Mapping::Symmetric => {
                 n.public.ip() == dest.ip() && n.ports.values().any(|p| *p == dest.port())
             }
@@ -119,6 +151,13 @@ impl Net {
         };
         if allowed {
             let _ = node.inbox.send((bytes.to_vec(), source));
+            self.tap.lock().unwrap().push((bytes.to_vec(), dest));
+            // Sólo importa cuando entró por la segunda dirección.
+            if nodes[target].alias == Some(dest) {
+                nodes[target].reached_via.insert(source, dest);
+            } else {
+                nodes[target].reached_via.remove(&source);
+            }
         }
         drop(nodes);
     }
@@ -133,6 +172,10 @@ struct NatTransport {
 impl NatTransport {
     fn public(&self) -> SocketAddr {
         self.net.nodes.lock().unwrap()[self.id].public
+    }
+
+    fn rehome(&self, public: &str) {
+        self.net.rehome(self.id, public);
     }
 }
 
@@ -311,10 +354,83 @@ async fn un_lado_simetrico_conecta_si_el_otro_no_filtra_por_puerto() {
     assert_audio_flows(&host, &guest).await;
 }
 
+/// Servidor de encuentro que además reenvía, como `gs-relay`: lo que llega
+/// con un `session_id` se manda a los demás extremos vistos con ese mismo id.
+fn spawn_relay(net: &Arc<Net>) -> SocketAddr {
+    use gravital_talk_core::packet::PacketView;
+    let transport = net.join(SERVER, Mapping::Open, Filter::PortRestricted);
+    let registry = Registry::new(64);
+    tokio::spawn(async move {
+        let mut routes: HashMap<u32, Vec<SocketAddr>> = HashMap::new();
+        let mut buf = [0u8; 1500];
+        while let Ok((n, from)) = transport.recv(&mut buf).await {
+            if gravital_talk_transport::rendezvous::is_rendezvous(&buf[..n]) {
+                if let Some(reply) = registry.handle(&buf[..n], from) {
+                    let _ = transport.send_to(&reply, from).await;
+                }
+                continue;
+            }
+            let Ok(view) = PacketView::decode(&buf[..n]) else {
+                continue;
+            };
+            let peers = routes.entry(view.header().session_id).or_default();
+            if !peers.contains(&from) {
+                peers.push(from);
+            }
+            for peer in peers.iter().filter(|p| **p != from) {
+                let _ = transport.send_to(&buf[..n], *peer).await;
+            }
+        }
+    });
+    SERVER.parse().unwrap()
+}
+
 #[tokio::test(start_paused = true)]
-async fn dos_lados_simetricos_no_conectan() {
-    // El límite conocido: ningún extremo puede predecir el puerto del otro.
-    // Aquí hace falta que el relay reenvíe el audio.
+async fn sin_servidor_un_movil_y_una_red_fija_conectan_intercambiando_direcciones() {
+    // El caso medido con redes reales: un extremo tras NAT simétrico (datos
+    // móviles) y el otro tras un NAT de cono que filtra por puerto (router de
+    // casa). No hay servidor: la invitación lleva la dirección del anfitrión y
+    // la respuesta lleva la del invitado. Ninguna de las dos es exacta para
+    // el lado simétrico, pero su puerto real cae cerca, y el barrido de
+    // vecinos lo encuentra.
+    let net = Arc::new(Net::default());
+    let host_t = net.join(
+        "203.0.113.1:40000",
+        Mapping::Symmetric,
+        Filter::PortRestricted,
+    );
+    let guest_t = net.join("203.0.113.2:50000", Mapping::Cone, Filter::PortRestricted);
+    // Lo que STUN diría de cada uno.
+    let host_seen = host_t.public();
+    let guest_seen = guest_t.public();
+
+    let host = session(host_t, None);
+    let guest = session(guest_t, None);
+    // El anfitrión escanea la respuesta del invitado.
+    host.add_path_hints(&[guest_seen]);
+    let accepting = {
+        let host = host.clone();
+        tokio::spawn(async move { host.handshake_open().await })
+    };
+    timeout(
+        Duration::from_secs(30),
+        guest.handshake_any_within(&[host_seen], Duration::from_secs(20)),
+    )
+    .await
+    .expect("el invitado no debe colgarse")
+    .expect("deben conectar directo");
+    timeout(Duration::from_secs(5), accepting)
+        .await
+        .expect("el anfitrión debe terminar")
+        .unwrap()
+        .expect("handshake del anfitrión");
+    assert_audio_flows(&host, &guest).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn dos_lados_simetricos_no_conectan_si_el_servidor_solo_presenta() {
+    // El límite de la perforación: ningún extremo puede predecir el puerto
+    // del otro. Con un servidor que sólo presenta direcciones, no hay camino.
     let net = Arc::new(Net::default());
     let server = spawn_rendezvous(&net);
     let host = net.join(
@@ -330,6 +446,47 @@ async fn dos_lados_simetricos_no_conectan() {
 
     let (joined, _, _) = pair(host, guest, Some(server), vec![]).await;
     assert!(joined.is_err(), "no debería conectar: {joined:?}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn dos_lados_simetricos_hablan_por_el_relay() {
+    // Dos móviles en datos. Como nada directo contesta, el audio pasa por el
+    // relay sin que nadie lo pida — y sigue cifrado de extremo a extremo: el
+    // relay reenvía bytes que no sabe leer.
+    let net = Arc::new(Net::default());
+    let relay = spawn_relay(&net);
+    let host = net.join(
+        "203.0.113.1:40000",
+        Mapping::Symmetric,
+        Filter::PortRestricted,
+    );
+    let guest = net.join(
+        "203.0.113.2:50000",
+        Mapping::Symmetric,
+        Filter::PortRestricted,
+    );
+
+    let (joined, host, guest) = pair(host, guest, Some(relay), vec![]).await;
+    joined.expect("debe conectar por el relay");
+    assert!(guest.is_relayed().await && host.is_relayed().await);
+    assert_audio_flows(&host, &guest).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn habiendo_camino_directo_no_se_usa_el_relay() {
+    // El relay es el último recurso: con dos NAT de cono se perfora, y el
+    // audio no pasa por él aunque esté disponible.
+    let net = Arc::new(Net::default());
+    let relay = spawn_relay(&net);
+    let host = net.join("203.0.113.1:40000", Mapping::Cone, Filter::PortRestricted);
+    let guest = net.join("203.0.113.2:50000", Mapping::Cone, Filter::PortRestricted);
+    let host_public = host.public();
+
+    let (joined, host, guest) = pair(host, guest, Some(relay), vec![]).await;
+    joined.expect("debe conectar directo");
+    assert!(!guest.is_relayed().await && !host.is_relayed().await);
+    assert_eq!(guest.peers().await, vec![host_public]);
+    assert_audio_flows(&host, &guest).await;
 }
 
 #[tokio::test(start_paused = true)]
@@ -355,4 +512,413 @@ async fn entre_un_camino_local_y_uno_publico_se_elige_el_local() {
     assert_eq!(chosen, lan);
     host_s.close().await.ok();
     let _ = accepting.await;
+}
+
+// ── Cambio de red con la sesión en marcha ─────────────────────────────────
+
+/// Lazo de recepción de un extremo: es lo que mantiene vivo el camino
+/// (latidos, sondas) y lo que entrega el audio. Devuelve por dónde llegan los
+/// frames.
+fn spawn_receiver(session: &Arc<Session>) -> mpsc::UnboundedReceiver<Vec<u8>> {
+    let (tx, rx) = mpsc::unbounded_channel();
+    let session = session.clone();
+    tokio::spawn(async move {
+        loop {
+            match timeout(Duration::from_millis(100), session.recv_audio()).await {
+                Ok(Ok(frame)) => {
+                    if tx.send(frame.payload.to_vec()).is_err() {
+                        break;
+                    }
+                }
+                Ok(Err(_)) => break,
+                Err(_) => {}
+            }
+        }
+    });
+    rx
+}
+
+/// Envía frames hasta que uno llega al otro lado, o se agota el plazo.
+async fn audio_gets_through(
+    from: &Session,
+    inbox: &mut mpsc::UnboundedReceiver<Vec<u8>>,
+    marker: u8,
+    within: Duration,
+) -> bool {
+    let frame = vec![marker; 960];
+    let attempt = async {
+        loop {
+            let _ = from.send_audio(&frame).await;
+            match timeout(Duration::from_millis(200), inbox.recv()).await {
+                Ok(Some(got)) if got == frame => return,
+                _ => {}
+            }
+        }
+    };
+    timeout(within, attempt).await.is_ok()
+}
+
+#[tokio::test(start_paused = true)]
+async fn el_invitado_cambia_de_red_y_la_sesion_sigue() {
+    // Anfitrión alcanzable (sin NAT); el invitado pasa de una red a otra,
+    // como un móvil que sale de la wifi a datos. Nadie reconecta: el primer
+    // latido desde la dirección nueva basta para que el anfitrión la aprenda.
+    let net = Arc::new(Net::default());
+    let host_t = net.join("203.0.113.1:40000", Mapping::Open, Filter::PortRestricted);
+    let guest_t = net.join("203.0.113.2:50000", Mapping::Cone, Filter::PortRestricted);
+    let host_addr = host_t.public();
+
+    let (joined, host, guest) = pair(host_t, guest_t.clone(), None, vec![host_addr]).await;
+    joined.expect("conexión inicial");
+    let mut host_rx = spawn_receiver(&host);
+    let mut guest_rx = spawn_receiver(&guest);
+    assert!(audio_gets_through(&host, &mut guest_rx, 1, Duration::from_secs(2)).await);
+
+    guest_t.rehome("198.51.100.77:61000");
+    let moved: SocketAddr = "198.51.100.77:61000".parse().unwrap();
+
+    // Sin que el invitado hable: sólo con sus latidos.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(
+        host.peers().await,
+        vec![moved],
+        "el anfitrión debe seguirlo"
+    );
+    assert!(audio_gets_through(&host, &mut guest_rx, 2, Duration::from_secs(2)).await);
+    assert!(audio_gets_through(&guest, &mut host_rx, 3, Duration::from_secs(2)).await);
+}
+
+#[tokio::test(start_paused = true)]
+async fn los_dos_tras_nat_recuperan_el_camino_por_el_servidor_de_encuentro() {
+    // Aquí el latido desde la dirección nueva NO entra: el NAT del anfitrión
+    // sólo espera a la antigua. El invitado se vuelve a registrar, el
+    // anfitrión se entera por el servidor y sonda la nueva: eso la abre.
+    let net = Arc::new(Net::default());
+    let server = spawn_rendezvous(&net);
+    let host_t = net.join("203.0.113.1:40000", Mapping::Cone, Filter::PortRestricted);
+    let guest_t = net.join("203.0.113.2:50000", Mapping::Cone, Filter::PortRestricted);
+
+    let (joined, host, guest) = pair(host_t, guest_t.clone(), Some(server), vec![]).await;
+    joined.expect("conexión inicial");
+    let mut host_rx = spawn_receiver(&host);
+    let mut guest_rx = spawn_receiver(&guest);
+    assert!(audio_gets_through(&guest, &mut host_rx, 1, Duration::from_secs(2)).await);
+
+    guest_t.rehome("198.51.100.77:61000");
+
+    assert!(
+        audio_gets_through(&guest, &mut host_rx, 2, Duration::from_secs(15)).await,
+        "el audio del invitado debe volver a llegar"
+    );
+    assert!(audio_gets_through(&host, &mut guest_rx, 3, Duration::from_secs(5)).await);
+}
+
+#[tokio::test(start_paused = true)]
+async fn el_anfitrion_cambia_de_direccion_y_el_invitado_lo_encuentra() {
+    // La invitación traía dos direcciones del anfitrión. La que se usaba deja
+    // de responder; el invitado sonda las demás y pasa a la que contesta.
+    let net = Arc::new(Net::default());
+    let host_t = net.join("192.168.0.13:40000", Mapping::Open, Filter::PortRestricted);
+    let guest_t = net.join("192.168.0.20:50000", Mapping::Open, Filter::PortRestricted);
+    let first = host_t.public();
+    let second: SocketAddr = "203.0.113.50:40000".parse().unwrap();
+
+    let (joined, host, guest) = pair(host_t.clone(), guest_t, None, vec![first, second]).await;
+    joined.expect("conexión inicial");
+    let mut host_rx = spawn_receiver(&host);
+    let mut guest_rx = spawn_receiver(&guest);
+    assert!(audio_gets_through(&guest, &mut host_rx, 1, Duration::from_secs(2)).await);
+
+    host_t.rehome("203.0.113.50:40000");
+
+    assert!(
+        audio_gets_through(&guest, &mut host_rx, 2, Duration::from_secs(15)).await,
+        "el invitado debe encontrar la otra dirección"
+    );
+    assert_eq!(guest.peers().await, vec![second]);
+    assert!(audio_gets_through(&host, &mut guest_rx, 3, Duration::from_secs(5)).await);
+}
+
+#[tokio::test(start_paused = true)]
+async fn un_paquete_repetido_desde_otra_direccion_no_secuestra_la_sesion() {
+    // Un atacante en el camino captura tráfico legítimo y lo reenvía desde su
+    // propia dirección. El paquete es auténtico —lleva un AEAD válido— pero
+    // su secuencia ya se vio: no puede servir para mover la sesión.
+    let net = Arc::new(Net::default());
+    let host_t = net.join("203.0.113.1:40000", Mapping::Open, Filter::PortRestricted);
+    let guest_t = net.join("203.0.113.2:50000", Mapping::Open, Filter::PortRestricted);
+    let attacker = net.join("198.51.100.66:6666", Mapping::Open, Filter::PortRestricted);
+    let host_addr = host_t.public();
+    let guest_addr = guest_t.public();
+
+    let (joined, host, guest) = pair(host_t, guest_t, None, vec![host_addr]).await;
+    joined.expect("conexión inicial");
+    let mut host_rx = spawn_receiver(&host);
+    let _guest_rx = spawn_receiver(&guest);
+    assert!(audio_gets_through(&guest, &mut host_rx, 1, Duration::from_secs(2)).await);
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // Todo lo que el invitado mandó al anfitrión, repetido por el atacante.
+    let captured: Vec<Vec<u8>> = net
+        .tap
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, dest)| *dest == host_addr)
+        .map(|(bytes, _)| bytes.clone())
+        .collect();
+    assert!(captured.len() > 3, "debe haber tráfico que repetir");
+    for bytes in &captured {
+        attacker.send_to(bytes, host_addr).await.unwrap();
+    }
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    assert_eq!(
+        host.peers().await,
+        vec![guest_addr],
+        "la sesión no debe moverse"
+    );
+    assert!(audio_gets_through(&guest, &mut host_rx, 2, Duration::from_secs(2)).await);
+}
+
+#[tokio::test(start_paused = true)]
+async fn un_anfitrion_en_sesion_sigue_contestando_sondas() {
+    // Quien pregunta por el camino con la clave de la sala recibe respuesta
+    // aunque la sala ya esté hablando: es lo que usa un extremo que ha
+    // cambiado de red para saber por dónde volver.
+    use gravital_talk_transport::rendezvous::{Message, RoomKey};
+
+    let net = Arc::new(Net::default());
+    let host_t = net.join("203.0.113.1:40000", Mapping::Open, Filter::PortRestricted);
+    let guest_t = net.join("203.0.113.2:50000", Mapping::Open, Filter::PortRestricted);
+    let other = net.join("198.51.100.5:7000", Mapping::Open, Filter::PortRestricted);
+    let host_addr = host_t.public();
+
+    let (joined, host, _guest) = pair(host_t, guest_t, None, vec![host_addr]).await;
+    joined.expect("conexión inicial");
+    let _host_rx = spawn_receiver(&host);
+
+    let key = RoomKey::from_token(TOKEN.as_bytes());
+    let nonce = [3u8; 8];
+    other
+        .send_to(&Message::Punch { nonce }.encode(key), host_addr)
+        .await
+        .unwrap();
+    let mut buf = [0u8; 256];
+    let (n, from) = timeout(Duration::from_secs(2), other.recv(&mut buf))
+        .await
+        .expect("debe contestar")
+        .unwrap();
+    assert_eq!(from, host_addr);
+    assert_eq!(
+        Message::decode(&buf[..n]),
+        Some((key, Message::PunchAck { nonce }))
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn un_frame_perdido_no_para_el_audio_aunque_se_lea_con_plazo_corto() {
+    // Regresión. La app lee con un timeout de 20 ms; el plazo para dar un
+    // frame por perdido (180 ms) era local a cada llamada y nunca vencía.
+    let net = Arc::new(Net::default());
+    let host_t = net.join("203.0.113.1:40000", Mapping::Open, Filter::PortRestricted);
+    let guest_t = net.join("203.0.113.2:50000", Mapping::Open, Filter::PortRestricted);
+    let host_addr = host_t.public();
+    let (joined, host, guest) = pair(host_t, guest_t, None, vec![host_addr]).await;
+    joined.expect("conexión inicial");
+
+    // Lectura como la de la app: plazo mucho más corto que el de pérdida.
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    {
+        let host = host.clone();
+        tokio::spawn(async move {
+            loop {
+                if let Ok(Ok(frame)) = timeout(Duration::from_millis(20), host.recv_audio()).await {
+                    let _ = tx.send(frame.payload[0]);
+                }
+            }
+        });
+    }
+
+    guest.send_audio(&[1u8; 960]).await.unwrap();
+    assert_eq!(
+        timeout(Duration::from_secs(1), rx.recv()).await.unwrap(),
+        Some(1)
+    );
+
+    // Varios frames seguidos que se pierden por el camino: más de los que la
+    // paridad FEC puede reconstruir, para que de verdad falten.
+    net.blackout
+        .store(true, std::sync::atomic::Ordering::Release);
+    for lost in 2u8..=5 {
+        guest.send_audio(&[lost; 960]).await.unwrap();
+    }
+    net.blackout
+        .store(false, std::sync::atomic::Ordering::Release);
+
+    // Los siguientes tienen que sonar igualmente, y en orden.
+    guest.send_audio(&[6u8; 960]).await.unwrap();
+    guest.send_audio(&[7u8; 960]).await.unwrap();
+    let mut heard = Vec::new();
+    while heard.last() != Some(&7) {
+        let frame = timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("el audio no debe pararse")
+            .unwrap();
+        heard.push(frame);
+    }
+    assert!(heard.ends_with(&[6, 7]), "oído: {heard:?}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn el_peer_anuncia_sus_direcciones_y_asi_se_le_encuentra_tras_cambiar_de_red() {
+    // El invitado sólo conocía una dirección del anfitrión. Durante la
+    // sesión, el anfitrión le anuncia otra; cuando la primera deja de
+    // responder, el invitado ya sabe dónde buscar.
+    use gravital_talk_transport::rendezvous::{Message, RoomKey};
+
+    let net = Arc::new(Net::default());
+    let host_t = net.join("192.168.0.13:40000", Mapping::Open, Filter::PortRestricted);
+    let guest_t = net.join("192.168.0.20:50000", Mapping::Open, Filter::PortRestricted);
+    let first = host_t.public();
+    let guest_addr = guest_t.public();
+    let later: SocketAddr = "203.0.113.50:40000".parse().unwrap();
+
+    let (joined, host, guest) = pair(host_t.clone(), guest_t, None, vec![first]).await;
+    joined.expect("conexión inicial");
+    let mut host_rx = spawn_receiver(&host);
+    let _guest_rx = spawn_receiver(&guest);
+    assert!(audio_gets_through(&guest, &mut host_rx, 1, Duration::from_secs(2)).await);
+
+    // El anuncio, tal como lo manda la sesión del anfitrión.
+    let key = RoomKey::from_token(TOKEN.as_bytes());
+    host_t
+        .send_to(
+            &Message::Addrs { addrs: vec![later] }.encode(key),
+            guest_addr,
+        )
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    host_t.rehome("203.0.113.50:40000");
+    assert!(
+        audio_gets_through(&guest, &mut host_rx, 2, Duration::from_secs(15)).await,
+        "el invitado debe encontrar la dirección anunciada"
+    );
+    assert_eq!(guest.peers().await, vec![later]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn un_anuncio_de_direcciones_de_un_tercero_se_ignora() {
+    // Quien no es el peer no puede meter direcciones a las que mandar sondas.
+    use gravital_talk_transport::rendezvous::{Message, RoomKey};
+
+    let net = Arc::new(Net::default());
+    let host_t = net.join("192.168.0.13:40000", Mapping::Open, Filter::PortRestricted);
+    let guest_t = net.join("192.168.0.20:50000", Mapping::Open, Filter::PortRestricted);
+    let intruder = net.join("198.51.100.66:6666", Mapping::Open, Filter::PortRestricted);
+    let victim = net.join("198.51.100.99:9999", Mapping::Open, Filter::PortRestricted);
+    let first = host_t.public();
+    let guest_addr = guest_t.public();
+
+    let (joined, host, guest) = pair(host_t.clone(), guest_t, None, vec![first]).await;
+    joined.expect("conexión inicial");
+    let _host_rx = spawn_receiver(&host);
+    let _guest_rx = spawn_receiver(&guest);
+
+    let key = RoomKey::from_token(TOKEN.as_bytes());
+    intruder
+        .send_to(
+            &Message::Addrs {
+                addrs: vec![victim.public()],
+            }
+            .encode(key),
+            guest_addr,
+        )
+        .await
+        .unwrap();
+    // Se corta el camino para que el invitado sonde todo lo que conozca.
+    host_t.rehome("203.0.113.77:1");
+    tokio::time::sleep(Duration::from_secs(6)).await;
+
+    let mut buf = [0u8; 256];
+    assert!(
+        timeout(Duration::from_millis(200), victim.recv(&mut buf))
+            .await
+            .is_err(),
+        "la víctima no debe recibir sondas"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn un_extremo_callado_manda_latidos_aunque_se_lea_con_plazo_corto() {
+    // La app lee con un timeout de 20 ms. Los latidos los manda el lazo de
+    // recepción, así que tienen que salir también con ese patrón de llamada:
+    // sin ellos, el otro extremo da el camino por caído cada pocos segundos.
+    let net = Arc::new(Net::default());
+    let host_t = net.join("203.0.113.1:40000", Mapping::Open, Filter::PortRestricted);
+    let guest_t = net.join("203.0.113.2:50000", Mapping::Open, Filter::PortRestricted);
+    let host_addr = host_t.public();
+    let (joined, host, guest) = pair(host_t, guest_t, None, vec![host_addr]).await;
+    joined.expect("conexión inicial");
+
+    for session in [host.clone(), guest.clone()] {
+        tokio::spawn(async move {
+            loop {
+                let _ = timeout(Duration::from_millis(20), session.recv_audio()).await;
+            }
+        });
+    }
+    net.tap.lock().unwrap().clear();
+    tokio::time::sleep(Duration::from_secs(5)).await;
+
+    // 24 de cabecera + 16 de tag + 4 de cola.
+    let beats = net
+        .tap
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(bytes, dest)| *dest == host_addr && bytes.len() == 44)
+        .count();
+    assert!(
+        (4..=6).contains(&beats),
+        "latidos del invitado en 5 s: {beats}"
+    );
+    assert!(host.rx_idle_ms().is_some_and(|ms| ms < 1_500));
+}
+
+#[tokio::test(start_paused = true)]
+async fn un_camino_roto_en_un_solo_sentido_tambien_se_detecta() {
+    // Lo que le pasa a un teléfono al pasar de datos a wifi: sigue recibiendo
+    // por el camino viejo, pero lo que envía ya no llega. Como oye al otro,
+    // sólo se entera de que algo va mal porque sus latidos dejan de tener
+    // acuse; entonces busca por las demás direcciones conocidas.
+    let net = Arc::new(Net::default());
+    let host_t = net.join("203.0.113.1:40000", Mapping::Open, Filter::PortRestricted);
+    let guest_t = net.join("203.0.113.2:50000", Mapping::Open, Filter::PortRestricted);
+    let first = host_t.public();
+    let other: SocketAddr = "192.168.0.13:40000".parse().unwrap();
+    net.nodes.lock().unwrap()[host_t.id].alias = Some(other);
+
+    let (joined, host, guest) = pair(host_t, guest_t, None, vec![first, other]).await;
+    joined.expect("conexión inicial");
+    // De las dos, se empezó por la de red local.
+    assert_eq!(guest.peers().await, vec![other]);
+    let mut host_rx = spawn_receiver(&host);
+    let mut guest_rx = spawn_receiver(&guest);
+    assert!(audio_gets_through(&guest, &mut host_rx, 1, Duration::from_secs(2)).await);
+
+    // Hacia ella ya no se llega; desde el anfitrión se sigue recibiendo.
+    net.dead_destinations.lock().unwrap().insert(other);
+    assert!(
+        audio_gets_through(&host, &mut guest_rx, 2, Duration::from_secs(2)).await,
+        "el invitado tiene que seguir oyendo: es lo que hace difícil el caso"
+    );
+
+    assert!(
+        audio_gets_through(&guest, &mut host_rx, 3, Duration::from_secs(15)).await,
+        "el invitado debe darse cuenta y pasar a la otra dirección"
+    );
+    assert_eq!(guest.peers().await, vec![first]);
 }
