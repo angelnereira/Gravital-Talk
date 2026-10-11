@@ -108,6 +108,24 @@ impl RoomKey {
     }
 }
 
+impl RoomKey {
+    /// `session_id` con el que los dos extremos se encuentran en el relay
+    /// cuando el audio tiene que pasar por él.
+    ///
+    /// Sale de la clave para que ninguno tenga que comunicárselo al otro: el
+    /// relay enruta por `session_id`, y los dos tienen que presentarse con el
+    /// mismo desde el primer paquete. Nunca es cero, que el relay descarta.
+    #[must_use]
+    pub const fn relay_session_id(&self) -> u32 {
+        let id = u32::from_be_bytes([self.0[0], self.0[1], self.0[2], self.0[3]]);
+        if id == 0 {
+            1
+        } else {
+            id
+        }
+    }
+}
+
 /// Un mensaje de encuentro ya interpretado.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Message {

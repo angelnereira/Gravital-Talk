@@ -204,6 +204,15 @@ enum Command {
         /// servidor de encuentro.
         #[arg(long)]
         join: bool,
+        /// Dirección pública conocida del otro extremo (`ip:puerto`). El
+        /// servidor la sonda mientras espera, para perforar sin servidor de
+        /// encuentro. Se puede repetir.
+        #[arg(long)]
+        hint: Vec<String>,
+        /// Modo servidor: pedir al router que abra el puerto (UPnP) para
+        /// ser alcanzable desde otras redes. Se cierra al terminar.
+        #[arg(long)]
+        upnp: bool,
     },
     /// Verifica el entorno: versión, red, permisos.
     Doctor,
@@ -429,10 +438,12 @@ async fn dispatch(cmd: Command) -> Result<()> {
             rendezvous,
             candidate,
             join,
+            upnp,
+            hint,
         } => {
             cmd_peer(
                 host, port, bind, bind_port, peer, peer_port, token, duration, tone_hz, capture,
-                rendezvous, candidate, join,
+                rendezvous, candidate, join, upnp, hint,
             )
             .await
         }
@@ -598,6 +609,8 @@ async fn cmd_peer(
     rendezvous: Option<String>,
     extra_candidates: Vec<String>,
     join: bool,
+    upnp: bool,
+    hints: Vec<String>,
 ) -> Result<()> {
     const SAMPLE_RATE: u32 = 48_000;
     const CHANNELS: u8 = 1;
@@ -681,6 +694,11 @@ async fn cmd_peer(
     let cs = CodecSession::new(transport, config.clone(), CodecId::Pcm)?;
     cs.session().set_room_token(Some(token));
     cs.session().set_rendezvous(rendezvous);
+    let hints: Vec<SocketAddr> = hints
+        .iter()
+        .map(|h| h.parse().with_context(|| format!("pista no válida: {h}")))
+        .collect::<Result<_>>()?;
+    cs.session().add_path_hints(&hints);
 
     println!();
     println!("  Validación de audio extremo a extremo");
@@ -695,6 +713,28 @@ async fn cmd_peer(
     }
     if let Some(rv) = rendezvous {
         println!("  encuentro : {rv}");
+    }
+    // El puerto abierto se guarda para cerrarlo al terminar, salga como salga.
+    let mapping = if upnp {
+        let port = cs.session().local_addr()?.port();
+        match gravital_talk::upnp::map_udp_port(port, Duration::from_secs(3600)).await {
+            Ok(m) => {
+                println!("  UPnP      : alcanzable desde fuera en {}", m.external);
+                Some(m)
+            }
+            Err(e) => {
+                println!("  UPnP      : no disponible ({e})");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    if !hints.is_empty() {
+        println!("  pistas    : {hints:?}");
+    }
+    if let Ok(public) = cs.session().discover_public_addr().await {
+        println!("  pública   : {public}");
     }
     println!("  token     : fijado (NNpsk0)");
     println!();
@@ -721,6 +761,9 @@ async fn cmd_peer(
             println!();
             println!("  Sin handshake no hay nada que validar. Comprueba que el");
             println!("  token coincide con el de la sala y que el puerto es alcanzable.");
+            if let Some(m) = &mapping {
+                let _ = m.remove().await;
+            }
             std::process::exit(1);
         }
     }
@@ -828,6 +871,10 @@ async fn cmd_peer(
     }
     std::thread::sleep(Duration::from_millis(120));
     println!("OK");
+
+    if let Some(m) = &mapping {
+        let _ = m.remove().await;
+    }
 
     // ── Veredicto ───────────────────────────────────────────────────────────
     println!();

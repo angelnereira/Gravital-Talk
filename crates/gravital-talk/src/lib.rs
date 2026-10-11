@@ -59,7 +59,7 @@ pub use gravital_talk_transport::{
 // Emparejamiento y alcance de red: se re-exportan como módulos completos para
 // que la FFI (y cualquier consumidor) llegue a ellos sin depender del layout
 // interno de `gravital-talk-transport`.
-pub use gravital_talk_transport::{pairing, reach};
+pub use gravital_talk_transport::{pairing, reach, rendezvous, upnp};
 
 /// Version del crate facade.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

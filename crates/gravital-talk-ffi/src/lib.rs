@@ -52,9 +52,25 @@ struct SessionInner {
     runtime: Arc<tokio::runtime::Runtime>,
     session: Arc<Session>,
     config: GsConfig,
+    /// Puerto abierto en el router por UPnP, para cerrarlo al terminar.
+    port_mapping: Mutex<Option<gravital_talk::upnp::PortMapping>>,
 }
 
 impl SessionInner {
+    /// Cierra el puerto abierto en el router, si lo hay. Con poco plazo: si el
+    /// router no contesta, la concesión caduca sola.
+    fn close_port_mapping(&self) {
+        let mapping = match self.port_mapping.lock() {
+            Ok(mut g) => g.take(),
+            Err(p) => p.into_inner().take(),
+        };
+        if let Some(mapping) = mapping {
+            let _ = self.runtime.block_on(async {
+                tokio::time::timeout(std::time::Duration::from_secs(2), mapping.remove()).await
+            });
+        }
+    }
+
     fn audio(&self) -> std::sync::MutexGuard<'_, Option<audio::Engine>> {
         match self.audio.lock() {
             Ok(g) => g,
@@ -291,6 +307,7 @@ pub unsafe extern "C" fn gs_session_create(
         runtime: Arc::new(runtime),
         session,
         config: *cfg_c,
+        port_mapping: Mutex::new(None),
     });
     let ptr = Box::into_raw(inner) as *mut GsSessionHandle;
     unsafe { *out_handle = ptr };
@@ -307,7 +324,10 @@ pub unsafe extern "C" fn gs_session_destroy(handle: *mut GsSessionHandle) {
     if handle.is_null() {
         return;
     }
-    let _ = unsafe { Box::from_raw(handle as *mut SessionInner) };
+    // SAFETY: `handle` viene de `gs_session_create` y no se ha destruido ya
+    // (contrato); a partir de aquí nadie más lo usa.
+    let inner = unsafe { Box::from_raw(handle as *mut SessionInner) };
+    inner.close_port_mapping();
 }
 
 /// Ejecuta el handshake como cliente hacia `peer_addr:peer_port`.
@@ -467,6 +487,7 @@ pub unsafe extern "C" fn gs_session_close(handle: *mut GsSessionHandle) -> GsSta
     let inner = unsafe { &*(handle as *mut SessionInner) };
     // El audio se para antes de cerrar: sus hilos leen y escriben la sesión.
     drop(inner.audio().take());
+    inner.close_port_mapping();
     let session = inner.session.clone();
     let _ = inner.runtime.block_on(async move { session.close().await });
     GsStatus::GS_OK
@@ -1025,6 +1046,194 @@ pub unsafe extern "C" fn gs_session_public_addr(
         Err(e) => {
             set_last_error(format!("public addr: {e}"));
             GsStatus::GS_ERR_IO
+        }
+    }
+}
+
+/// Interpreta una lista `ip:puerto` separada por comas.
+///
+/// # Safety
+/// `text` debe ser una C-string NUL-terminada.
+unsafe fn parse_addr_list(text: *const c_char) -> Result<Vec<SocketAddr>, GsStatus> {
+    // SAFETY: `text` es una C-string NUL-terminada (contrato).
+    let Ok(text) = unsafe { CStr::from_ptr(text) }.to_str() else {
+        return Err(GsStatus::GS_ERR_INVALID_ARGUMENT);
+    };
+    let mut addrs = Vec::new();
+    for part in text.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+        match part.parse() {
+            Ok(addr) => addrs.push(addr),
+            Err(_) => {
+                set_last_error(format!("dirección no válida: {part}"));
+                return Err(GsStatus::GS_ERR_INVALID_ARGUMENT);
+            }
+        }
+    }
+    Ok(addrs)
+}
+
+/// Añade direcciones (`ip:puerto` separadas por comas) por las que buscar al
+/// otro extremo.
+///
+/// Mientras se espera invitado, el anfitrión las sonda: es como se perfora el
+/// NAT sin servidor, cuando la dirección del invitado llega por otro medio
+/// (su respuesta a la invitación). Se puede llamar desde otro hilo con el
+/// handshake en curso.
+///
+/// # Safety
+/// `handle` debe ser válido y `addrs` una C-string NUL-terminada.
+#[no_mangle]
+pub unsafe extern "C" fn gs_session_add_path_hints(
+    handle: *mut GsSessionHandle,
+    addrs: *const c_char,
+) -> GsStatus {
+    if handle.is_null() || addrs.is_null() {
+        return GsStatus::GS_ERR_NULL_POINTER;
+    }
+    // SAFETY: `handle` no es nulo y viene de `gs_session_create` (contrato).
+    let inner = unsafe { &*(handle as *mut SessionInner) };
+    // SAFETY: `addrs` no es nulo y es una C-string NUL-terminada.
+    match unsafe { parse_addr_list(addrs) } {
+        Ok(list) => {
+            inner.session.add_path_hints(&list);
+            GsStatus::GS_OK
+        }
+        Err(status) => status,
+    }
+}
+
+/// Pide al router que abra un puerto hacia esta sesión (UPnP) y escribe la
+/// dirección pública resultante (`ip:puerto`).
+///
+/// Con el puerto abierto, la sala es alcanzable desde cualquier red sin
+/// servidor de por medio. Se cierra solo en `gs_session_close`.
+///
+/// Devuelve `GS_ERR_UNSUPPORTED` si no hay router que lo admita o si el router
+/// está a su vez detrás de otro NAT (la dirección no sería pública).
+///
+/// # Safety
+/// `handle` debe ser válido y `out_buf` apuntar a `buf_len` bytes escribibles.
+#[no_mangle]
+pub unsafe extern "C" fn gs_session_map_port(
+    handle: *mut GsSessionHandle,
+    out_buf: *mut c_char,
+    buf_len: usize,
+) -> GsStatus {
+    if handle.is_null() || out_buf.is_null() {
+        return GsStatus::GS_ERR_NULL_POINTER;
+    }
+    // SAFETY: `handle` no es nulo y viene de `gs_session_create` (contrato).
+    let inner = unsafe { &*(handle as *mut SessionInner) };
+    let port = match inner.session.local_addr() {
+        Ok(addr) => addr.port(),
+        Err(e) => {
+            set_last_error(format!("map port: {e}"));
+            return GsStatus::GS_ERR_IO;
+        }
+    };
+    // Una hora: de sobra para una conversación, y si la app muere sin cerrar
+    // el puerto, el router lo cierra solo.
+    let lease = std::time::Duration::from_secs(3600);
+    match inner
+        .runtime
+        .block_on(gravital_talk::upnp::map_udp_port(port, lease))
+    {
+        Ok(mapping) => {
+            let external = mapping.external.to_string();
+            match inner.port_mapping.lock() {
+                Ok(mut slot) => *slot = Some(mapping),
+                Err(p) => *p.into_inner() = Some(mapping),
+            }
+            // SAFETY: `out_buf` y `buf_len` cumplen el contrato de esta función.
+            unsafe { write_c_string(&external, out_buf, buf_len) }
+        }
+        Err(e) => {
+            set_last_error(format!("map port: {e}"));
+            GsStatus::GS_ERR_UNSUPPORTED
+        }
+    }
+}
+
+/// Milisegundos desde el último paquete recibido del otro extremo, o `-1` si
+/// aún no se ha recibido ninguno.
+///
+/// Sirve para avisar de que la conexión se ha interrumpido (cambio de red,
+/// cobertura) antes de que el usuario hable al vacío.
+///
+/// # Safety
+/// `handle` debe ser un handle válido de `gs_session_create`.
+#[no_mangle]
+pub unsafe extern "C" fn gs_session_rx_idle_ms(handle: *mut GsSessionHandle) -> i64 {
+    if handle.is_null() {
+        return -1;
+    }
+    // SAFETY: `handle` no es nulo y viene de `gs_session_create` (contrato).
+    let inner = unsafe { &*(handle as *mut SessionInner) };
+    inner
+        .session
+        .rx_idle_ms()
+        .map_or(-1, |ms| i64::try_from(ms).unwrap_or(i64::MAX))
+}
+
+/// Devuelve `1` si el audio de la sesión está pasando por el relay y `0` si
+/// va directo entre los dos dispositivos.
+///
+/// # Safety
+/// `handle` debe ser un handle válido de `gs_session_create`.
+#[no_mangle]
+pub unsafe extern "C" fn gs_session_is_relayed(handle: *mut GsSessionHandle) -> c_int {
+    if handle.is_null() {
+        return 0;
+    }
+    // SAFETY: `handle` no es nulo y viene de `gs_session_create` (contrato).
+    let inner = unsafe { &*(handle as *mut SessionInner) };
+    let session = inner.session.clone();
+    c_int::from(
+        inner
+            .runtime
+            .block_on(async move { session.is_relayed().await }),
+    )
+}
+
+/// Como `gs_session_connect_any`, esperando hasta `timeout_ms` a que algún
+/// camino directo conteste.
+///
+/// El plazo largo es para cuando la dirección de este extremo le llega al
+/// anfitrión a mano (escaneando la respuesta a la invitación): hay que seguir
+/// sondando mientras tanto.
+///
+/// # Safety
+/// `handle` debe ser válido y `candidates` una C-string NUL-terminada.
+#[no_mangle]
+pub unsafe extern "C" fn gs_session_connect_any_timeout(
+    handle: *mut GsSessionHandle,
+    candidates: *const c_char,
+    timeout_ms: u32,
+) -> GsStatus {
+    if handle.is_null() || candidates.is_null() {
+        return GsStatus::GS_ERR_NULL_POINTER;
+    }
+    // SAFETY: `handle` no es nulo y viene de `gs_session_create` (contrato).
+    let inner = unsafe { &*(handle as *mut SessionInner) };
+    // SAFETY: `candidates` no es nulo y es una C-string NUL-terminada.
+    let addrs = match unsafe { parse_addr_list(candidates) } {
+        Ok(list) => list,
+        Err(status) => return status,
+    };
+    let wait = std::time::Duration::from_millis(u64::from(timeout_ms));
+    let session = inner.session.clone();
+    match inner
+        .runtime
+        .block_on(async move { session.handshake_any_within(&addrs, wait).await })
+    {
+        Ok(()) => GsStatus::GS_OK,
+        Err(TransportError::Timeout) => {
+            set_last_error("handshake timeout");
+            GsStatus::GS_ERR_TIMEOUT
+        }
+        Err(e) => {
+            set_last_error(format!("handshake: {e}"));
+            GsStatus::GS_ERR_HANDSHAKE
         }
     }
 }

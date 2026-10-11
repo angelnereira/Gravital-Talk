@@ -25,6 +25,7 @@ pub mod stun;
 pub mod tone;
 pub mod traits;
 pub mod udp;
+pub mod upnp;
 
 pub use congestion::CongestionController;
 pub use discovery::{announce_lan, discover_lan, PeerInfo, DISCOVERY_PORT};

@@ -140,6 +140,8 @@ fn config() -> Config {
 async fn room(n: usize) -> (Arc<Session>, Vec<Arc<Session>>, Bus) {
     let bus = Bus::new(n);
     let host = Arc::new(Session::new(bus.transport(0), config()));
+    // El modo sala es opt-in: ver `Session::set_multi_peer`.
+    host.set_multi_peer(true);
 
     // El primer participante completa el handshake del host.
     let first = Arc::new(Session::new(bus.transport(1), config()));

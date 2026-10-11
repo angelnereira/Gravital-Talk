@@ -66,6 +66,35 @@ const PUNCH_INTERVAL_MS: u64 = 250;
 /// Cuánto espera el invitado a que algún camino conteste antes de rendirse.
 const PATH_SELECT_TIMEOUT_MS: u64 = 6_000;
 
+/// Silencio de envío tras el que se manda un latido.
+///
+/// Un NAT olvida una asociación UDP sin tráfico en decenas de segundos (los de
+/// redes móviles, en menos), y en un walkie-talkie lo normal es estar callado.
+/// El latido mantiene el camino abierto y, de paso, es lo que anuncia la nueva
+/// dirección de este extremo cuando cambia de red.
+const KEEPALIVE_INTERVAL_MS: u64 = 1_000;
+
+/// Silencio de recepción a partir del cual se da el camino por caído y se
+/// buscan otros.
+const PATH_STALE_MS: u64 = 2_500;
+
+/// Puertos a cada lado del conocido que el anfitrión sonda además de él.
+///
+/// Un NAT simétrico (el de muchas redes móviles) usa un puerto público
+/// distinto para cada destino: el que se conoce del invitado —el que vio el
+/// servidor de encuentro o STUN— no es el que usará hacia aquí. Pero esos NAT
+/// suelen repartir los puertos de un mismo equipo en una ventana estrecha, así
+/// que sondar los vecinos abre este NAT también para el puerto de verdad.
+/// Cuando el invitado sonda desde él, su paquete entra y de ahí se aprende.
+const PUNCH_SPREAD: u16 = 192;
+
+/// Cada cuántos ciclos de espera se repite el barrido de puertos vecinos.
+const PUNCH_SPREAD_EVERY: u32 = 4;
+
+/// Cada cuánto se renueva el registro en el servidor de encuentro con la
+/// sesión en marcha y el camino sano.
+const ACTIVE_REGISTER_MS: u64 = 5_000;
+
 /// Margen que se da a un camino local para contestar cuando ya contestó uno
 /// público: entre dos caminos que funcionan, el local tiene menos latencia.
 const LOCAL_PATH_GRACE_MS: u64 = 150;
@@ -197,6 +226,24 @@ pub struct Session {
     closed: AtomicBool,
     /// Servidor de encuentro para perforar NAT. `None` = sólo caminos directos.
     rendezvous: std::sync::Mutex<Option<SocketAddr>>,
+    /// Último envío de cualquier tipo, en µs desde `epoch`.
+    last_tx: AtomicU64,
+    /// Direcciones por las que buscar al otro extremo si el camino actual
+    /// deja de funcionar: las candidatas de la invitación y las que se
+    /// añadan con [`Session::add_path_hints`].
+    path_hints: std::sync::Mutex<Vec<SocketAddr>>,
+    /// Nonce de las sondas de recuperación de camino en curso.
+    probe_nonce: std::sync::Mutex<[u8; 8]>,
+    /// Última sonda de recuperación y último registro, en µs desde `epoch`.
+    last_probe: AtomicU64,
+    last_register: AtomicU64,
+    /// Si la sesión admite que entren más peers una vez establecida.
+    multi_peer: AtomicBool,
+    /// Ir siempre por el relay, sin intentar caminos directos.
+    relay_only: AtomicBool,
+    /// Desde cuándo se espera a un frame que falta con otros ya recibidos
+    /// detrás, en µs desde `epoch`. `0` = no se está esperando.
+    gap_since: AtomicU64,
 }
 
 impl core::fmt::Debug for Session {
@@ -245,6 +292,14 @@ impl Session {
             replay_by_peer: Mutex::new(HashMap::new()),
             closed: AtomicBool::new(false),
             rendezvous: std::sync::Mutex::new(None),
+            last_tx: AtomicU64::new(0),
+            path_hints: std::sync::Mutex::new(Vec::new()),
+            probe_nonce: std::sync::Mutex::new(rendezvous::random_nonce()),
+            last_probe: AtomicU64::new(0),
+            last_register: AtomicU64::new(0),
+            multi_peer: AtomicBool::new(false),
+            relay_only: AtomicBool::new(false),
+            gap_since: AtomicU64::new(0),
         }
     }
 
@@ -420,6 +475,268 @@ impl Session {
         .unwrap_or(Err(crate::stun::StunError::Timeout))
     }
 
+    /// Permite que entren más peers con la sesión ya establecida (modo sala).
+    ///
+    /// Desactivado por defecto, y no por comodidad: admitir un peer nuevo
+    /// rehace el handshake, y hoy eso **sustituye las claves de la sesión**.
+    /// En una sesión de dos, cualquiera que capture el primer mensaje del
+    /// handshake puede reenviarlo desde otra dirección y dejar la
+    /// conversación en curso sin poder descifrarse. Hasta que el modo sala
+    /// lleve claves por peer, esto sólo se activa donde se quiere a propósito.
+    pub fn set_multi_peer(&self, enabled: bool) {
+        self.multi_peer.store(enabled, Ordering::Release);
+    }
+
+    /// Fuerza a que el audio vaya siempre por el relay.
+    ///
+    /// Por defecto el relay es el último recurso, cuando ningún camino directo
+    /// contesta. Forzarlo tiene un uso legítimo: en una conexión directa cada
+    /// extremo ve la IP del otro, y por el relay sólo ve la del relay.
+    pub fn set_relay_only(&self, enabled: bool) {
+        self.relay_only.store(enabled, Ordering::Release);
+    }
+
+    /// `true` si el audio de esta sesión está pasando por el relay.
+    pub async fn is_relayed(&self) -> bool {
+        let server = self.rendezvous_server();
+        server.is_some() && self.book.lock().await.primary() == server
+    }
+
+    /// Prepara la sesión para poder encontrarse en el relay: fija el
+    /// `session_id` que comparten los dos extremos. Sin servidor no hace nada.
+    fn arm_relay(&self) -> Option<SocketAddr> {
+        let server = self.rendezvous_server()?;
+        self.set_preset_session_id(self.room_key().relay_session_id());
+        Some(server)
+    }
+
+    /// Añade direcciones por las que buscar al otro extremo.
+    ///
+    /// Tiene dos usos. Mientras se espera invitado, el anfitrión las sonda en
+    /// cada ciclo: es como se perfora sin servidor de encuentro, cuando la
+    /// dirección del invitado llega por otro medio (su respuesta a la
+    /// invitación). Con la sesión en marcha, son los caminos alternativos que
+    /// se prueban si el actual deja de funcionar.
+    pub fn add_path_hints(&self, addrs: &[SocketAddr]) {
+        let mut hints = self.path_hints.lock().unwrap_or_else(|p| p.into_inner());
+        for addr in addrs {
+            if !hints.contains(addr) {
+                hints.push(*addr);
+            }
+        }
+    }
+
+    fn path_hints(&self) -> Vec<SocketAddr> {
+        self.path_hints
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+
+    fn probe_nonce(&self) -> [u8; 8] {
+        *self.probe_nonce.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Milisegundos desde el último paquete recibido del otro extremo.
+    ///
+    /// `None` antes de recibir nada. Sirve a la interfaz para avisar de que la
+    /// conexión se ha interrumpido antes de que el usuario hable al vacío.
+    #[must_use]
+    pub fn rx_idle_ms(&self) -> Option<u64> {
+        match self.last_rx.load(Ordering::Acquire) {
+            0 => None,
+            last => Some(self.micros_since_epoch().saturating_sub(last) / 1_000),
+        }
+    }
+
+    /// Latido autenticado hacia cada peer.
+    ///
+    /// Va cifrado (un AEAD sobre cuerpo vacío: sólo el tag) para que quien lo
+    /// recibe pueda comprobar que viene de quien tiene las claves de la
+    /// sesión. Eso es lo que permite aceptarlo desde una dirección nueva: ver
+    /// [`Self::try_migrate`].
+    async fn send_keepalive(&self) {
+        let sid = self.session_id();
+        for peer in self.broadcast_targets().await {
+            self.send_keepalive_to(peer, sid).await;
+        }
+    }
+
+    async fn send_keepalive_to(&self, peer: SocketAddr, sid: u32) {
+        let seq = self.tx_sequence.fetch_add(1, Ordering::Relaxed);
+        let mut header = PacketHeader {
+            version: 1,
+            flags: Flags::ENCRYPTED,
+            msg_type: MessageType::Heartbeat.code(),
+            session_id: sid,
+            sequence: seq,
+            timestamp: self.micros_since_epoch(),
+        };
+        let mut hdr = [0u8; HEADER_SIZE];
+        if header.encode(&mut hdr).is_err() {
+            return;
+        }
+        let mut body = [0u8; TAG_SIZE];
+        let sealed = {
+            let key = self.encrypt_key.lock().await;
+            let sealed = key
+                .as_ref()
+                .map(|key| encrypt_in_place(key, &make_nonce(seq, sid), &hdr, &mut body, 0).ok());
+            drop(key);
+            sealed
+        };
+        // Sin claves aún no hay sesión que mantener.
+        let Some(sealed) = sealed else {
+            return;
+        };
+        let body_len = sealed.unwrap_or_else(|| {
+            header.flags = Flags::empty();
+            0
+        });
+        let mut buf = [0u8; HEADER_SIZE + TAG_SIZE + 8];
+        if let Ok(n) = PacketBuilder::new(header, &body[..body_len]).encode(&mut buf) {
+            if let Ok(sent) = self.transport.send_to(&buf[..n], peer).await {
+                self.metrics.counters.record_sent(sent as u64);
+                self.last_tx
+                    .store(self.micros_since_epoch(), Ordering::Release);
+            }
+        }
+    }
+
+    /// Mantenimiento del camino con la sesión en marcha.
+    ///
+    /// Lo llama el lazo de recepción en cada vuelta, así que tiene que ser
+    /// barato cuando no hay nada que hacer: un par de lecturas atómicas.
+    ///
+    /// - Si hace rato que no se envía nada, un latido.
+    /// - Si hay servidor de encuentro, renovar el registro: es por donde el
+    ///   otro extremo se entera de una dirección nueva cuando su NAT no deja
+    ///   entrar el latido.
+    /// - Si hace rato que no se recibe nada, sondar los caminos alternativos.
+    async fn maintain_path(&self) {
+        let now = self.micros_since_epoch();
+        let since = |mark: &AtomicU64| now.saturating_sub(mark.load(Ordering::Acquire)) / 1_000;
+
+        if since(&self.last_tx) >= KEEPALIVE_INTERVAL_MS {
+            self.send_keepalive().await;
+        }
+
+        let last_rx = self.last_rx.load(Ordering::Acquire);
+        let stale = last_rx != 0 && now.saturating_sub(last_rx) / 1_000 >= PATH_STALE_MS;
+
+        if let Some(server) = self.rendezvous_server() {
+            let every = if stale {
+                KEEPALIVE_INTERVAL_MS
+            } else {
+                ACTIVE_REGISTER_MS
+            };
+            if since(&self.last_register) >= every {
+                self.last_register.store(now, Ordering::Release);
+                self.send_rv(&RvMessage::Register, server).await;
+            }
+        }
+
+        if stale && since(&self.last_probe) >= PUNCH_INTERVAL_MS * 2 {
+            self.last_probe.store(now, Ordering::Release);
+            let nonce = self.probe_nonce();
+            for hint in self.path_hints() {
+                self.send_rv(&RvMessage::Punch { nonce }, hint).await;
+            }
+        }
+    }
+
+    /// Sonda los puertos vecinos de `around`. Ver [`PUNCH_SPREAD`].
+    async fn punch_neighbours(&self, around: SocketAddr, nonce: [u8; 8]) {
+        let msg = RvMessage::Punch { nonce };
+        let base = around.port();
+        for delta in 1..=PUNCH_SPREAD {
+            for port in [base.checked_add(delta), base.checked_sub(delta)]
+                .into_iter()
+                .flatten()
+                .filter(|p| *p >= 1024)
+            {
+                self.send_rv(&msg, SocketAddr::new(around.ip(), port)).await;
+            }
+        }
+    }
+
+    /// Cambia la dirección de un peer conservando su estado.
+    async fn switch_peer(&self, old: SocketAddr, new: SocketAddr) {
+        if !self.book.lock().await.replace(old, new) {
+            return;
+        }
+        let mut windows = self.replay_by_peer.lock().await;
+        if let Some(window) = windows.remove(&old) {
+            windows.insert(new, window);
+        }
+        drop(windows);
+        tracing::info!(?old, ?new, "el peer ha cambiado de dirección");
+    }
+
+    /// Decide si un paquete de una dirección desconocida es el peer de
+    /// siempre, que ha cambiado de red.
+    ///
+    /// Se acepta sólo si **demuestra** tener las claves de la sesión —el AEAD
+    /// verifica— y si su secuencia es nueva para la ventana anti-replay del
+    /// peer. Lo segundo no es opcional: sin ello, cualquiera que capture un
+    /// paquete legítimo podría reenviarlo desde otra dirección y llevarse el
+    /// tráfico de la sesión.
+    ///
+    /// Sólo en sesiones con un peer: con varios, un paquete de una dirección
+    /// nueva no dice cuál de ellos se ha movido.
+    async fn try_migrate(&self, view: &PacketView<'_>, raw_buf: &[u8], from: SocketAddr) -> bool {
+        let header = view.header();
+        let kind = MessageType::from_code(header.msg_type);
+        if !header.flags.contains(Flags::ENCRYPTED)
+            || !matches!(kind, Ok(MessageType::AudioFrame | MessageType::Heartbeat))
+        {
+            return false;
+        }
+        let old = {
+            let book = self.book.lock().await;
+            if book.len() != 1 {
+                return false;
+            }
+            match book.primary() {
+                Some(p) => p,
+                None => return false,
+            }
+        };
+
+        // 1. Autenticidad. No toca ningún estado: un paquete falso no deja
+        //    rastro.
+        let sid = self.session_id.load(Ordering::Acquire);
+        let mut tmp = view.payload().to_vec();
+        let len = tmp.len();
+        let nonce = make_nonce(header.sequence, sid);
+        let authentic = {
+            let key = self.decrypt_key.lock().await;
+            let verdict = key.as_ref().map(|key| {
+                decrypt_in_place(key, &nonce, &raw_buf[..HEADER_SIZE], &mut tmp, len).is_ok()
+            });
+            drop(key);
+            verdict.unwrap_or(false)
+        };
+        if !authentic {
+            return false;
+        }
+
+        // 2. Frescura, sobre una copia: quien marca la secuencia es el flujo
+        //    normal, que procesa este mismo paquete a continuación.
+        let fresh = {
+            let windows = self.replay_by_peer.lock().await;
+            windows
+                .get(&old)
+                .is_none_or(|w| w.clone().check_and_mark(header.sequence))
+        };
+        if !fresh {
+            return false;
+        }
+
+        self.switch_peer(old, from).await;
+        true
+    }
+
     /// Envía un mensaje de encuentro. Un fallo de envío no es fatal: es UDP y
     /// se repite en el siguiente ciclo.
     async fn send_rv(&self, msg: &RvMessage, to: SocketAddr) {
@@ -447,13 +764,30 @@ impl Session {
         }
         match msg {
             RvMessage::Peers { others, .. } if Some(from) == self.rendezvous_server() => {
-                for peer in others {
+                for peer in &others {
                     let nonce = rendezvous::random_nonce();
-                    self.send_rv(&RvMessage::Punch { nonce }, peer).await;
+                    self.send_rv(&RvMessage::Punch { nonce }, *peer).await;
                 }
+                // Quedan como pistas: mientras se espera, el lazo las sigue
+                // sondando (y barre sus puertos vecinos).
+                self.add_path_hints(&others);
             }
             RvMessage::Punch { nonce } => {
                 self.send_rv(&RvMessage::PunchAck { nonce }, from).await;
+            }
+            // Respuesta a una sonda de recuperación: por `from` sí se llega al
+            // otro extremo. Se le pasa a hablar ahí y se le manda un latido,
+            // que es con lo que él comprueba que somos nosotros y actualiza
+            // nuestra dirección.
+            RvMessage::PunchAck { nonce } if nonce == self.probe_nonce() => {
+                let current = self.book.lock().await.primary();
+                let stale = self.rx_idle_ms().is_some_and(|ms| ms >= PATH_STALE_MS);
+                if let Some(old) = current.filter(|old| *old != from && stale) {
+                    if self.book.lock().await.len() == 1 {
+                        self.switch_peer(old, from).await;
+                        self.send_keepalive().await;
+                    }
+                }
             }
             _ => {}
         }
@@ -580,19 +914,51 @@ impl Session {
     pub async fn handshake_any(&self, candidates: &[SocketAddr]) -> Result<(), TransportError> {
         // Sin candidatas sólo hay algo que hacer si el servidor de encuentro
         // puede aportar alguna.
-        if candidates.is_empty() && self.rendezvous_server().is_none() {
+        self.handshake_any_within(candidates, Duration::from_millis(PATH_SELECT_TIMEOUT_MS))
+            .await
+    }
+
+    /// Como [`Self::handshake_any`], esperando hasta `wait` a que algún camino
+    /// directo conteste.
+    ///
+    /// Un plazo largo sirve cuando la dirección de este extremo le llega al
+    /// anfitrión a mano (escaneando la respuesta a la invitación): hay que
+    /// seguir sondando mientras tanto.
+    ///
+    /// Si ningún camino directo contesta y hay relay, el audio va por él: es
+    /// lo que hace que dos extremos tras NAT simétrico (dos móviles en datos)
+    /// puedan hablar. El cifrado sigue siendo de extremo a extremo; el relay
+    /// reenvía paquetes que no puede leer.
+    pub async fn handshake_any_within(
+        &self,
+        candidates: &[SocketAddr],
+        wait: Duration,
+    ) -> Result<(), TransportError> {
+        let relay = self.arm_relay();
+        if candidates.is_empty() && relay.is_none() {
             return Err(TransportError::InvalidState("no candidates"));
         }
-        let wait = Duration::from_millis(PATH_SELECT_TIMEOUT_MS);
+        if let Some(relay) = relay.filter(|_| self.relay_only.load(Ordering::Acquire)) {
+            return self.handshake(SessionRole::Client, relay).await;
+        }
         let peer = match self.select_path(candidates, wait).await {
             Ok(peer) => peer,
-            Err(TransportError::Timeout) => {
-                tracing::debug!("ningún camino contestó a las sondas; se prueba el primero");
-                *candidates.first().ok_or(TransportError::Timeout)?
-            }
+            Err(TransportError::Timeout) => match relay {
+                Some(relay) => {
+                    tracing::debug!("sin camino directo: el audio irá por el relay");
+                    relay
+                }
+                None => {
+                    tracing::debug!("ningún camino contestó a las sondas; se prueba el primero");
+                    *candidates.first().ok_or(TransportError::Timeout)?
+                }
+            },
             Err(e) => return Err(e),
         };
         tracing::debug!(?peer, "camino elegido");
+        // Las candidatas se guardan: si este camino cae (cambio de red de
+        // cualquiera de los dos), son por donde se vuelve a buscar.
+        self.add_path_hints(candidates);
         self.handshake(SessionRole::Client, peer).await
     }
 
@@ -880,6 +1246,7 @@ impl Session {
     /// `ClientHello` válido, igual que en `handshake()` para rol `Server`,
     /// salvo que no se filtra por IP de origen.
     pub async fn handshake_open(&self) -> Result<(), TransportError> {
+        self.arm_relay();
         self.state
             .lock()
             .await
@@ -946,7 +1313,7 @@ impl Session {
     /// está en la agenda: en P2P no hay peers nuevos, y en sala un `ClientHello`
     /// de un conocido es un reenvío del relay, no una petición de entrada.
     fn peek_new_peer(&self, view: &PacketView<'_>, from: SocketAddr) -> Option<FirstHandshake> {
-        if self.closed.load(Ordering::Acquire) {
+        if self.closed.load(Ordering::Acquire) || !self.multi_peer.load(Ordering::Acquire) {
             return None;
         }
         let code = view.header().msg_type;
@@ -1448,16 +1815,41 @@ impl Session {
         let open = expect_peer.is_none();
         let tick = Duration::from_millis(PUNCH_INTERVAL_MS);
         let mut next_register = Instant::now();
+        let mut cycle: u32 = 0;
         loop {
             if self.closed.load(Ordering::Acquire) {
                 return Err(TransportError::PeerClosed("session closed"));
             }
             // Registrarse mientras se espera: es lo que deja que el invitado
             // encuentre esta dirección y lo que trae la suya de vuelta.
-            let wait = if let Some(server) = self.rendezvous_server().filter(|_| open) {
+            let wait = if open {
                 let now = Instant::now();
                 if now >= next_register {
-                    self.send_rv(&RvMessage::Register, server).await;
+                    if let Some(server) = self.rendezvous_server() {
+                        self.send_rv(&RvMessage::Register, server).await;
+                        // Además de presentarse, se da de alta en la ruta del
+                        // relay: si el invitado no encuentra camino directo,
+                        // su handshake llegará por ahí.
+                        if cycle.is_multiple_of(PUNCH_SPREAD_EVERY) {
+                            let sid = self.preset_session_id();
+                            let _ = self
+                                .send_control(MessageType::Heartbeat, sid, &[], server)
+                                .await;
+                        }
+                    }
+                    // Direcciones del invitado que llegaron por otro medio:
+                    // sondarlas abre este NAT hacia ellas.
+                    let nonce = rendezvous::random_nonce();
+                    let sweep = cycle.is_multiple_of(PUNCH_SPREAD_EVERY);
+                    cycle = cycle.wrapping_add(1);
+                    for hint in self.path_hints() {
+                        self.send_rv(&RvMessage::Punch { nonce }, hint).await;
+                        // El barrido sólo tiene sentido hacia internet: en una
+                        // red local no hay NAT que cambie el puerto.
+                        if sweep && !rendezvous::is_local(&hint) {
+                            self.punch_neighbours(hint, nonce).await;
+                        }
+                    }
                     next_register = now + tick;
                 }
                 next_register
@@ -1877,6 +2269,8 @@ impl Session {
             }
         }
         self.metrics.counters.record_sent(sent_total);
+        self.last_tx
+            .store(self.micros_since_epoch(), Ordering::Release);
 
         Ok(())
     }
@@ -1935,19 +2329,33 @@ impl Session {
     pub async fn recv_audio(&self) -> Result<Frame, TransportError> {
         let skip_us = u64::from(self.config.jitter_buffer_ms) * 3 * 1_000;
         let frame_ms = u64::from(self.config.frame_duration_ms).max(5);
-        let mut deadline_us = self.micros_since_epoch() + skip_us;
 
         loop {
             let now_us = self.micros_since_epoch();
 
-            if let Some(frame) = self.jitter.pop_with_deadline(now_us, deadline_us) {
+            if let Some(frame) = self.jitter.pop() {
+                self.gap_since.store(0, Ordering::Release);
                 return Ok(frame);
             }
-            // A skip just happened (deadline fired): reset timer and retry pop
-            // immediately without blocking on the transport.
-            if now_us >= deadline_us {
-                deadline_us = now_us + skip_us;
-                continue;
+            self.maintain_path().await;
+
+            // Hay audio posterior esperando a un frame que no llega. El plazo
+            // para darlo por perdido vive en la sesión, no en esta llamada:
+            // quien llama suele hacerlo con un timeout corto (la app, cada
+            // 20 ms), y un plazo local se reiniciaba antes de vencer nunca.
+            // Un solo paquete perdido dejaba el audio parado para siempre.
+            if self.jitter.has_pending() {
+                match self.gap_since.load(Ordering::Acquire) {
+                    0 => self.gap_since.store(now_us.max(1), Ordering::Release),
+                    since if now_us.saturating_sub(since) >= skip_us => {
+                        self.jitter.skip_to_available();
+                        self.gap_since.store(0, Ordering::Release);
+                        continue;
+                    }
+                    _ => {}
+                }
+            } else {
+                self.gap_since.store(0, Ordering::Release);
             }
 
             // Short receive window so the gap deadline is checked frequently.
@@ -2048,12 +2456,10 @@ impl Session {
         // El audio entrante se acepta de cualquier peer conocido: en sala son
         // varios y todos deben poder oírse. Un datagrama de una dirección
         // desconocida se ignora para no procesar ruido de red.
-        {
-            let book = self.book.lock().await;
-            if !book.contains(from) {
-                tracing::trace!(?from, "dropping datagram from unknown peer");
-                return Ok(());
-            }
+        let known = self.book.lock().await.contains(from);
+        if !known && !self.try_migrate(&view, raw_buf, from).await {
+            tracing::trace!(?from, "dropping datagram from unknown peer");
+            return Ok(());
         }
 
         // Anti-replay: una vez establecidas las claves, cada secuencia sólo se

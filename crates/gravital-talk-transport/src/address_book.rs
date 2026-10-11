@@ -59,6 +59,30 @@ impl AddressBook {
         }
     }
 
+    /// Sustituye `old` por `new` conservando su posición.
+    ///
+    /// Es lo que ocurre cuando un peer cambia de red: sigue siendo el mismo
+    /// participante (mismo turno, mismo índice), sólo que ahora se le habla en
+    /// otra dirección. Devuelve `false` si `old` no estaba.
+    pub fn replace(&mut self, old: SocketAddr, new: SocketAddr) -> bool {
+        match self.peers.iter().position(|p| *p == old) {
+            Some(i) => {
+                // Si `new` ya figuraba aparte, no debe quedar duplicada.
+                if let Some(j) = self.peers.iter().position(|p| *p == new) {
+                    if j != i {
+                        self.peers.remove(j);
+                        let i = if j < i { i - 1 } else { i };
+                        self.peers[i] = new;
+                        return true;
+                    }
+                }
+                self.peers[i] = new;
+                true
+            }
+            None => false,
+        }
+    }
+
     /// `true` si la dirección ya está registrada.
     #[must_use]
     pub fn contains(&self, addr: SocketAddr) -> bool {

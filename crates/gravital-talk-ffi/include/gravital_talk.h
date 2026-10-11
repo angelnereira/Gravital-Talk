@@ -414,6 +414,71 @@ GsStatus gs_session_set_rendezvous(GsSessionHandle *handle, const char *host, ui
 GsStatus gs_session_public_addr(GsSessionHandle *handle, char *out_buf, uintptr_t buf_len);
 
 /*
+ Añade direcciones (`ip:puerto` separadas por comas) por las que buscar al
+ otro extremo.
+
+ Mientras se espera invitado, el anfitrión las sonda: es como se perfora el
+ NAT sin servidor, cuando la dirección del invitado llega por otro medio
+ (su respuesta a la invitación). Se puede llamar desde otro hilo con el
+ handshake en curso.
+
+ # Safety
+ `handle` debe ser válido y `addrs` una C-string NUL-terminada.
+ */
+GsStatus gs_session_add_path_hints(GsSessionHandle *handle, const char *addrs);
+
+/*
+ Pide al router que abra un puerto hacia esta sesión (UPnP) y escribe la
+ dirección pública resultante (`ip:puerto`).
+
+ Con el puerto abierto, la sala es alcanzable desde cualquier red sin
+ servidor de por medio. Se cierra solo en `gs_session_close`.
+
+ Devuelve `GS_ERR_UNSUPPORTED` si no hay router que lo admita o si el router
+ está a su vez detrás de otro NAT (la dirección no sería pública).
+
+ # Safety
+ `handle` debe ser válido y `out_buf` apuntar a `buf_len` bytes escribibles.
+ */
+GsStatus gs_session_map_port(GsSessionHandle *handle, char *out_buf, uintptr_t buf_len);
+
+/*
+ Milisegundos desde el último paquete recibido del otro extremo, o `-1` si
+ aún no se ha recibido ninguno.
+
+ Sirve para avisar de que la conexión se ha interrumpido (cambio de red,
+ cobertura) antes de que el usuario hable al vacío.
+
+ # Safety
+ `handle` debe ser un handle válido de `gs_session_create`.
+ */
+int64_t gs_session_rx_idle_ms(GsSessionHandle *handle);
+
+/*
+ Devuelve `1` si el audio de la sesión está pasando por el relay y `0` si
+ va directo entre los dos dispositivos.
+
+ # Safety
+ `handle` debe ser un handle válido de `gs_session_create`.
+ */
+int gs_session_is_relayed(GsSessionHandle *handle);
+
+/*
+ Como `gs_session_connect_any`, esperando hasta `timeout_ms` a que algún
+ camino directo conteste.
+
+ El plazo largo es para cuando la dirección de este extremo le llega al
+ anfitrión a mano (escaneando la respuesta a la invitación): hay que seguir
+ sondando mientras tanto.
+
+ # Safety
+ `handle` debe ser válido y `candidates` una C-string NUL-terminada.
+ */
+GsStatus gs_session_connect_any_timeout(GsSessionHandle *handle,
+                                        const char *candidates,
+                                        uint32_t timeout_ms);
+
+/*
  Handshake de cliente contra un anfitrión con varias direcciones posibles.
 
  `candidates` es una lista `ip:puerto` separada por comas (red local,
