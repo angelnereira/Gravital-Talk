@@ -112,6 +112,10 @@ abstract class SessionEngine {
   /// Pausa o reanuda la escucha sin soltar la conexión.
   void setListening(bool on);
 
+  /// Suena en este dispositivo el tono de inicio o de fin de un turno. No se
+  /// envía por la red.
+  void playTurnTone({required bool end});
+
   /// Dispositivos conectados a esta sesión, sin contar este. El anfitrión ve
   /// a todos; un invitado sólo está conectado al anfitrión y ve `1`.
   int get peerCount;
@@ -465,6 +469,27 @@ class FfiSessionEngine implements SessionEngine, KnockCodec {
     }
   }
 
+  final _tones = <bool, Uint8List?>{};
+
+  @override
+  void playTurnTone({required bool end}) {
+    try {
+      if (_nativeAudio) {
+        _session?.audioPlayTone(end: end);
+        return;
+      }
+      final pump = _pump;
+      if (pump == null) return;
+      final tone = _tones.putIfAbsent(
+        end,
+        () => _bridge.tonePcm(end: end, sampleRate: _settings.sampleRate),
+      );
+      if (tone != null) pump.playTone(tone, _settings.channels);
+    } on NativeException {
+      // Sesión cerrándose: un aviso menos no importa.
+    }
+  }
+
   void _setAudioPtt(bool on) {
     if (_nativeAudio) {
       _session?.audioSetPtt(on);
@@ -662,6 +687,9 @@ class DemoSessionEngine implements SessionEngine {
 
   @override
   void setListening(bool on) {}
+
+  @override
+  void playTurnTone({required bool end}) {}
 
   @override
   Future<bool> setRendezvous(String? hostPort) async => true;

@@ -35,6 +35,48 @@ pub fn pcm_to_bytes(samples: &[i16]) -> Vec<u8> {
     out
 }
 
+/// Amplitud de los tonos de turno: presentes sin tapar la voz.
+const TURN_TONE_PEAK: f32 = 0.25 * 32_767.0;
+
+/// Sinusoide de `ms` milisegundos que va de `from_hz` a `to_hz`, con una
+/// envolvente que la hace empezar y acabar en cero: sin ella, el corte en
+/// seco se oye como un chasquido.
+fn swept_pulse(from_hz: f32, to_hz: f32, ms: u32, sample_rate: u32, out: &mut Vec<i16>) {
+    let n = (u64::from(sample_rate) * u64::from(ms) / 1000) as usize;
+    let mut phase = 0.0f32;
+    for i in 0..n {
+        let t = i as f32 / n.max(1) as f32;
+        let freq = (to_hz - from_hz).mul_add(t, from_hz);
+        phase += std::f32::consts::TAU * freq / sample_rate as f32;
+        // Semiperiodo de seno: 0 → 1 → 0 a lo largo del pulso.
+        let envelope = (std::f32::consts::PI * t).sin();
+        out.push((phase.sin() * envelope * TURN_TONE_PEAK) as i16);
+    }
+}
+
+/// Tono de "empieza un turno": barrido ascendente corto (900 → 1400 Hz, 40 ms).
+///
+/// Los tonos de turno se reproducen **en local** en cada dispositivo, nunca
+/// se envían por la red: el códec de voz y la reducción de ruido deforman o
+/// eliminan un tono puro, y llegarían tarde o a trozos.
+#[must_use]
+pub fn turn_start_tone(sample_rate: u32) -> Vec<i16> {
+    let mut out = Vec::with_capacity(sample_rate as usize / 20);
+    swept_pulse(900.0, 1400.0, 40, sample_rate, &mut out);
+    out
+}
+
+/// Tono de "termina el turno": dos pulsos descendentes (1200 y 800 Hz, 35 ms
+/// cada uno) separados por 15 ms de silencio.
+#[must_use]
+pub fn turn_end_tone(sample_rate: u32) -> Vec<i16> {
+    let mut out = Vec::with_capacity(sample_rate as usize / 10);
+    swept_pulse(1200.0, 1200.0, 35, sample_rate, &mut out);
+    out.resize(out.len() + sample_rate as usize * 15 / 1000, 0);
+    swept_pulse(800.0, 800.0, 35, sample_rate, &mut out);
+    out
+}
+
 /// Tono de 880 Hz / 100 ms — se emite al presionar PTT.
 pub fn ptt_press_tone(sample_rate: u32) -> Vec<u8> {
     pcm_to_bytes(&generate_pcm_tone(
@@ -90,6 +132,41 @@ mod tests {
         assert_eq!(press.len(), 9_600);
         // release = 80 ms @ 48 kHz × 2 bytes = 7 680 bytes
         assert_eq!(release.len(), 7_680);
+    }
+
+    #[test]
+    fn los_tonos_de_turno_duran_lo_justo_y_no_chasquean() {
+        for rate in [16_000u32, 48_000] {
+            let start = turn_start_tone(rate);
+            let end = turn_end_tone(rate);
+            assert_eq!(start.len(), rate as usize * 40 / 1000);
+            assert_eq!(end.len(), rate as usize * 85 / 1000);
+            for tone in [&start, &end] {
+                // Empiezan y acaban prácticamente en cero.
+                assert!(tone[0].abs() < 400, "inicio {}", tone[0]);
+                assert!(tone[tone.len() - 1].abs() < 400);
+                // Suenan, y lejos de saturar.
+                let peak = tone.iter().map(|s| s.unsigned_abs()).max().unwrap();
+                assert!((4_000..=8_200).contains(&peak), "pico {peak}");
+            }
+            // El silencio entre los dos pulsos del tono de cierre.
+            let gap = rate as usize * 35 / 1000..rate as usize * 50 / 1000;
+            assert!(end[gap].iter().all(|&s| s == 0));
+        }
+    }
+
+    #[test]
+    fn el_tono_de_inicio_sube_de_frecuencia() {
+        // Cruces por cero en cada mitad: más en la segunda.
+        let tone = turn_start_tone(48_000);
+        let crossings = |s: &[i16]| s.windows(2).filter(|w| (w[0] < 0) != (w[1] < 0)).count();
+        let (a, b) = tone.split_at(tone.len() / 2);
+        assert!(
+            crossings(b) > crossings(a),
+            "{} vs {}",
+            crossings(a),
+            crossings(b)
+        );
     }
 
     #[test]

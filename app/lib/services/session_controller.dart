@@ -695,21 +695,58 @@ class SessionController extends ChangeNotifier {
     _paused = on;
     _engine.setListening(!on);
     _log.info(on ? 'Sala en pausa' : 'Sala reanudada');
+    _syncNotification();
     notifyListeners();
   }
 
   Future<void> pttDown() async {
     if (!isLive || _ptt || _paused) return;
     _ptt = true;
+    _turnTone(end: false);
+    _syncNotification();
     await _engine.pttPress();
     _log.info('PTT: transmitiendo');
     notifyListeners();
+  }
+
+  void _syncNotification() =>
+      unawaited(BackgroundSession.update(talking: _ptt, paused: _paused));
+
+  void _turnTone({required bool end}) {
+    if (_settings.turnTones && _state.isLive && !_paused) {
+      _engine.playTurnTone(end: end);
+    }
+  }
+
+  /// Último estado del otro para el que ya sonó el tono.
+  bool _peerTalking = false;
+  bool _peerPolling = false;
+
+  /// Suena el tono cuando el otro toma o suelta la palabra. Va con el ritmo
+  /// de los medidores, no con el del estado general: medio segundo de retraso
+  /// en un aviso de "empieza a hablar" lo deja sin sentido.
+  Future<void> _watchPeerTurn() async {
+    if (_peerPolling) return;
+    _peerPolling = true;
+    try {
+      final talking = await _engine.peerPttActive();
+      if (talking != _peerTalking) {
+        _peerTalking = talking;
+        _turnTone(end: !talking);
+      }
+    } catch (_) {
+      // Motor entre dos estados: el siguiente tick reintenta.
+    } finally {
+      _peerPolling = false;
+    }
   }
 
   Future<void> pttUp() async {
     if (!_ptt) return;
     _ptt = false;
     await _engine.pttRelease();
+    _turnTone(end: true);
+    _syncNotification();
     notifyListeners();
   }
 
@@ -731,6 +768,7 @@ class SessionController extends ChangeNotifier {
     _relayed = false;
     _peerCount = 0;
     _paused = false;
+    _peerTalking = false;
     _joinedWith = null;
     unawaited(BackgroundSession.stop());
     if (_busy) _cancelled = true;
@@ -879,6 +917,7 @@ class SessionController extends ChangeNotifier {
     _levelTicker?.cancel();
     _levelTicker = Timer.periodic(const Duration(milliseconds: 80), (_) {
       if (!_state.isLive) return;
+      unawaited(_watchPeerTurn());
       try {
         levels.value = _engine.audioLevels();
       } catch (_) {

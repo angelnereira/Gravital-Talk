@@ -318,6 +318,13 @@ Ante un "se cierra sola", pedir ese informe antes de suponer la causa. Descartad
 con pruebas: el códec en ARM de 32 bits (pasa bajo `qemu-arm`), paquetes que no son
 Opus y el consumo de pila del códec.
 
+## Tonos de turno
+
+Se generan en Rust (`gravital_talk_transport::tone::turn_start_tone` / `turn_end_tone`) y
+se reproducen **en local**: en escritorio mezclados en la cola del altavoz
+(`PlayoutMixer`, que suma en vez de encolar), en móvil por `AudioPump.playTone`. No los
+mandes por la sesión: el códec y RNNoise se los comen.
+
 ## Contactos y llamadas entre ellos
 
 - El secreto de un contacto es el token de la sala en la que se conocieron. De él salen

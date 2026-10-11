@@ -27,7 +27,7 @@ pub use devices::{list_input_devices, list_output_devices, DeviceInfo};
 pub use error::IoError;
 pub use playback::AudioPlayback;
 pub use resampler::Resampler;
-pub use voice::{VoiceCapture, VoicePlayback};
+pub use voice::{PlayoutMixer, VoiceCapture, VoicePlayback};
 
 pub type Result<T> = core::result::Result<T, IoError>;
 

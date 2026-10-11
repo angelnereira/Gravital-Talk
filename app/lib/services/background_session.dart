@@ -53,8 +53,26 @@ class BackgroundSession {
     }
   }
 
+  static String _room = '';
+
+  /// Refleja en la notificación si se está hablando, escuchando o en pausa.
+  static Future<void> update({required bool talking, required bool paused}) async {
+    if (!_supported || !_inSession) return;
+    try {
+      await _channel.invokeMethod<bool>('start', {
+        'room': _room,
+        'status': paused ? 'paused' : (talking ? 'talking' : 'listening'),
+      });
+    } on PlatformException {
+      // La notificación se queda con el estado anterior.
+    } on MissingPluginException {
+      // Idem.
+    }
+  }
+
   static Future<void> start(String room) async {
     _inSession = true;
+    _room = room;
     if (!_supported) return;
     try {
       // La notificación es desde donde se vuelve o se sale; sin permiso el
@@ -89,10 +107,11 @@ class BackgroundSession {
   }
 
   /// Avisa cuando el usuario pulsa "Salir de la sala" en la notificación.
-  static void onLeave(void Function() leave) {
+  static void onLeave(void Function() leave, {void Function()? togglePtt}) {
     if (!_supported) return;
     _channel.setMethodCallHandler((call) async {
       if (call.method == 'leave') leave();
+      if (call.method == 'togglePtt') togglePtt?.call();
     });
   }
 }

@@ -48,6 +48,7 @@ class PrefKeys {
   static const nativeLibPath = 'advanced.nativeLibPath';
   static const rendezvous = 'net.rendezvous';
   static const noiseSuppression = 'audio.noiseSuppression';
+  static const turnTones = 'audio.turnTones';
   // Clave nueva a propósito: la antigua (`audio.maxBitrate`) guardaba 64000
   // como valor por defecto sin que nadie lo hubiera elegido, y arrastrarla
   // dejaría a quien actualiza por debajo de la calidad prevista.

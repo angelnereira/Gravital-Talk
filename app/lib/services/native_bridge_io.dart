@@ -169,6 +169,10 @@ typedef _KnockC = Int32 Function(Pointer<Uint8>, UintPtr, Pointer<Uint8>,
     UintPtr, Pointer<Uint8>, UintPtr, Pointer<UintPtr>);
 typedef _KnockD = int Function(Pointer<Uint8>, int, Pointer<Uint8>, int,
     Pointer<Uint8>, int, Pointer<UintPtr>);
+typedef _TonePcmC = Int32 Function(
+    Int32, Uint32, Pointer<Int16>, UintPtr, Pointer<UintPtr>);
+typedef _TonePcmD = int Function(
+    int, int, Pointer<Int16>, int, Pointer<UintPtr>);
 typedef _CrashLogC = Int32 Function(Pointer<Utf8>);
 typedef _CrashLogD = int Function(Pointer<Utf8>);
 typedef _DiscoverLocalC = Int32 Function(Pointer<Utf8>, UintPtr);
@@ -267,6 +271,9 @@ class NativeBridge {
             lib.lookupFunction<_ContactIdC, _ContactIdD>('gs_contact_id'),
         _knockSeal = lib.lookupFunction<_KnockC, _KnockD>('gs_knock_seal'),
         _knockOpen = lib.lookupFunction<_KnockC, _KnockD>('gs_knock_open'),
+        _tonePcm = lib.lookupFunction<_TonePcmC, _TonePcmD>('gs_tone_pcm'),
+        _audioPlayTone = lib.lookupFunction<_AudioSetPttC, _AudioSetPttD>(
+            'gs_audio_play_tone'),
         _crashLog = lib.lookupFunction<_CrashLogC, _CrashLogD>(
             'gs_crash_log_set_path'),
         _isRelayed =
@@ -335,6 +342,8 @@ class NativeBridge {
   final _RxIdleD _rxIdleMs;
   final _HandleD _isRelayed;
   final _CrashLogD _crashLog;
+  final _TonePcmD _tonePcm;
+  final _AudioSetPttD _audioPlayTone;
   final _ContactIdD _contactId;
   final _KnockD _knockSeal;
   final _KnockD _knockOpen;
@@ -574,6 +583,21 @@ class NativeBridge {
   ///
   /// El puerto no viene de aquí a propósito: es el de la sesión. El socket con
   /// el que se averigua la IP es desechable.
+  /// Tono de turno (inicio o fin) como PCM de 16 bits mono, o `null`.
+  Uint8List? tonePcm({required bool end, required int sampleRate}) {
+    final cap = sampleRate ~/ 10;
+    final out = calloc<Int16>(cap);
+    final len = calloc<UintPtr>();
+    try {
+      if (_tonePcm(end ? 1 : 0, sampleRate, out, cap, len) != 0) return null;
+      return Uint8List.fromList(
+          out.cast<Uint8>().asTypedList(len.value * 2));
+    } finally {
+      calloc.free(out);
+      calloc.free(len);
+    }
+  }
+
   /// Identificador público del contacto que comparte `secret`.
   Uint8List? contactId(Uint8List secret) {
     final s = calloc<Uint8>(secret.length + 1);
@@ -854,6 +878,12 @@ class NativeSession {
   void audioSetPtt(bool on) {
     if (_destroyed) return;
     _bridge._audioSetPtt(_handle, on ? 1 : 0);
+  }
+
+  /// Suena un tono de turno por el altavoz del audio nativo.
+  void audioPlayTone({required bool end}) {
+    if (_destroyed) return;
+    _bridge._audioPlayTone(_handle, end ? 1 : 0);
   }
 
   /// Pausa o reanuda la escucha del audio nativo.

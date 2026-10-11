@@ -410,6 +410,29 @@ mod tests {
     }
 
     #[test]
+    fn a_16_kbps_los_paquetes_son_minimos_y_el_audio_sigue_ahi() {
+        let (mut enc, mut dec) = pair(MIN_BITRATE);
+        let mut phase = 0.0;
+        let mut packet = [0u8; MAX_PACKET];
+        let mut pcm = [0i16; FRAME];
+        let (mut total, mut level) = (0, 0.0);
+        for i in 0..50 {
+            let n = enc
+                .encode(&mut tone(440.0, &mut phase), &mut packet)
+                .unwrap();
+            total += n;
+            assert_eq!(dec.decode(&packet[..n], &mut pcm).unwrap(), FRAME);
+            if i >= 10 {
+                level = rms(&pcm);
+            }
+        }
+        // 16 kbps son 40 B por frame de 20 ms; se deja margen a la copia de
+        // respaldo que lleva cada paquete.
+        assert!(total / 50 <= 70, "{} B por frame", total / 50);
+        assert!(level > 1_000.0, "nivel {level}");
+    }
+
+    #[test]
     fn lo_decodificado_conserva_la_energia_de_la_voz() {
         let (mut enc, mut dec) = pair(64_000);
         let mut phase = 0.0;

@@ -54,10 +54,11 @@ class AppSettings {
     this.themeMode = AppThemeMode.system,
     this.rendezvous = '',
     this.noiseSuppression = true,
+    this.turnTones = true,
   });
 
   /// Tasas de audio que se pueden elegir, de más calidad a más ligera.
-  static const bitrateOptions = <int>[128000, 64000, 32000];
+  static const bitrateOptions = <int>[128000, 64000, 32000, 16000];
 
   /// Valores que usa la app cuando nadie ha configurado nada.
   ///
@@ -86,6 +87,9 @@ class AppSettings {
   /// Quitar el ruido de fondo del micrófono antes de enviar.
   final bool noiseSuppression;
 
+  /// Tonos cortos al empezar y terminar un turno de palabra.
+  final bool turnTones;
+
   AppSettings copyWith({
     int? sampleRate,
     int? channels,
@@ -97,6 +101,7 @@ class AppSettings {
     AppThemeMode? themeMode,
     String? rendezvous,
     bool? noiseSuppression,
+    bool? turnTones,
   }) {
     return AppSettings(
       sampleRate: sampleRate ?? this.sampleRate,
@@ -109,6 +114,7 @@ class AppSettings {
       themeMode: themeMode ?? this.themeMode,
       rendezvous: rendezvous ?? this.rendezvous,
       noiseSuppression: noiseSuppression ?? this.noiseSuppression,
+      turnTones: turnTones ?? this.turnTones,
     );
   }
 

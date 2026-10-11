@@ -26,6 +26,7 @@ class SettingsStore {
       ),
       rendezvous: p.getString(PrefKeys.rendezvous) ?? '',
       noiseSuppression: p.getBool(PrefKeys.noiseSuppression) ?? true,
+      turnTones: p.getBool(PrefKeys.turnTones) ?? true,
     );
   }
 
@@ -38,6 +39,7 @@ class SettingsStore {
     await p.setInt(PrefKeys.mtu, s.mtu);
     await p.setInt(PrefKeys.bitrate, s.maxBitrate);
     await p.setBool(PrefKeys.noiseSuppression, s.noiseSuppression);
+    await p.setBool(PrefKeys.turnTones, s.turnTones);
     await p.setString(PrefKeys.codec, s.codec.name);
     await p.setString(PrefKeys.themeMode, s.themeMode.name);
     await p.setString(PrefKeys.rendezvous, s.rendezvous);

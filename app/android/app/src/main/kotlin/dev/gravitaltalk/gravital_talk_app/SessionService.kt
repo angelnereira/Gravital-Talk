@@ -34,9 +34,21 @@ class SessionService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
+        if (intent?.action == ACTION_TOGGLE_PTT) {
+            // Lo decide Dart, que es quien tiene la sesión; después vuelve
+            // por aquí con el estado nuevo para repintar la notificación.
+            onTogglePtt?.invoke()
+            return START_NOT_STICKY
+        }
         val room = intent?.getStringExtra(EXTRA_ROOM).orEmpty()
         val standby = intent?.getBooleanExtra(EXTRA_STANDBY, false) ?: false
-        if (!enterForeground(notification(room, standby))) {
+        val status = intent?.getStringExtra(EXTRA_STATUS) ?: STATUS_LISTENING
+        // Primero la de estilo llamada; si el sistema la rechaza, la sencilla.
+        val candidates = listOfNotNull(
+            if (standby) null else callNotification(room, status),
+            notification(room, standby, status),
+        )
+        if (candidates.none { enterForeground(it) }) {
             stopSelf()
             return START_NOT_STICKY
         }
@@ -76,7 +88,61 @@ class SessionService : Service() {
         }
     }
 
-    private fun notification(room: String, standby: Boolean): Notification {
+    private fun statusText(status: String) = when (status) {
+        STATUS_TALKING -> "Estás hablando."
+        STATUS_PAUSED -> "Sala en pausa."
+        else -> "Sigues escuchando. Toca para volver a la sala."
+    }
+
+    private fun serviceIntent(code: Int, action: String): PendingIntent = PendingIntent.getService(
+        this,
+        code,
+        Intent(this, SessionService::class.java).setAction(action),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
+
+    /** Acción de hablar o soltar; `null` en pausa, donde no se puede hablar. */
+    private fun pttAction(status: String): Notification.Action? {
+        if (status == STATUS_PAUSED) return null
+        val label = if (status == STATUS_TALKING) "Soltar" else "Hablar"
+        return Notification.Action.Builder(null, label, serviceIntent(3, ACTION_TOGGLE_PTT)).build()
+    }
+
+    /**
+     * Notificación con aspecto de llamada en curso (Android 12+): el sistema
+     * la coloca arriba y le pone el botón de colgar. `null` en versiones
+     * anteriores.
+     */
+    private fun callNotification(room: String, status: String): Notification? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return null
+        return runCatching {
+            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            manager.createNotificationChannel(
+                NotificationChannel(CHANNEL_ID, "Sala en curso", NotificationManager.IMPORTANCE_LOW),
+            )
+            val open = PendingIntent.getActivity(
+                this,
+                0,
+                Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+            val who = android.app.Person.Builder()
+                .setName(if (room.isEmpty()) "Gravital Talk" else "Sala $room")
+                .setImportant(true)
+                .build()
+            val builder = Notification.Builder(this, CHANNEL_ID)
+                .setSmallIcon(android.R.drawable.stat_sys_phone_call)
+                .setContentText(statusText(status))
+                .setContentIntent(open)
+                .setOngoing(true)
+                .setCategory(Notification.CATEGORY_CALL)
+                .setStyle(Notification.CallStyle.forOngoingCall(who, serviceIntent(1, ACTION_LEAVE)))
+            pttAction(status)?.let { builder.addAction(it) }
+            builder.build()
+        }.getOrNull()
+    }
+
+    private fun notification(room: String, standby: Boolean, status: String): Notification {
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             manager.createNotificationChannel(
@@ -112,9 +178,11 @@ class SessionService : Service() {
                 .setContentText("Disponible para tus contactos.")
                 .build()
         }
-        return builder
+        builder
             .setContentTitle(if (room.isEmpty()) "Gravital Talk" else "Sala $room")
-            .setContentText("Sigues escuchando. Toca para volver a hablar.")
+            .setContentText(statusText(status))
+        pttAction(status)?.let { builder.addAction(it) }
+        return builder
             .addAction(Notification.Action.Builder(null, "Salir de la sala", leave).build())
             .build()
     }
@@ -133,6 +201,11 @@ class SessionService : Service() {
     companion object {
         const val EXTRA_ROOM = "room"
         const val EXTRA_STANDBY = "standby"
+        const val EXTRA_STATUS = "status"
+        const val STATUS_LISTENING = "listening"
+        const val STATUS_TALKING = "talking"
+        const val STATUS_PAUSED = "paused"
+        const val ACTION_TOGGLE_PTT = "dev.gravitaltalk.gravital_talk_app.TOGGLE_PTT"
         const val ACTION_LEAVE = "dev.gravitaltalk.gravital_talk_app.LEAVE"
         private const val CHANNEL_ID = "session"
         private const val NOTIFICATION_ID = 1
@@ -188,5 +261,8 @@ class SessionService : Service() {
 
         /** Lo fija la actividad: salir desde la notificación lo decide Dart. */
         var onLeave: (() -> Unit)? = null
+
+        /** Hablar o soltar desde la notificación. */
+        var onTogglePtt: (() -> Unit)? = null
     }
 }

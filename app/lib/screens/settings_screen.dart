@@ -205,7 +205,7 @@ class _SettingsScreenState extends State<SettingsScreen>
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Calidad',
+                          'Calidad (kbps)',
                           style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                                 fontWeight: FontWeight.w600,
                                 color: GlassTextTheme.of(context).primary,
@@ -220,7 +220,7 @@ class _SettingsScreenState extends State<SettingsScreen>
                               for (final rate in AppSettings.bitrateOptions)
                                 ButtonSegment(
                                   value: rate,
-                                  label: Text('${rate ~/ 1000} kbps'),
+                                  label: Text('${rate ~/ 1000}'),
                                 ),
                             ],
                             selected: {
@@ -239,8 +239,10 @@ class _SettingsScreenState extends State<SettingsScreen>
                             >= 128000 => 'Máxima calidad. Unos 1 MB por minuto '
                                 'hablado.',
                             >= 64000 => 'Equilibrada. Unos 0,5 MB por minuto.',
-                            _ => 'La más ligera y estable. Unos 0,25 MB por '
+                            >= 32000 => 'Ligera y estable. Unos 0,25 MB por '
                                 'minuto.',
+                            _ => 'Mínimo de datos, para coberturas malas. La '
+                                'voz se entiende, con menos matices.',
                           },
                           style: Theme.of(context).textTheme.bodySmall?.copyWith(
                                 color: GlassTextTheme.of(context).secondary,
@@ -262,6 +264,20 @@ class _SettingsScreenState extends State<SettingsScreen>
                     ),
                     onTap: () => c.updateSettings(
                       s.copyWith(noiseSuppression: !s.noiseSuppression),
+                    ),
+                  ),
+                  _Row(
+                    icon: Icons.graphic_eq,
+                    title: 'Tonos de turno',
+                    subtitle: 'Un aviso corto cuando alguien empieza o '
+                        'termina de hablar.',
+                    trailing: Switch(
+                      value: s.turnTones,
+                      onChanged: (on) =>
+                          c.updateSettings(s.copyWith(turnTones: on)),
+                    ),
+                    onTap: () => c.updateSettings(
+                      s.copyWith(turnTones: !s.turnTones),
                     ),
                   ),
                 ],

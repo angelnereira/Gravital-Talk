@@ -337,6 +337,46 @@ impl PlaybackAdapter {
     }
 }
 
+/// Mezcla sonidos cortos (tonos de aviso) sobre lo que esté sonando.
+///
+/// A diferencia de [`VoicePlayback::push`], no añade cola: suma las muestras
+/// a las que ya esperan, así que un tono no retrasa la voz que viene detrás.
+/// Se puede clonar y usar desde otro hilo que el que abrió el altavoz.
+#[derive(Clone)]
+pub struct PlayoutMixer {
+    queue: Arc<Mutex<PlayoutQueue>>,
+}
+
+impl core::fmt::Debug for PlayoutMixer {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("PlayoutMixer").finish_non_exhaustive()
+    }
+}
+
+impl PlayoutMixer {
+    /// Suma `mono` a lo pendiente de sonar, empezando ya.
+    pub fn mix(&self, mono: &[i16]) {
+        let mut q = match self.queue.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        q.mix(mono);
+    }
+}
+
+impl PlayoutQueue {
+    fn mix(&mut self, mono: &[i16]) {
+        let overlap = mono.len().min(self.samples.len());
+        for (queued, &extra) in self.samples.iter_mut().zip(&mono[..overlap]) {
+            *queued = queued.saturating_add(extra);
+        }
+        self.samples.extend(mono[overlap..].iter().copied());
+        // Un tono es más corto que el colchón inicial: si se esperase a
+        // llenarlo, no sonaría hasta que llegara voz.
+        self.primed = true;
+    }
+}
+
 /// Altavoz que acepta mono al sample rate de la sesión.
 pub struct VoicePlayback {
     _stream: Stream,
@@ -409,6 +449,14 @@ impl VoicePlayback {
             }
         }
         Err(last_err)
+    }
+
+    /// Mezclador para sonar avisos sobre la voz, utilizable desde otro hilo.
+    #[must_use]
+    pub fn mixer(&self) -> PlayoutMixer {
+        PlayoutMixer {
+            queue: self.queue.clone(),
+        }
     }
 
     /// Encola muestras mono para reproducir.
@@ -558,6 +606,21 @@ mod tests {
             }
         }
         assert!(queue.lock().unwrap().samples.len() <= 48 * PLAYOUT_MAX_MS);
+    }
+
+    #[test]
+    fn un_aviso_se_suma_a_la_voz_sin_alargar_la_cola() {
+        let mut q = PlayoutQueue {
+            samples: VecDeque::from(vec![100i16, 100, i16::MAX]),
+            primed: false,
+            prefill: 480,
+            max: 10_000,
+        };
+        q.mix(&[5, -5, 10, 7, 8]);
+        // Lo que coincide se suma (saturando); lo que sobra se añade.
+        assert_eq!(q.samples, VecDeque::from(vec![105, 95, i16::MAX, 7, 8]));
+        // Y suena ya, aunque no llegue al colchón.
+        assert!(q.primed);
     }
 
     #[test]
