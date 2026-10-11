@@ -17,9 +17,12 @@ sonda todas a la vez y conecta por la primera que contesta.
 | Situación | Camino | Qué hace falta |
 |---|---|---|
 | Misma red | Dirección local (`host`) | Nada |
-| Redes distintas, anfitrión alcanzable desde fuera (IP pública, puerto reenviado) | Dirección pública (`pub`) | Nada |
-| Redes distintas, ambos tras NAT | Dirección pública, tras perforar | Servidor de encuentro (`rv`) |
-| Los dos lados con NAT simétrico | Ninguno directo | Que el relay reenvíe el audio (no automático todavía) |
+| Anfitrión con router que abre puertos y tiene IP pública | Dirección pública (`pub`, vía UPnP) | Nada |
+| Redes distintas, al menos un lado con NAT de cono | Directo, perforando | Que el anfitrión lea la **respuesta** del invitado (o un servidor de encuentro) |
+| Los dos lados con NAT simétrico | Relay | Un `gs-relay` propio configurado |
+
+El caso típico de "casa ↔ datos móviles" es el tercero: medido con una red fija
+tras CGNAT (cono) y un LTE con NAT simétrico, conecta directo en unos 4,5 s.
 
 Entre dos caminos que contestan se prefiere el local: se le dan 150 ms de
 margen frente a uno público que haya contestado antes.
@@ -114,6 +117,60 @@ Una dirección es `familia (1: 4 ó 6) | IP (4 ó 16) | puerto (2, big-endian)`.
 - Nada de esto autentica: quien conecta lo demuestra después, en el handshake
   Noise con el token.
 
+### Sin servidor: invitación y respuesta
+
+El servidor de encuentro sólo hace una cosa: decirle a cada extremo la
+dirección pública del otro. Eso también se puede hacer a mano.
+
+```
+gravital-talk://answer?v=1&room=GRVT-A3F2&addr=203.0.113.9:51000,192.168.1.7:51000
+```
+
+El invitado obtiene su dirección pública por STUN **desde el socket de su
+sesión**, la enseña como código (QR o enlace) y sigue sondando al anfitrión
+hasta 90 s. El anfitrión la lee y `Session::add_path_hints` la añade a lo que
+sonda mientras espera. No lleva secreto: sólo direcciones.
+
+### Barrido de puertos (NAT simétrico)
+
+Un NAT simétrico usa un puerto público distinto por destino, así que la
+dirección que ve STUN no es la que usará hacia el otro extremo. Pero suele
+repartir los puertos de un mismo equipo en una ventana estrecha (medido en un
+LTE: 16903, 16904, 16934, 16944 ante cuatro destinos). Los dos extremos sondan
+±192 puertos alrededor de cada dirección pública conocida, una vez por segundo.
+Eso abre el NAT propio para el puerto real del otro; cuando su sonda llega, de
+ella se aprende la dirección exacta.
+
+No sirve con NAT simétrico en los dos lados: ahí ninguno recibe la sonda del
+otro. Ver "Relay".
+
+### Cambio de red con la sesión en marcha
+
+Las claves de la sesión no dependen de la dirección, así que un extremo puede
+cambiar de red sin renegociar:
+
+- Cada extremo manda un **latido autenticado** (un `Heartbeat` con el flag
+  `ENCRYPTED` y, como cuerpo, sólo el tag AEAD) si lleva 1 s sin enviar nada.
+  Mantiene abierto el NAT y es lo que anuncia una dirección nueva.
+- Un paquete cifrado que llega de una dirección desconocida se acepta como "el
+  peer de siempre, que se ha movido" si el AEAD verifica **y** su secuencia es
+  nueva para la ventana anti-replay del peer. Sin lo segundo, reenviar un
+  paquete capturado desde otra dirección secuestraría la sesión.
+- Si pasan 2,5 s sin recibir nada, se sondan las demás direcciones conocidas
+  (las de la invitación y las de la respuesta) y, si hay servidor de encuentro,
+  se renueva el registro cada segundo.
+
+Sólo en sesiones de dos: con varios peers, un paquete de una dirección nueva no
+dice cuál de ellos se ha movido.
+
+### Relay
+
+Si ningún camino directo contesta y hay un `gs-relay` configurado, el invitado
+hace el handshake contra él. Los dos se encuentran con el mismo `session_id`,
+derivado de la clave de sala, por el que el relay enruta. El anfitrión se da de
+alta en esa ruta mientras espera. El relay reenvía paquetes cifrados que no
+puede leer.
+
 ### Límites conocidos
 
 - **NAT simétrico en los dos lados**: no hay perforación posible. Con uno
@@ -124,7 +181,10 @@ Una dirección es `familia (1: 4 ó 6) | IP (4 ó 16) | puerto (2, big-endian)`.
   el equipo de dentro le cambia el puerto. Reproducible con
   `PERMISSIVE_INPUT=1 scripts/nat-sim.sh`. El cortafuegos por defecto de un
   router doméstico lo descarta y no ocurre.
-- **Sin relevo automático al relay** cuando la perforación falla.
+- **Sin relay configurado**, dos extremos con NAT simétrico a la vez (por
+  ejemplo, dos móviles en datos) no conectan.
+- **El barrido depende de que el NAT reparta puertos cercanos.** Con uno que
+  los asigne al azar en todo el rango, no los encuentra.
 
 ### Verificación
 

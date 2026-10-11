@@ -811,6 +811,15 @@ impl Session {
         let key = self.room_key();
         let nonce = rendezvous::random_nonce();
         let mut candidates: Vec<SocketAddr> = candidates.to_vec();
+        // Direcciones públicas alrededor de las que barrer puertos: las de la
+        // invitación y las que dé el servidor, no las que se aprenden de una
+        // sonda recibida (esas ya son exactas).
+        let mut sweep_targets: Vec<SocketAddr> = candidates
+            .iter()
+            .copied()
+            .filter(|c| !rendezvous::is_local(c))
+            .collect();
+        let mut cycle: u32 = 0;
         let deadline = Instant::now() + wait;
         let tick = Duration::from_millis(PUNCH_INTERVAL_MS);
         let mut next_send = Instant::now();
@@ -840,6 +849,15 @@ impl Session {
                 for &candidate in &candidates {
                     self.send_rv(&RvMessage::Punch { nonce }, candidate).await;
                 }
+                // Si el anfitrión está tras un NAT simétrico, hacia aquí
+                // saldrá por un puerto vecino del que se conoce. Sondar esos
+                // vecinos abre este NAT para cuando su sonda llegue.
+                if cycle.is_multiple_of(PUNCH_SPREAD_EVERY) {
+                    for &target in &sweep_targets {
+                        self.punch_neighbours(target, nonce).await;
+                    }
+                }
+                cycle = cycle.wrapping_add(1);
                 next_send = now + tick;
             }
 
@@ -869,6 +887,9 @@ impl Session {
                         if !candidates.contains(&peer) {
                             tracing::debug!(?peer, "candidato aprendido del servidor de encuentro");
                             candidates.push(peer);
+                            if !rendezvous::is_local(&peer) {
+                                sweep_targets.push(peer);
+                            }
                             // Sin esperar al siguiente ciclo: cada sonda que
                             // sale antes es conexión que llega antes.
                             self.send_rv(&RvMessage::Punch { nonce }, peer).await;

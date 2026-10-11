@@ -364,6 +364,48 @@ fn spawn_relay(net: &Arc<Net>) -> SocketAddr {
 }
 
 #[tokio::test(start_paused = true)]
+async fn sin_servidor_un_movil_y_una_red_fija_conectan_intercambiando_direcciones() {
+    // El caso medido con redes reales: un extremo tras NAT simétrico (datos
+    // móviles) y el otro tras un NAT de cono que filtra por puerto (router de
+    // casa). No hay servidor: la invitación lleva la dirección del anfitrión y
+    // la respuesta lleva la del invitado. Ninguna de las dos es exacta para
+    // el lado simétrico, pero su puerto real cae cerca, y el barrido de
+    // vecinos lo encuentra.
+    let net = Arc::new(Net::default());
+    let host_t = net.join(
+        "203.0.113.1:40000",
+        Mapping::Symmetric,
+        Filter::PortRestricted,
+    );
+    let guest_t = net.join("203.0.113.2:50000", Mapping::Cone, Filter::PortRestricted);
+    // Lo que STUN diría de cada uno.
+    let host_seen = host_t.public();
+    let guest_seen = guest_t.public();
+
+    let host = session(host_t, None);
+    let guest = session(guest_t, None);
+    // El anfitrión escanea la respuesta del invitado.
+    host.add_path_hints(&[guest_seen]);
+    let accepting = {
+        let host = host.clone();
+        tokio::spawn(async move { host.handshake_open().await })
+    };
+    timeout(
+        Duration::from_secs(30),
+        guest.handshake_any_within(&[host_seen], Duration::from_secs(20)),
+    )
+    .await
+    .expect("el invitado no debe colgarse")
+    .expect("deben conectar directo");
+    timeout(Duration::from_secs(5), accepting)
+        .await
+        .expect("el anfitrión debe terminar")
+        .unwrap()
+        .expect("handshake del anfitrión");
+    assert_audio_flows(&host, &guest).await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn dos_lados_simetricos_no_conectan_si_el_servidor_solo_presenta() {
     // El límite de la perforación: ningún extremo puede predecir el puerto
     // del otro. Con un servidor que sólo presenta direcciones, no hay camino.
