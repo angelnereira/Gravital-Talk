@@ -4,6 +4,20 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
 
 ## [Unreleased]
 
+### Changed
+
+**Emparejar con un solo enlace**
+- La pantalla de inicio tiene ahora **Invitar** y **Escanear**. Invitar enseña
+  un único enlace (`gravital-talk://i?…`) con su QR: quien lo abre con la app
+  queda guardado como contacto y, si quien invitó sigue en esa pantalla, **la
+  conversación arranca sola** en los dos dispositivos. Ya no hay que crear una
+  sala y, aparte, añadir el contacto.
+- Si lo abren varias personas, las siguientes se suman a la conversación en
+  curso.
+- El invitado manda solo las direcciones por las que se le alcanza (lo que
+  antes era el «código de respuesta» que había que enseñar).
+- Los enlaces anteriores (`pair`, `contact`, `answer`) siguen funcionando.
+
 ### Fixed
 
 **Audio entrecortado**

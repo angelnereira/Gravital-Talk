@@ -79,6 +79,7 @@ Future<void> main(List<String> args) async {
     initialLink: initialLink,
     startAsHost: args.contains('--host'),
     callFirst: args.contains('--call-first'),
+    startInviting: args.contains('--invite'),
     autoAccept: args.contains('--auto-accept'),
     autoTalk: autoTalk == null || autoTalk <= 0
         ? null

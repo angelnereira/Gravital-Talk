@@ -50,6 +50,7 @@
                 <data android:scheme="gravital-talk" android:host="pair"/>
                 <data android:scheme="gravital-talk" android:host="answer"/>
                 <data android:scheme="gravital-talk" android:host="contact"/>
+                <data android:scheme="gravital-talk" android:host="i"/>
             </intent-filter>
         </activity>
         <!-- Mantiene la sala (o la espera de llamadas) con la app oculta. -->

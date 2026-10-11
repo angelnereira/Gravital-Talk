@@ -7,6 +7,7 @@ import 'core/theme.dart';
 import 'models/connection.dart';
 import 'screens/home_screen.dart';
 import 'core/routes.dart';
+import 'screens/invite_screen.dart';
 import 'screens/onboarding_screen.dart';
 import 'screens/pairing_screen.dart';
 import 'services/background_session.dart';
@@ -31,8 +32,12 @@ class GravitalTalkApp extends StatefulWidget {
     this.autoTalk,
     this.contacts,
     this.callFirst = false,
+    this.startInviting = false,
     this.autoAccept = false,
   });
+
+  /// Prueba: abrir directamente la pantalla de invitar.
+  final bool startInviting;
 
   /// Prueba: llamar al primer contacto nada más arrancar.
   final bool callFirst;
@@ -80,7 +85,7 @@ class _GravitalTalkAppState extends State<GravitalTalkApp> {
     final context = _navigator.currentContext;
     if (call == null || context == null || _askingCall) return;
     _askingCall = true;
-    final accepted = widget.autoAccept || await showDialog<bool>(
+    final accepted = widget.autoAccept || call.auto || await showDialog<bool>(
       context: context,
       barrierDismissible: false,
       builder: (dialog) => AlertDialog(
@@ -111,6 +116,7 @@ class _GravitalTalkAppState extends State<GravitalTalkApp> {
   late bool _showOnboarding = widget.showOnboarding &&
       widget.initialLink == null &&
       !widget.startAsHost &&
+      !widget.startInviting &&
       !widget.callFirst;
 
   /// El Navigator se alcanza por clave porque las invitaciones llegan desde
@@ -142,6 +148,11 @@ class _GravitalTalkAppState extends State<GravitalTalkApp> {
             callee: _contacts.contacts.first,
           ),
         ));
+      });
+    } else if (widget.startInviting) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _navigator.currentState
+            ?.push(ForwardRoute(builder: (_) => const InviteScreen()));
       });
     } else if (widget.startAsHost) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -193,7 +204,7 @@ class _GravitalTalkAppState extends State<GravitalTalkApp> {
             : '${contact.name} añadido a tus contactos'),
         description: Text(contact == null
             ? 'El enlace es tuyo o no es válido.'
-            : 'Ya puedes llamarle desde la pantalla de inicio.'),
+            : 'Si te está esperando, entraréis a hablar en un momento.'),
         autoCloseDuration: const Duration(seconds: 4),
       );
       return;

@@ -433,6 +433,24 @@ class SessionController extends ChangeNotifier {
   /// enlace) y empieza a sondar sus direcciones.
   ///
   /// Devuelve `false` si aquello no era una respuesta para esta sala.
+  /// Aplica la respuesta de un invitado que llegó sola (por la red local o
+  /// por un buzón), sin molestar si no viene a cuento. Vale también con la
+  /// sala ya en marcha: así entra un tercero desde otra red.
+  Future<bool> applyAnswer(String raw) async {
+    final answer = PairingAnswer.tryParse(raw);
+    if (answer == null ||
+        _role != ConnectionRole.host ||
+        answer.room != _roomCode) {
+      return false;
+    }
+    try {
+      await _engine.addPathHints(answer.addresses);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<bool> acceptAnswer(String raw) async {
     final answer = PairingAnswer.tryParse(raw);
     if (answer == null) {
