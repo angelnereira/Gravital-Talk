@@ -133,4 +133,42 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
     await tester.pump(const Duration(seconds: 1));
   });
+
+  testWidgets('pausar la sala bloquea el botón de hablar sin salir de ella',
+      (WidgetTester tester) async {
+    final controller = await _pumpApp(tester);
+
+    await tester.tap(find.text('Crear sala'));
+    await tester.pump();
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(milliseconds: 500));
+    }
+    expect(controller.isLive, isTrue);
+    // El anfitrión puede seguir invitando desde la conversación.
+    expect(controller.canInvite, isTrue);
+    await tester.scrollUntilVisible(
+      find.text('Invitar a alguien más'),
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('Invitar a alguien más'), findsOneWidget);
+
+    await controller.setPaused(true);
+    await tester.pump();
+    expect(controller.paused, isTrue);
+    expect(find.text('Pausar'), findsNothing);
+    await controller.pttDown();
+    expect(controller.pttActive, isFalse);
+    expect(controller.isLive, isTrue);
+
+    await controller.setPaused(false);
+    await controller.pttDown();
+    expect(controller.pttActive, isTrue);
+    await controller.pttUp();
+
+    await controller.reset();
+    expect(controller.paused, isFalse);
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump(const Duration(seconds: 1));
+  });
 }

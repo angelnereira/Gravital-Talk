@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 
@@ -9,6 +10,7 @@ import '../core/constants.dart';
 import '../core/glass.dart';
 import '../core/tokens.dart';
 import '../models/connection.dart';
+import '../services/crash_report.dart';
 import '../services/engine.dart';
 import '../services/session_controller.dart';
 import '../widgets/common.dart';
@@ -59,6 +61,14 @@ const _permissions = <_AppPermission>[
     title: 'Cámara',
     why: 'Para escanear el código de una sala. Sin ella puedes pegar la '
         'invitación.',
+    essential: false,
+  ),
+  _AppPermission(
+    permission: Permission.notification,
+    icon: Icons.notifications_none,
+    title: 'Notificaciones',
+    why: 'Para ver que sigues en una sala con la app en segundo plano, y '
+        'salir desde ahí.',
     essential: false,
   ),
 ];
@@ -305,6 +315,18 @@ class _SettingsScreenState extends State<SettingsScreen>
               _Section(
                 title: 'Acerca de',
                 children: [
+                  ValueListenableBuilder<String?>(
+                    valueListenable: CrashReport.last,
+                    builder: (context, report, _) => report == null
+                        ? const SizedBox.shrink()
+                        : _Row(
+                            icon: Icons.bug_report_outlined,
+                            title: 'La app se cerró sola la última vez',
+                            subtitle: 'Toca para copiar el informe y '
+                                'enviarlo. $report',
+                            onTap: () => _copyCrashReport(report),
+                          ),
+                  ),
                   const _Row(
                     icon: Icons.info_outline,
                     title: 'Versión',
@@ -327,6 +349,17 @@ class _SettingsScreenState extends State<SettingsScreen>
           ),
         ),
       ),
+    );
+  }
+
+  Future<void> _copyCrashReport(String report) async {
+    await Clipboard.setData(
+      ClipboardData(text: 'Gravital Talk $appVersion\n$report'),
+    );
+    await CrashReport.clear();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Informe copiado al portapapeles')),
     );
   }
 

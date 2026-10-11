@@ -492,6 +492,31 @@ GsStatus gs_session_connect_any_timeout(GsSessionHandle *handle,
 GsStatus gs_session_connect_any(GsSessionHandle *handle, const char *candidates);
 
 /*
+ Número de dispositivos conectados a esta sesión, sin contar el propio.
+
+ En una sala lo normal es llamarlo desde el anfitrión: los invitados sólo
+ están conectados a él y siempre ven `1`.
+
+ # Safety
+ `handle` debe ser un handle válido de `gs_session_create`.
+ */
+int gs_session_peer_count(GsSessionHandle *handle);
+
+/*
+ Fija el fichero donde dejar constancia de un fallo interno.
+
+ La librería se compila con `panic = "abort"`: un pánico mata el proceso
+ que la carga, y en un móvil eso se ve como "la app se cierra sola", sin
+ más pista. Con esto, antes de morir se añade al fichero una línea con el
+ lugar y el mensaje, para que el embebedor la enseñe en el siguiente
+ arranque. `path` nulo deja de anotar.
+
+ # Safety
+ `path` debe ser nulo o una C-string NUL-terminada válida.
+ */
+GsStatus gs_crash_log_set_path(const char *path);
+
+/*
  Activa (`on != 0`) o desactiva la reducción de ruido del micrófono.
 
  Activa por defecto. Sólo actúa cuando la sesión viaja comprimida (ver
@@ -575,6 +600,15 @@ GsStatus gs_audio_stop(GsSessionHandle *handle);
  `handle` debe ser un handle válido de `gs_session_create`.
  */
 GsStatus gs_audio_set_ptt(GsSessionHandle *handle, int on);
+
+/*
+ Pausa (`on != 0`) o reanuda la escucha: con la pausa puesta el audio
+ recibido no suena, pero la sesión sigue viva y al día.
+
+ # Safety
+ `handle` debe ser un handle válido de `gs_session_create`.
+ */
+GsStatus gs_audio_set_muted(GsSessionHandle *handle, int on);
 
 /*
  Lee el estado del audio nativo. Con el audio parado escribe todo a cero.

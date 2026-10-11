@@ -522,6 +522,42 @@ mod tests {
     }
 
     #[test]
+    fn lo_que_no_es_opus_se_rechaza_sin_caerse() {
+        // Por la red puede llegar cualquier cosa: un peer con una versión
+        // anterior manda PCM con la misma etiqueta, y un paquete puede venir
+        // truncado. El decodificador tiene que devolver un error o audio, pero
+        // nunca abortar: la librería se compila con `panic = "abort"` y un
+        // pánico aquí cierra la app entera.
+        let mut dec = VoiceDecoder::new(RATE, 20).unwrap();
+        let mut pcm = [0i16; FRAME];
+        let mut seed = 0x9E37_79B9u32;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed
+        };
+        // Un frame PCM de 20 ms tal cual (lo que mandaba la versión anterior).
+        let pcm_frame: Vec<u8> = (0..1920).map(|_| next() as u8).collect();
+        let _ = dec.decode(&pcm_frame, &mut pcm);
+        let _ = dec.recover_previous(&pcm_frame, &mut pcm);
+        // Y basura de todos los tamaños, incluido vacío.
+        for round in 0..4000 {
+            let len = (next() % 1300) as usize * usize::from(round % 7 != 0);
+            let packet: Vec<u8> = (0..len).map(|_| next() as u8).collect();
+            let _ = dec.decode(&packet, &mut pcm);
+            let _ = dec.recover_previous(&packet, &mut pcm);
+            let _ = dec.conceal(&mut pcm);
+        }
+        // Después de todo eso sigue sirviendo para audio de verdad.
+        let (mut enc, _) = pair(64_000);
+        let mut phase = 0.0;
+        let mut out = [0u8; MAX_PACKET];
+        let n = enc.encode(&mut tone(440.0, &mut phase), &mut out).unwrap();
+        assert_eq!(dec.decode(&out[..n], &mut pcm).unwrap(), FRAME);
+    }
+
+    #[test]
     fn los_parametros_invalidos_se_rechazan() {
         assert!(VoiceEncoder::new(44_100, 20, 64_000).is_err());
         assert!(VoiceEncoder::new(48_000, 15, 64_000).is_err());

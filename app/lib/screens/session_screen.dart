@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 
 import '../core/glass.dart';
 import '../core/states.dart';
@@ -44,6 +46,19 @@ class SessionScreen extends StatelessWidget {
     if (context.mounted) Navigator.pop(context);
   }
 
+  /// Enseña la invitación de la sala sin salir de la conversación: es la
+  /// misma que abrió la sala, así que quien la escanee entra directo.
+  void _showInvite(BuildContext context, SessionController c) {
+    final invite = c.pairingUri?.toUri();
+    if (invite == null) return;
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (_) => _InviteSheet(invite: invite, roomCode: c.roomCode ?? ''),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = context.watch<SessionController>();
@@ -58,7 +73,11 @@ class SessionScreen extends StatelessWidget {
             Text(c.roomCode != null ? 'Sala ${c.roomCode}' : 'Conversación'),
             if (c.isLive)
               Text(
-                _formatDuration(c.elapsed),
+                // Sólo el anfitrión conoce el total: un invitado está
+                // conectado a él y a nadie más.
+                c.canInvite && c.roomSize > 2
+                    ? '${_formatDuration(c.elapsed)} · ${c.roomSize} en la sala'
+                    : _formatDuration(c.elapsed),
                 style: theme.textTheme.labelSmall
                     ?.copyWith(color: glass.secondary),
               ),
@@ -95,6 +114,15 @@ class SessionScreen extends StatelessWidget {
                         ),
                         const SizedBox(height: Spacing.md),
                       ],
+                      if (c.paused) ...[
+                        WarningBanner(
+                          message: 'Sala en pausa: no oyes ni te oyen. '
+                              'Sigues dentro.',
+                          actionLabel: 'Reanudar',
+                          onAction: () => c.setPaused(false),
+                        ),
+                        const SizedBox(height: Spacing.md),
+                      ],
                       if (c.notice != null) ...[
                         WarningBanner(
                           message: c.notice!,
@@ -108,6 +136,22 @@ class SessionScreen extends StatelessWidget {
                       const SizedBox(height: Spacing.xxxl),
                       _TechnicalDetails(controller: c),
                       const SizedBox(height: Spacing.lg),
+                      if (!c.paused) ...[
+                        OutlinedButton.icon(
+                          onPressed: () => c.setPaused(true),
+                          icon: const Icon(Icons.pause),
+                          label: const Text('Pausar'),
+                        ),
+                        const SizedBox(height: Spacing.md),
+                      ],
+                      if (c.canInvite) ...[
+                        FilledButton.tonalIcon(
+                          onPressed: () => _showInvite(context, c),
+                          icon: const Icon(Icons.person_add_alt_1),
+                          label: const Text('Invitar a alguien más'),
+                        ),
+                        const SizedBox(height: Spacing.md),
+                      ],
                       OutlinedButton.icon(
                         onPressed: () => _confirmEndSession(context, c),
                         icon: Icon(Icons.call_end,
@@ -122,6 +166,84 @@ class SessionScreen extends StatelessWidget {
                 ),
               ),
             ),
+    );
+  }
+}
+
+/// Invitación de la sala en curso: código QR y enlace para copiar.
+class _InviteSheet extends StatefulWidget {
+  const _InviteSheet({required this.invite, required this.roomCode});
+
+  final String invite;
+  final String roomCode;
+
+  @override
+  State<_InviteSheet> createState() => _InviteSheetState();
+}
+
+class _InviteSheetState extends State<_InviteSheet> {
+  bool _copied = false;
+
+  Future<void> _copy() async {
+    await Clipboard.setData(ClipboardData(text: widget.invite));
+    if (mounted) setState(() => _copied = true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(
+            Spacing.xl, 0, Spacing.xl, Spacing.xl),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'Que escaneen este código',
+              style: theme.textTheme.titleLarge
+                  ?.copyWith(fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: Spacing.xs),
+            Text(
+              'Entran en esta misma conversación, sin cortarla.',
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodyMedium,
+            ),
+            const SizedBox(height: Spacing.lg),
+            Semantics(
+              label: 'Código QR de invitación a la sala',
+              child: Container(
+                padding: const EdgeInsets.all(Spacing.md),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(Radii.glass),
+                ),
+                child: QrImageView(
+                  data: widget.invite,
+                  size: 220,
+                  backgroundColor: Colors.white,
+                ),
+              ),
+            ),
+            const SizedBox(height: Spacing.md),
+            Text(
+              widget.roomCode,
+              style: theme.textTheme.titleLarge?.copyWith(
+                fontWeight: FontWeight.w800,
+                letterSpacing: 4,
+              ),
+            ),
+            const SizedBox(height: Spacing.lg),
+            OutlinedButton.icon(
+              onPressed: _copy,
+              icon: Icon(_copied ? Icons.check : Icons.link),
+              label:
+                  Text(_copied ? 'Invitación copiada' : 'Copiar invitación'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -191,7 +313,7 @@ class _TalkPanel extends StatelessWidget {
             const SizedBox(height: Spacing.xxxl),
             PttButton(
               pressed: talking,
-              enabled: c.isLive,
+              enabled: c.isLive && !c.paused,
               peerSpeaking: hearing,
               level: level,
               onDown: c.pttDown,

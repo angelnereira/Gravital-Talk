@@ -922,3 +922,156 @@ async fn un_camino_roto_en_un_solo_sentido_tambien_se_detecta() {
     );
     assert_eq!(guest.peers().await, vec![first]);
 }
+
+// ── Salas de más de dos ───────────────────────────────────────────────────
+
+/// Sala con anfitrión y dos invitados, cada uno tras su NAT. Devuelve
+/// (anfitrión, invitado A, invitado B) ya conectados, con el anfitrión
+/// recibiendo.
+async fn room_of_three(
+    net: &Arc<Net>,
+) -> (
+    Arc<Session>,
+    Arc<Session>,
+    Arc<Session>,
+    mpsc::UnboundedReceiver<Vec<u8>>,
+) {
+    let host_t = net.join("203.0.113.1:40000", Mapping::Open, Filter::PortRestricted);
+    let a_t = net.join("203.0.113.2:50000", Mapping::Cone, Filter::PortRestricted);
+    let b_t = net.join("203.0.113.3:60000", Mapping::Cone, Filter::PortRestricted);
+    let host_addr = host_t.public();
+
+    let host = session(host_t, None);
+    host.set_multi_peer(true);
+    let a = session(a_t, None);
+    let b = session(b_t, None);
+
+    // El primero entra con el anfitrión esperando.
+    let accepting = {
+        let host = host.clone();
+        tokio::spawn(async move { host.handshake_open().await })
+    };
+    timeout(Duration::from_secs(20), a.handshake_any(&[host_addr]))
+        .await
+        .expect("A no debe colgarse")
+        .expect("A entra");
+    accepting.await.unwrap().expect("handshake del anfitrión");
+
+    // El segundo entra con la sala ya en marcha: lo admite el lazo de
+    // recepción del anfitrión.
+    let host_rx = spawn_receiver(&host);
+    timeout(Duration::from_secs(20), b.handshake_any(&[host_addr]))
+        .await
+        .expect("B no debe colgarse")
+        .expect("B entra con la sala en marcha");
+    (host, a, b, host_rx)
+}
+
+#[tokio::test(start_paused = true)]
+async fn en_una_sala_de_tres_todos_oyen_a_quien_habla() {
+    let net = Arc::new(Net::default());
+    let (host, a, b, mut host_rx) = room_of_three(&net).await;
+    assert_eq!(host.peer_count().await, 2);
+    let mut a_rx = spawn_receiver(&a);
+    let mut b_rx = spawn_receiver(&b);
+
+    // Habla un invitado: lo oye el anfitrión y, reenviado, el otro invitado.
+    assert!(audio_gets_through(&a, &mut host_rx, 1, Duration::from_secs(3)).await);
+    assert!(
+        audio_gets_through(&a, &mut b_rx, 2, Duration::from_secs(3)).await,
+        "lo que dice A tiene que llegarle a B a través del anfitrión"
+    );
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    // Habla el anfitrión: lo oyen los dos.
+    assert!(audio_gets_through(&host, &mut a_rx, 3, Duration::from_secs(3)).await);
+    assert!(audio_gets_through(&host, &mut b_rx, 4, Duration::from_secs(3)).await);
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    // Y el otro invitado también puede hablar: lo oye el primero...
+    assert!(audio_gets_through(&b, &mut a_rx, 5, Duration::from_secs(3)).await);
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    // ...y el anfitrión, aunque la numeración de B no tenga nada que ver con
+    // la de A, que habló antes.
+    assert!(
+        audio_gets_through(&b, &mut host_rx, 6, Duration::from_secs(3)).await,
+        "el anfitrión debe oír al segundo orador"
+    );
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert!(audio_gets_through(&a, &mut host_rx, 7, Duration::from_secs(3)).await);
+}
+
+#[tokio::test(start_paused = true)]
+async fn mientras_uno_habla_el_que_pisa_no_se_reenvia() {
+    // Los demás reciben un único flujo: dos voces mezcladas en él serían
+    // ruido. Tiene la palabra quien empezó.
+    let net = Arc::new(Net::default());
+    let (_host, a, b, mut host_rx) = room_of_three(&net).await;
+    let mut a_rx = spawn_receiver(&a);
+    let _b_rx = spawn_receiver(&b);
+
+    assert!(audio_gets_through(&a, &mut host_rx, 1, Duration::from_secs(3)).await);
+    // A sigue hablando; B intenta pisar.
+    for _ in 0..10 {
+        a.send_audio(&[1u8; 960]).await.unwrap();
+        b.send_audio(&[9u8; 960]).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let mut heard_by_a = Vec::new();
+    while let Ok(frame) = a_rx.try_recv() {
+        heard_by_a.push(frame[0]);
+    }
+    assert!(
+        !heard_by_a.contains(&9),
+        "a A no debe llegarle lo de B mientras A tiene la palabra: {heard_by_a:?}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn admitir_a_otro_participante_no_rompe_al_que_ya_estaba() {
+    // El fallo que tenía el modo sala: el handshake del segundo sustituía las
+    // claves de la sesión y el primero dejaba de poder descifrar.
+    let net = Arc::new(Net::default());
+    let (host, a, _b, mut host_rx) = room_of_three(&net).await;
+    let mut a_rx = spawn_receiver(&a);
+    assert!(audio_gets_through(&a, &mut host_rx, 1, Duration::from_secs(3)).await);
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert!(audio_gets_through(&host, &mut a_rx, 2, Duration::from_secs(3)).await);
+}
+
+#[tokio::test(start_paused = true)]
+async fn que_uno_se_vaya_no_cierra_la_sala() {
+    let net = Arc::new(Net::default());
+    let (host, a, b, mut host_rx) = room_of_three(&net).await;
+    let mut a_rx = spawn_receiver(&a);
+    let b_addr = b.local_addr().unwrap();
+
+    b.close().await.unwrap();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    assert!(
+        !host.peers().await.contains(&b_addr),
+        "B debe salir de la lista"
+    );
+    assert_eq!(host.peer_count().await, 1);
+    // Los que quedan siguen hablando.
+    assert!(audio_gets_through(&a, &mut host_rx, 1, Duration::from_secs(3)).await);
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert!(audio_gets_through(&host, &mut a_rx, 2, Duration::from_secs(3)).await);
+}
+
+#[tokio::test(start_paused = true)]
+async fn quien_desaparece_sin_avisar_acaba_fuera_de_la_sala() {
+    // Se quedó sin batería o sin red: no manda `Close`. Como cada peer manda
+    // un latido por segundo, su silencio prolongado lo delata.
+    let net = Arc::new(Net::default());
+    let (host, a, b, _host_rx) = room_of_three(&net).await;
+    let _a_rx = spawn_receiver(&a);
+    // B deja de existir: nadie lee ni escribe su sesión.
+    drop(b);
+    assert_eq!(host.peer_count().await, 2);
+
+    tokio::time::sleep(Duration::from_secs(25)).await;
+    assert_eq!(host.peer_count().await, 1, "B debe caducar; A sigue");
+}

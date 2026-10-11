@@ -46,6 +46,11 @@ int main(void) {
     }
     gs_session_destroy(session);
 
+    /* Nulo es válido: deja de anotar fallos. */
+    if (gs_crash_log_set_path(NULL) != GS_OK) {
+        return 1;
+    }
+
     char ip[64];
     if (gs_discover_local_addr(ip, sizeof ip) == GS_OK) {
         printf("IP local: %s\n", ip);

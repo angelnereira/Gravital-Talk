@@ -9,6 +9,7 @@ import 'screens/home_screen.dart';
 import 'core/routes.dart';
 import 'screens/onboarding_screen.dart';
 import 'screens/pairing_screen.dart';
+import 'services/background_session.dart';
 import 'services/launch_links.dart';
 import 'services/pairing_uri.dart';
 import 'services/event_log.dart';
@@ -68,6 +69,7 @@ class _GravitalTalkAppState extends State<GravitalTalkApp> {
   void initState() {
     super.initState();
     LaunchLinks.listen(_openInvite);
+    BackgroundSession.onLeave(() => widget.controller.reset());
     final link = widget.initialLink;
     if (link != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _openInvite(link));

@@ -6,6 +6,27 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
 
 ### Added
 
+**Salas de más de dos, en segundo plano y con pausa**
+- El anfitrión puede **invitar a más gente sin cortar la conversación**:
+  «Invitar a alguien más» enseña el mismo código QR y enlace de la sala desde
+  la pantalla de hablar, y la cabecera indica cuántos hay dentro.
+- En Android la sala **sigue viva con la app en segundo plano** o la pantalla
+  apagada: un servicio en primer plano mantiene el micrófono y la red, con una
+  notificación desde la que volver o salir. Se para al salir de la sala o al
+  cerrar la app desde recientes. Nuevo permiso opcional de notificaciones en
+  Ajustes.
+- **Pausar** la sala: se deja de oír y de poder hablar sin perder la conexión,
+  hasta reanudar. FFI: `gs_audio_set_muted`.
+
+**Informe del último cierre inesperado**
+- Si la app se cerró sola, Ajustes → Acerca de lo dice y deja copiar el
+  motivo: el fallo interno que anota la librería nativa antes de morir
+  (`gs_crash_log_set_path`: lugar y mensaje del pánico), la excepción de la
+  parte Android y la causa que guarda el sistema (Android 11+), con modelo y
+  arquitectura del dispositivo. Sirve para diagnosticar cierres en
+  dispositivos que no se tienen a mano.
+- FFI: `gs_session_peer_count` ya se usa desde la app.
+
 **Audio comprimido, tolerante a pérdidas y con reducción de ruido**
 - Las apps mandaban PCM sin comprimir: unos 800 kbps, un paquete de 1 KB cada
   10 ms. Ahora viaja **Opus**, con la tasa a elegir en Ajustes: **128, 64 o

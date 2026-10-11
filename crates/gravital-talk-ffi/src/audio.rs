@@ -34,6 +34,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 pub struct Shared {
     stop: AtomicBool,
     ptt: AtomicBool,
+    /// Escucha en pausa: se sigue recibiendo, pero no suena.
+    muted: AtomicBool,
     /// `f32` en bits: nivel 0..1 del micrófono.
     mic_level: AtomicU32,
     /// `f32` en bits: nivel 0..1 del audio recibido.
@@ -60,6 +62,10 @@ pub struct Stats {
 impl Shared {
     pub fn set_ptt(&self, on: bool) {
         self.ptt.store(on, Ordering::Release);
+    }
+
+    pub fn set_muted(&self, on: bool) {
+        self.muted.store(on, Ordering::Release);
     }
 
     fn report(&self, problem: String) {
@@ -366,7 +372,12 @@ mod imp {
                         .rx_level
                         .store(level(&mono).to_bits(), Ordering::Relaxed);
                     shared.rx_frames.fetch_add(1, Ordering::Relaxed);
-                    if let Some(p) = &playback {
+                    // En pausa se sigue leyendo de la red (la sesión no debe
+                    // acumular audio viejo), pero no se manda al altavoz.
+                    if let Some(p) = playback
+                        .as_ref()
+                        .filter(|_| !shared.muted.load(Ordering::Acquire))
+                    {
                         p.push(&mono);
                     }
                 }

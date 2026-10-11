@@ -163,6 +163,8 @@ typedef _PreferredPortC = Int32 Function(Uint16, Pointer<Uint16>);
 typedef _ReachD = int Function(int, Pointer<Int32>);
 typedef _PreferredPortD = int Function(int, Pointer<Uint16>);
 typedef _DiscoverStunD = int Function(int, Pointer<Utf8>, int);
+typedef _CrashLogC = Int32 Function(Pointer<Utf8>);
+typedef _CrashLogD = int Function(Pointer<Utf8>);
 typedef _DiscoverLocalC = Int32 Function(Pointer<Utf8>, UintPtr);
 typedef _DiscoverLocalD = int Function(Pointer<Utf8>, int);
 typedef _SetRendezvousC = Int32 Function(Pointer<Void>, Pointer<Utf8>, Uint16);
@@ -255,8 +257,12 @@ class NativeBridge {
             'gs_session_map_port'),
         _rxIdleMs =
             lib.lookupFunction<_RxIdleC, _RxIdleD>('gs_session_rx_idle_ms'),
+        _crashLog = lib.lookupFunction<_CrashLogC, _CrashLogD>(
+            'gs_crash_log_set_path'),
         _isRelayed =
             lib.lookupFunction<_HandleC, _HandleD>('gs_session_is_relayed'),
+        _peerCount =
+            lib.lookupFunction<_HandleC, _HandleD>('gs_session_peer_count'),
         _connectAnyTimeout =
             lib.lookupFunction<_ConnectAnyTimeoutC, _ConnectAnyTimeoutD>(
                 'gs_session_connect_any_timeout'),
@@ -271,6 +277,8 @@ class NativeBridge {
             lib.lookupFunction<_IntC, _IntD>('gs_audio_supported'),
         _audioStart = lib.lookupFunction<_HandleC, _HandleD>('gs_audio_start'),
         _audioStop = lib.lookupFunction<_HandleC, _HandleD>('gs_audio_stop'),
+        _audioSetMuted = lib.lookupFunction<_AudioSetPttC, _AudioSetPttD>(
+            'gs_audio_set_muted'),
         _audioSetPtt = lib
             .lookupFunction<_AudioSetPttC, _AudioSetPttD>('gs_audio_set_ptt'),
         _audioStats =
@@ -316,6 +324,8 @@ class NativeBridge {
   final _PublicAddrD _mapPort;
   final _RxIdleD _rxIdleMs;
   final _HandleD _isRelayed;
+  final _CrashLogD _crashLog;
+  final _HandleD _peerCount;
   final _ConnectAnyTimeoutD _connectAnyTimeout;
   final _AudioSetPttD _setNoiseSuppression;
   final _SetBitrateD _setBitrate;
@@ -325,6 +335,7 @@ class NativeBridge {
   final _HandleD _audioStart;
   final _HandleD _audioStop;
   final _AudioSetPttD _audioSetPtt;
+  final _AudioSetPttD _audioSetMuted;
   final _AudioStatsD _audioStats;
   final _ReachD _diagnoseReachability;
   final _PreferredPortD _preferredHostPort;
@@ -550,6 +561,16 @@ class NativeBridge {
   ///
   /// El puerto no viene de aquí a propósito: es el de la sesión. El socket con
   /// el que se averigua la IP es desechable.
+  /// Fichero donde la librería anota un fallo interno antes de morir.
+  void setCrashLogPath(String path) {
+    final cPath = path.toNativeUtf8();
+    try {
+      _crashLog(cPath);
+    } finally {
+      calloc.free(cPath);
+    }
+  }
+
   String? discoverLocalAddress() {
     const bufLen = 128;
     final buf = calloc<Uint8>(bufLen);
@@ -727,6 +748,9 @@ class NativeSession {
   /// `true` si el audio va por el relay y no directo.
   bool isRelayed() => !_destroyed && _bridge._isRelayed(_handle) == 1;
 
+  /// Dispositivos conectados a esta sesión, sin contar este.
+  int peerCount() => _destroyed ? 0 : _bridge._peerCount(_handle);
+
   /// Activa o desactiva la reducción de ruido del micrófono.
   void setNoiseSuppression(bool on) {
     _ensureAlive();
@@ -774,6 +798,12 @@ class NativeSession {
   void audioSetPtt(bool on) {
     if (_destroyed) return;
     _bridge._audioSetPtt(_handle, on ? 1 : 0);
+  }
+
+  /// Pausa o reanuda la escucha del audio nativo.
+  void audioSetMuted(bool on) {
+    if (_destroyed) return;
+    _bridge._audioSetMuted(_handle, on ? 1 : 0);
   }
 
   /// Niveles y contadores del audio nativo.
