@@ -479,12 +479,20 @@ class ContactsService extends ChangeNotifier {
   }
 
   bool _wasLive = false;
+  String? _talkingId;
+
+  /// Contacto con el que se está hablando ahora, o `null`.
+  Contact? get talkingWith => _byId(_talkingId ?? '');
 
   /// La conversación que salió de una invitación ha terminado: ya no se
   /// espera a nadie más por ella.
   void _onController() {
     final live = _controller.isLive;
     if (_wasLive && !live && _invitingId != null) stopInviting();
+    if (_wasLive && !live && _talkingId != null) {
+      _talkingId = null;
+      notifyListeners();
+    }
     _wasLive = live;
   }
 
@@ -577,6 +585,7 @@ class ContactsService extends ChangeNotifier {
     _activeId = null;
     if (active != null) {
       // Era una llamada entre contactos: sólo se anota que se habló.
+      _talkingId = active.id;
       await _put(active.copyWith(lastSeen: now, lastLocal: e.peerHost));
       return;
     }
@@ -602,6 +611,7 @@ class ContactsService extends ChangeNotifier {
       lastLocal: e.peerHost,
       lastSeen: now,
     );
+    _talkingId = contact.id;
     await _put(contact);
     // El anfitrión no sabe quién ha entrado: el invitado se presenta. Varias
     // veces porque es UDP y el anfitrión puede estar aún ocupado conectando.

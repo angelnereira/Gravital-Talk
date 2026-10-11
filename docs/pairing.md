@@ -369,3 +369,30 @@ envía e `ip` es su dirección local. Quien lo genera guarda ya un contacto sin 
 ese secreto; quien lo abre guarda el suyo y envía un `hello` sellado para presentarse.
 Es un secreto: se pasa por un canal de confianza. Si lo abren varias personas, todas
 comparten la misma clave con quien lo envió.
+
+## La invitación (formato vigente)
+
+```text
+gravital-talk://i?v=2&s=SECRETO&n=Nombre&d=ID&ip=192.168.1.10
+```
+
+Es el único enlace que se comparte desde la app. Abrirlo:
+
+1. guarda como contacto a quien lo envió y le manda un `hello` sellado;
+2. si quien lo envió sigue en la pantalla **Invitar**, éste abre una sala y llama solo
+   (`call`), y quien abrió el enlace acepta sin preguntar durante 30 s;
+3. mientras entra, el invitado envía `answer` con sus direcciones, que el anfitrión
+   aplica sin intervención (es el antiguo código de respuesta).
+
+Todo ello viaja como datagramas `knock` por la red local (UDP 47800). **Entre redes
+distintas ese saludo no llega**, así que el arranque automático sólo funciona en la misma
+red; fuera de ella sigue valiendo el camino de invitación + código de respuesta descrito
+arriba. El buzón MQTT que lo resolvería (`app/lib/services/mailbox.dart`) está escrito y
+apagado por no haberse podido validar contra servidores públicos.
+
+Se siguen aceptando `gravital-talk://pair?…`, `…://contact?…` y `…://answer?…`.
+
+Formas de entregar el enlace a la app sin teclear: tocarlo (donde sea pulsable),
+compartir el mensaje hacia la app (Android, `ACTION_SEND`), «Abrir invitación copiada»,
+escanear el QR, o abrirlo en el escritorio (manejador `x-scheme-handler/gravital-talk` y
+socket de instancia única en `$XDG_DATA_HOME/gravital-talk.sock`).

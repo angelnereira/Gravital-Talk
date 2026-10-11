@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import 'app.dart';
@@ -16,6 +18,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Escritorio: si ya hay una copia abierta y esto es sólo un enlace que el
+  // sistema nos pasa, se le entrega a ella y esta copia termina.
+  if (await LaunchLinks.desktopHandoff(args)) exit(0);
 
   final log = EventLog();
   final store = SettingsStore();

@@ -122,8 +122,14 @@ class MainActivity : FlutterActivity() {
         intent.pairingLink()?.let { channel?.invokeMethod("onLink", it) }
     }
 
-    private fun Intent.pairingLink(): String? =
-        dataString?.takeIf { action == Intent.ACTION_VIEW && it.startsWith("gravital-talk://") }
+    /** Invitación que trae el intent: un enlace abierto o un texto compartido. */
+    private fun Intent.pairingLink(): String? = when (action) {
+        Intent.ACTION_VIEW -> dataString?.takeIf { it.startsWith("gravital-talk://") }
+        // Del mensaje compartido sólo interesa el enlace, no el texto que lo rodea.
+        Intent.ACTION_SEND -> getStringExtra(Intent.EXTRA_TEXT)
+            ?.let { Regex("gravital-talk://\\S+").find(it)?.value }
+        else -> null
+    }
 
     /**
      * Anota la excepción que tumba el proceso antes de dejarla seguir: sin

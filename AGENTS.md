@@ -344,6 +344,14 @@ Si el audio se corta, mira primero el tráfico (`tcpdump` por el puerto de la se
 sala sana son ~50 paquetes por segundo y sentido mientras alguien habla, y unos pocos en
 silencio.
 
+## Iconos en blanco en Linux
+
+`flutter build linux` recorta la fuente de iconos y en compilaciones incrementales puede
+quedarse con el recorte anterior: los iconos nuevos salen como un rombo o en blanco.
+`make app-linux` compila con `--no-tree-shake-icons`; si lanzas `flutter build linux` a
+mano, pásalo también. Otra causa de «icono que no se ve»: mismo color que su fondo (pasó
+en el onboarding con el primario sobre un vidrio con resplandor primario).
+
 ## Buzón de señalización (apagado)
 
 `app/lib/services/mailbox.dart` lleva los mismos datagramas sellados de `knock` por MQTT,

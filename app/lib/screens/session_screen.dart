@@ -72,7 +72,12 @@ class SessionScreen extends StatelessWidget {
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(c.roomCode != null ? 'Sala ${c.roomCode}' : 'Conversación'),
+            // Con quién, no en qué sala: el código de sala es un detalle
+            // interno que ya nadie tiene que dictar.
+            Text(switch (context.watch<ContactsService>().talkingWith) {
+              final contact? => contact.name,
+              null => 'Conversación',
+            }),
             if (c.isLive)
               Text(
                 // Sólo el anfitrión conoce el total: un invitado está
