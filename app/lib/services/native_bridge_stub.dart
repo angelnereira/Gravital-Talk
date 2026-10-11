@@ -20,6 +20,7 @@ class NativeBridge {
   String? discoverPublicAddress(int localPort) => null;
 
   String? discoverLocalAddress() => null;
+  void setCrashLogPath(String path) {}
 
   bool get audioSupported => false;
 
@@ -118,6 +119,7 @@ class NativeSession {
   void addPathHints(List<String> addrs) => _unavailable();
   int? rxIdleMs() => null;
   bool isRelayed() => false;
+  int peerCount() => 0;
   void setNoiseSuppression(bool on) => _unavailable();
   void setBitrate(int bitsPerSecond) => _unavailable();
   int bitrate() => 0;
@@ -126,6 +128,7 @@ class NativeSession {
   String? audioProblems() => null;
   void audioStop() {}
   void audioSetPtt(bool on) {}
+  void audioSetMuted(bool on) {}
   NativeAudioStats audioStats() => _unavailable();
   NetworkReachability? diagnoseReachability() => _unavailable();
 

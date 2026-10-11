@@ -1324,6 +1324,83 @@ pub unsafe extern "C" fn gs_session_peer_count(handle: *mut GsSessionHandle) -> 
     c_int::try_from(count).unwrap_or(c_int::MAX)
 }
 
+// ─── Diagnóstico ───────────────────────────────────────────────────────
+
+/// Fichero donde se anota un pánico antes de que el proceso muera.
+static CRASH_LOG: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
+static CRASH_HOOK: std::sync::Once = std::sync::Once::new();
+
+/// Fija el fichero donde dejar constancia de un fallo interno.
+///
+/// La librería se compila con `panic = "abort"`: un pánico mata el proceso
+/// que la carga, y en un móvil eso se ve como "la app se cierra sola", sin
+/// más pista. Con esto, antes de morir se añade al fichero una línea con el
+/// lugar y el mensaje, para que el embebedor la enseñe en el siguiente
+/// arranque. `path` nulo deja de anotar.
+///
+/// # Safety
+/// `path` debe ser nulo o una C-string NUL-terminada válida.
+#[no_mangle]
+pub unsafe extern "C" fn gs_crash_log_set_path(path: *const c_char) -> GsStatus {
+    let target = if path.is_null() {
+        None
+    } else {
+        // SAFETY: `path` no es nulo y es una C-string válida (contrato).
+        match unsafe { CStr::from_ptr(path) }.to_str() {
+            Ok(s) if !s.is_empty() => Some(std::path::PathBuf::from(s)),
+            _ => {
+                set_last_error("crash log: ruta no válida");
+                return GsStatus::GS_ERR_INVALID_ARGUMENT;
+            }
+        }
+    };
+    *CRASH_LOG.lock().unwrap_or_else(|p| p.into_inner()) = target;
+    CRASH_HOOK.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            record_panic(info);
+            previous(info);
+        }));
+    });
+    GsStatus::GS_OK
+}
+
+fn record_panic(info: &std::panic::PanicHookInfo<'_>) {
+    use std::io::Write;
+
+    // `try_lock`: si el pánico saltó con el cerrojo tomado, mejor perder la
+    // nota que quedarse colgado en vez de morir.
+    let Ok(guard) = CRASH_LOG.try_lock() else {
+        return;
+    };
+    let Some(path) = guard.as_ref() else {
+        return;
+    };
+    let payload = info.payload();
+    let message = payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("(sin mensaje)");
+    let place = info.location().map_or_else(
+        || "lugar desconocido".to_owned(),
+        |l| format!("{}:{}", l.file(), l.line()),
+    );
+    let thread = std::thread::current();
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(
+            file,
+            "gravital-talk {} · hilo {} · {place} · {message}",
+            env!("CARGO_PKG_VERSION"),
+            thread.name().unwrap_or("sin nombre"),
+        );
+    }
+}
+
 // ─── Códec de voz ──────────────────────────────────────────────────────
 
 /// Activa (`on != 0`) o desactiva la reducción de ruido del micrófono.
@@ -1533,6 +1610,27 @@ pub unsafe extern "C" fn gs_audio_set_ptt(handle: *mut GsSessionHandle, on: c_in
         })
 }
 
+/// Pausa (`on != 0`) o reanuda la escucha: con la pausa puesta el audio
+/// recibido no suena, pero la sesión sigue viva y al día.
+///
+/// # Safety
+/// `handle` debe ser un handle válido de `gs_session_create`.
+#[no_mangle]
+pub unsafe extern "C" fn gs_audio_set_muted(handle: *mut GsSessionHandle, on: c_int) -> GsStatus {
+    if handle.is_null() {
+        return GsStatus::GS_ERR_NULL_POINTER;
+    }
+    // SAFETY: `handle` no es nulo y viene de `gs_session_create` (contrato).
+    let inner = unsafe { &*(handle as *mut SessionInner) };
+    inner
+        .audio()
+        .as_ref()
+        .map_or(GsStatus::GS_ERR_INVALID_STATE, |engine| {
+            engine.shared().set_muted(on != 0);
+            GsStatus::GS_OK
+        })
+}
+
 /// Lee el estado del audio nativo. Con el audio parado escribe todo a cero.
 ///
 /// # Safety
@@ -1678,6 +1776,10 @@ mod tests {
             unsafe { gs_audio_set_ptt(handle, 1) },
             GsStatus::GS_ERR_INVALID_STATE
         );
+        assert_eq!(
+            unsafe { gs_audio_set_muted(handle, 1) },
+            GsStatus::GS_ERR_INVALID_STATE
+        );
         assert_eq!(unsafe { gs_audio_stop(handle) }, GsStatus::GS_OK);
 
         unsafe { gs_session_destroy(handle) };
@@ -1742,6 +1844,30 @@ mod tests {
             .map(|b| f64::from(i16::from_le_bytes(*b)))
             .collect();
         (samples.iter().map(|s| s * s).sum::<f64>() / samples.len().max(1) as f64).sqrt()
+    }
+
+    #[test]
+    fn un_panico_deja_constancia_en_el_fichero() {
+        let path = std::env::temp_dir().join(format!("gs-crash-{}.txt", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let c_path = CString::new(path.to_str().unwrap()).unwrap();
+        // SAFETY: `c_path` es una C-string válida durante la llamada.
+        assert_eq!(
+            unsafe { gs_crash_log_set_path(c_path.as_ptr()) },
+            GsStatus::GS_OK
+        );
+        let _ = std::thread::Builder::new()
+            .name("gs-prueba".into())
+            .spawn(|| panic!("fallo de prueba {}", 42))
+            .unwrap()
+            .join();
+        let noted = std::fs::read_to_string(&path).unwrap();
+        // SAFETY: nulo es un argumento válido: deja de anotar.
+        unsafe { gs_crash_log_set_path(ptr::null()) };
+        let _ = std::fs::remove_file(&path);
+        assert!(noted.contains("fallo de prueba 42"), "{noted}");
+        assert!(noted.contains("gs-prueba"), "{noted}");
+        assert!(noted.contains("lib.rs"), "{noted}");
     }
 
     #[test]

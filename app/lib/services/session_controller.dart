@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import '../models/connection.dart';
 import '../models/reachability.dart';
 import '../models/session.dart';
+import 'background_session.dart';
 import 'engine.dart';
 import 'event_log.dart';
 import 'native_bridge.dart';
@@ -85,6 +86,16 @@ class SessionController extends ChangeNotifier {
 
   /// `true` si el audio pasa por un servidor intermedio y no directo.
   bool get relayed => _relayed;
+
+  int _peerCount = 0;
+
+  /// Dispositivos en la sala contando este, visto desde el anfitrión. Un
+  /// invitado sólo conoce al anfitrión, así que no puede dar el total.
+  int get roomSize => _peerCount + 1;
+
+  /// `true` si esta sesión es la anfitriona de la sala y puede invitar a más.
+  bool get canInvite =>
+      _state.isLive && _role == ConnectionRole.host && pairingUri != null;
 
   /// Tasa de bits a la que se está enviando el audio, o 0 si no aplica.
   int get audioBitrate => _state.isLive ? _engine.audioBitrate() : 0;
@@ -624,8 +635,24 @@ class SessionController extends ChangeNotifier {
 
   // ── PTT ─────────────────────────────────────────────────────────────────
 
+  bool _paused = false;
+
+  /// `true` si el usuario pausó la sala: sigue dentro, pero ni oye ni habla
+  /// hasta que la reanude.
+  bool get paused => _paused;
+
+  /// Pausa o reanuda la sala sin salir de ella.
+  Future<void> setPaused(bool on) async {
+    if (!isLive || _paused == on) return;
+    if (on) await pttUp();
+    _paused = on;
+    _engine.setListening(!on);
+    _log.info(on ? 'Sala en pausa' : 'Sala reanudada');
+    notifyListeners();
+  }
+
   Future<void> pttDown() async {
-    if (!isLive || _ptt) return;
+    if (!isLive || _ptt || _paused) return;
     _ptt = true;
     await _engine.pttPress();
     _log.info('PTT: transmitiendo');
@@ -655,6 +682,9 @@ class SessionController extends ChangeNotifier {
     _answer = null;
     _stalled = false;
     _relayed = false;
+    _peerCount = 0;
+    _paused = false;
+    unawaited(BackgroundSession.stop());
     if (_busy) _cancelled = true;
     // Dejar de observar la sala: si no, el stream sigue abierto tras colgar y
     // la siguiente conexión se encuentra eventos de la sala anterior.
@@ -773,6 +803,8 @@ class SessionController extends ChangeNotifier {
     _log.success(message);
     _takeAudioWarning();
     _startLevelTicker();
+    // A partir de aquí la sala debe aguantar con la app oculta.
+    unawaited(BackgroundSession.start(_roomCode ?? ''));
     notifyListeners();
   }
 
@@ -828,6 +860,7 @@ class SessionController extends ChangeNotifier {
           final idle = _engine.rxIdleMs();
           _stalled = idle != null && idle > 4000;
           _relayed = _engine.relayed;
+          _peerCount = _engine.peerCount;
         } else {
           _stalled = false;
         }

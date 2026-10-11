@@ -46,6 +46,7 @@ class AudioPump {
 
   SendPort? _control;
   bool _ptt = false;
+  bool _muted = false;
   bool _stopped = false;
   bool _micOk = false;
   double _micLevel = 0;
@@ -110,7 +111,7 @@ class AudioPump {
       _rxFrames++;
       _rxLevel = _rxLevel * 0.5 + pcmLevel(message) * 0.5;
       _lastRx = DateTime.now();
-      _speaker.feed(message);
+      if (!_muted) _speaker.feed(message);
     }
   }
 
@@ -170,6 +171,9 @@ class AudioPump {
       _pending.add(Uint8List.sublistView(all, offset));
     }
   }
+
+  /// Pausa o reanuda la escucha: en pausa se sigue recibiendo, sin sonar.
+  void setMuted(bool on) => _muted = on;
 
   /// Abre o cierra el paso del micrófono a la red.
   void setPtt(bool on) {

@@ -108,6 +108,13 @@ abstract class SessionEngine {
   /// `true` si el audio va por un relay y no directo.
   bool get relayed;
 
+  /// Pausa o reanuda la escucha sin soltar la conexión.
+  void setListening(bool on);
+
+  /// Dispositivos conectados a esta sesión, sin contar este. El anfitrión ve
+  /// a todos; un invitado sólo está conectado al anfitrión y ve `1`.
+  int get peerCount;
+
   /// Fija el servidor de encuentro (`host:puerto`) que coordina la
   /// perforación de NAT entre redes distintas. `null` o vacío lo quita.
   ///
@@ -231,6 +238,9 @@ class FfiSessionEngine implements SessionEngine {
     }
     return FfiSessionEngine(bridge);
   }
+
+  /// Fichero donde la librería nativa anota un fallo interno antes de morir.
+  void setCrashLogPath(String path) => _bridge.setCrashLogPath(path);
 
   @override
   EngineKind get kind => EngineKind.native;
@@ -381,6 +391,15 @@ class FfiSessionEngine implements SessionEngine {
   }
 
   @override
+  int get peerCount {
+    try {
+      return _session?.peerCount() ?? 0;
+    } on NativeException {
+      return 0;
+    }
+  }
+
+  @override
   Future<void> accept(String host, int port) =>
       _runHandshake(_handshake(_alive.address, host, port, server: true));
 
@@ -424,6 +443,15 @@ class FfiSessionEngine implements SessionEngine {
 
   @override
   Future<void> setAudioPtt(bool on) async => _setAudioPtt(on);
+
+  @override
+  void setListening(bool on) {
+    if (_nativeAudio) {
+      _session?.audioSetMuted(!on);
+    } else {
+      _pump?.setMuted(!on);
+    }
+  }
 
   void _setAudioPtt(bool on) {
     if (_nativeAudio) {
@@ -616,6 +644,12 @@ class DemoSessionEngine implements SessionEngine {
 
   @override
   bool get relayed => false;
+
+  @override
+  int get peerCount => 1;
+
+  @override
+  void setListening(bool on) {}
 
   @override
   Future<bool> setRendezvous(String? hostPort) async => true;

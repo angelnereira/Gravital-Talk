@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'app.dart';
+import 'services/crash_report.dart';
 import 'services/engine.dart';
 import 'services/event_log.dart';
 import 'services/grpc_room_api.dart';
@@ -21,6 +22,16 @@ Future<void> main(List<String> args) async {
   final engine = FfiSessionEngine.tryCreate() ?? DemoSessionEngine();
   log.info('Motor seleccionado: ${engine.kind.label} (${engine.detail})');
 
+  // Antes que nada más: lo que falle a partir de aquí debe quedar anotado.
+  final prefs = await SharedPreferences.getInstance();
+  final crashLog = await CrashReport.init(prefs);
+  if (crashLog != null && engine is FfiSessionEngine) {
+    engine.setCrashLogPath(crashLog);
+  }
+  if (CrashReport.last.value != null) {
+    log.warn('Cierre inesperado anterior: ${CrashReport.last.value}');
+  }
+
   // Plano de control: gRPC (nativo o grpc-web) con fallback a REST.
   final rest = RoomApi();
   final RoomControlApi roomApi = FallbackRoomApi(grpc: GrpcRoomApi(), rest: rest);
@@ -40,7 +51,6 @@ Future<void> main(List<String> args) async {
   await controller.init();
 
   // Onboarding solo la primera vez.
-  final prefs = await SharedPreferences.getInstance();
   final seenOnboarding = prefs.getBool('onboarding.done') ?? false;
 
   // Invitación con la que se abrió la app (enlace o argumento): si la hay, se

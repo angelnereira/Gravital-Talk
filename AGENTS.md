@@ -304,6 +304,28 @@ de gRPC-Web viven en `grpc_web_io.dart` y llegan por import condicional desde
 - Contratos gRPC en `proto/gravital/v1/`; el cliente Dart generado vive en `app/lib/generated/` (**generado, no
   editar**; instrucciones en `proto/README.md`).
 
+## Cierres inesperados en dispositivos ajenos
+
+La librería nativa se compila con `panic = "abort"`: un pánico cierra la app sin más.
+Para no depender de `adb`, la app guarda la causa y la enseña en **Ajustes → Acerca de**
+en el siguiente arranque (`app/lib/services/crash_report.dart`):
+
+- pánico de Rust → `gs_crash_log_set_path` lo anota (lugar y mensaje) en `crash-native.txt`;
+- excepción de la parte Android → `MainActivity` la anota en `crash-java.txt`;
+- motivo del sistema (Android 11+) → `getHistoricalProcessExitReasons`.
+
+Ante un "se cierra sola", pedir ese informe antes de suponer la causa. Descartado ya
+con pruebas: el códec en ARM de 32 bits (pasa bajo `qemu-arm`), paquetes que no son
+Opus y el consumo de pila del códec.
+
+## Sala en segundo plano (Android)
+
+`SessionService` es un servicio en primer plano (`microphone|mediaPlayback`) que arranca
+al conectar y se para al salir; no mueve audio, sólo evita que Android corte el micrófono
+y congele el proceso. El tipo `microphone` sólo se pide con el permiso concedido: pedirlo
+sin él lanza `SecurityException`. Se gobierna desde Dart por
+`app/lib/services/background_session.dart`.
+
 ## Gotchas conocidos
 
 - `make clippy` falla en `main` por `crates/gravital-talk-audit/tests/spike_multipeer.rs`
