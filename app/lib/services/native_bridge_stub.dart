@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import '../models/reachability.dart';
 import '../models/session.dart';
 import 'ffi_common.dart';
@@ -21,6 +23,9 @@ class NativeBridge {
 
   String? discoverLocalAddress() => null;
   void setCrashLogPath(String path) {}
+  Uint8List? contactId(Uint8List secret) => null;
+  Uint8List? knockSeal(Uint8List secret, Uint8List payload) => null;
+  Uint8List? knockOpen(Uint8List secret, Uint8List datagram) => null;
 
   bool get audioSupported => false;
 

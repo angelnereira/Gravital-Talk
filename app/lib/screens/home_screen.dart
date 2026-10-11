@@ -10,6 +10,7 @@ import '../models/session.dart';
 import '../services/session_controller.dart';
 import '../widgets/active_session_card.dart';
 import '../widgets/common.dart';
+import '../widgets/contacts_section.dart';
 import 'about_screen.dart';
 import 'pairing_screen.dart';
 import 'settings_screen.dart';
@@ -138,6 +139,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   .animate(delay: 180.ms)
                   .fadeIn(duration: 300.ms)
                   .slideY(begin: 0.08, end: 0),
+              const SizedBox(height: Spacing.xxl),
+              ContactsSection(enabled: canPair),
               const SizedBox(height: Spacing.xxl),
               _TechnicalDetails(
                 controller: c,

@@ -1324,6 +1324,133 @@ pub unsafe extern "C" fn gs_session_peer_count(handle: *mut GsSessionHandle) -> 
     c_int::try_from(count).unwrap_or(c_int::MAX)
 }
 
+// ─── Contactos ─────────────────────────────────────────────────────────
+
+/// Lee `len` bytes de `ptr`, o `None` si el puntero es nulo.
+///
+/// # Safety
+/// Si `ptr` no es nulo debe apuntar a `len` bytes legibles.
+const unsafe fn bytes_arg<'a>(ptr: *const u8, len: usize) -> Option<&'a [u8]> {
+    if ptr.is_null() {
+        return None;
+    }
+    // SAFETY: `ptr` no es nulo y apunta a `len` bytes legibles (contrato).
+    Some(unsafe { std::slice::from_raw_parts(ptr, len) })
+}
+
+/// Copia `data` a `out` y deja su tamaño en `out_len`.
+///
+/// # Safety
+/// `out` debe apuntar a `out_cap` bytes escribibles y `out_len` ser válido.
+unsafe fn write_out(data: &[u8], out: *mut u8, out_cap: usize, out_len: *mut usize) -> GsStatus {
+    if out.is_null() || out_len.is_null() {
+        return GsStatus::GS_ERR_NULL_POINTER;
+    }
+    if data.len() > out_cap {
+        return GsStatus::GS_ERR_BUFFER_TOO_SMALL;
+    }
+    // SAFETY: `out` tiene `out_cap` bytes escribibles, se acaba de comprobar
+    // que `data` cabe, y `out_len` es un puntero válido (contrato).
+    unsafe {
+        ptr::copy_nonoverlapping(data.as_ptr(), out, data.len());
+        *out_len = data.len();
+    }
+    GsStatus::GS_OK
+}
+
+/// Identificador público (8 bytes) del contacto que comparte `secret`.
+///
+/// # Safety
+/// `secret` debe apuntar a `secret_len` bytes y `out_id` a 8 bytes escribibles.
+#[no_mangle]
+pub unsafe extern "C" fn gs_contact_id(
+    secret: *const u8,
+    secret_len: usize,
+    out_id: *mut u8,
+) -> GsStatus {
+    // SAFETY: mismos requisitos que esta función (contrato).
+    let Some(secret) = (unsafe { bytes_arg(secret, secret_len) }) else {
+        return GsStatus::GS_ERR_NULL_POINTER;
+    };
+    if out_id.is_null() {
+        return GsStatus::GS_ERR_NULL_POINTER;
+    }
+    let id = gravital_talk::knock::contact_id(secret);
+    // SAFETY: `out_id` no es nulo y tiene 8 bytes escribibles (contrato).
+    unsafe { ptr::copy_nonoverlapping(id.as_ptr(), out_id, id.len()) };
+    GsStatus::GS_OK
+}
+
+/// Sella una llamada para el contacto que comparte `secret`.
+///
+/// El resultado es un datagrama listo para enviar por UDP; sólo quien tenga
+/// el mismo secreto puede abrirlo con `gs_knock_open`. `out` necesita
+/// `payload_len + 41` bytes.
+///
+/// # Safety
+/// `secret` y `payload` deben apuntar a sus longitudes; `out` a `out_cap`
+/// bytes escribibles y `out_len` a un `size_t` escribible.
+#[no_mangle]
+pub unsafe extern "C" fn gs_knock_seal(
+    secret: *const u8,
+    secret_len: usize,
+    payload: *const u8,
+    payload_len: usize,
+    out: *mut u8,
+    out_cap: usize,
+    out_len: *mut usize,
+) -> GsStatus {
+    // SAFETY: mismos requisitos que esta función (contrato).
+    let (Some(secret), Some(payload)) = (unsafe {
+        (
+            bytes_arg(secret, secret_len),
+            bytes_arg(payload, payload_len),
+        )
+    }) else {
+        return GsStatus::GS_ERR_NULL_POINTER;
+    };
+    gravital_talk::knock::seal(secret, payload).map_or_else(
+        |_| {
+            set_last_error("knock: el contenido no cabe en un datagrama");
+            GsStatus::GS_ERR_INVALID_ARGUMENT
+        },
+        // SAFETY: `out`, `out_cap` y `out_len` cumplen el contrato.
+        |sealed| unsafe { write_out(&sealed, out, out_cap, out_len) },
+    )
+}
+
+/// Abre una llamada recibida. `GS_ERR_PROTOCOL` si no viene de quien
+/// comparte `secret` o ha sido alterada.
+///
+/// # Safety
+/// `secret` y `datagram` deben apuntar a sus longitudes; `out` a `out_cap`
+/// bytes escribibles y `out_len` a un `size_t` escribible.
+#[no_mangle]
+pub unsafe extern "C" fn gs_knock_open(
+    secret: *const u8,
+    secret_len: usize,
+    datagram: *const u8,
+    datagram_len: usize,
+    out: *mut u8,
+    out_cap: usize,
+    out_len: *mut usize,
+) -> GsStatus {
+    // SAFETY: mismos requisitos que esta función (contrato).
+    let (Some(secret), Some(datagram)) = (unsafe {
+        (
+            bytes_arg(secret, secret_len),
+            bytes_arg(datagram, datagram_len),
+        )
+    }) else {
+        return GsStatus::GS_ERR_NULL_POINTER;
+    };
+    gravital_talk::knock::open(secret, datagram).map_or(
+        GsStatus::GS_ERR_PROTOCOL,
+        // SAFETY: `out`, `out_cap` y `out_len` cumplen el contrato.
+        |plain| unsafe { write_out(&plain, out, out_cap, out_len) },
+    )
+}
+
 // ─── Diagnóstico ───────────────────────────────────────────────────────
 
 /// Fichero donde se anota un pánico antes de que el proceso muera.
@@ -1844,6 +1971,67 @@ mod tests {
             .map(|b| f64::from(i16::from_le_bytes(*b)))
             .collect();
         (samples.iter().map(|s| s * s).sum::<f64>() / samples.len().max(1) as f64).sqrt()
+    }
+
+    #[test]
+    fn una_llamada_sellada_solo_la_abre_el_contacto() {
+        let (secret, other) = (b"token-de-sala", b"otro-token");
+        let payload = b"gravital-talk://pair?room=GRVT-1234";
+        let mut sealed = [0u8; 256];
+        let mut sealed_len = 0usize;
+        let mut plain = [0u8; 256];
+        let mut plain_len = 0usize;
+        // SAFETY: todos los punteros apuntan a buffers vivos del tamaño dado.
+        unsafe {
+            assert_eq!(
+                gs_knock_seal(
+                    secret.as_ptr(),
+                    secret.len(),
+                    payload.as_ptr(),
+                    payload.len(),
+                    sealed.as_mut_ptr(),
+                    sealed.len(),
+                    &mut sealed_len,
+                ),
+                GsStatus::GS_OK
+            );
+            assert_eq!(
+                gs_knock_open(
+                    secret.as_ptr(),
+                    secret.len(),
+                    sealed.as_ptr(),
+                    sealed_len,
+                    plain.as_mut_ptr(),
+                    plain.len(),
+                    &mut plain_len,
+                ),
+                GsStatus::GS_OK
+            );
+            assert_eq!(&plain[..plain_len], payload);
+            assert_eq!(
+                gs_knock_open(
+                    other.as_ptr(),
+                    other.len(),
+                    sealed.as_ptr(),
+                    sealed_len,
+                    plain.as_mut_ptr(),
+                    plain.len(),
+                    &mut plain_len,
+                ),
+                GsStatus::GS_ERR_PROTOCOL
+            );
+            let (mut a, mut b) = ([0u8; 8], [0u8; 8]);
+            assert_eq!(
+                gs_contact_id(secret.as_ptr(), secret.len(), a.as_mut_ptr()),
+                GsStatus::GS_OK
+            );
+            assert_eq!(
+                gs_contact_id(other.as_ptr(), other.len(), b.as_mut_ptr()),
+                GsStatus::GS_OK
+            );
+            assert_ne!(a, b);
+            assert_eq!(sealed[5..13], a);
+        }
     }
 
     #[test]

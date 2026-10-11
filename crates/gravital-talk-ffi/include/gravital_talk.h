@@ -503,6 +503,49 @@ GsStatus gs_session_connect_any(GsSessionHandle *handle, const char *candidates)
 int gs_session_peer_count(GsSessionHandle *handle);
 
 /*
+ Identificador público (8 bytes) del contacto que comparte `secret`.
+
+ # Safety
+ `secret` debe apuntar a `secret_len` bytes y `out_id` a 8 bytes escribibles.
+ */
+GsStatus gs_contact_id(const uint8_t *secret, uintptr_t secret_len, uint8_t *out_id);
+
+/*
+ Sella una llamada para el contacto que comparte `secret`.
+
+ El resultado es un datagrama listo para enviar por UDP; sólo quien tenga
+ el mismo secreto puede abrirlo con `gs_knock_open`. `out` necesita
+ `payload_len + 41` bytes.
+
+ # Safety
+ `secret` y `payload` deben apuntar a sus longitudes; `out` a `out_cap`
+ bytes escribibles y `out_len` a un `size_t` escribible.
+ */
+GsStatus gs_knock_seal(const uint8_t *secret,
+                       uintptr_t secret_len,
+                       const uint8_t *payload,
+                       uintptr_t payload_len,
+                       uint8_t *out,
+                       uintptr_t out_cap,
+                       uintptr_t *out_len);
+
+/*
+ Abre una llamada recibida. `GS_ERR_PROTOCOL` si no viene de quien
+ comparte `secret` o ha sido alterada.
+
+ # Safety
+ `secret` y `datagram` deben apuntar a sus longitudes; `out` a `out_cap`
+ bytes escribibles y `out_len` a un `size_t` escribible.
+ */
+GsStatus gs_knock_open(const uint8_t *secret,
+                       uintptr_t secret_len,
+                       const uint8_t *datagram,
+                       uintptr_t datagram_len,
+                       uint8_t *out,
+                       uintptr_t out_cap,
+                       uintptr_t *out_len);
+
+/*
  Fija el fichero donde dejar constancia de un fallo interno.
 
  La librería se compila con `panic = "abort"`: un pánico mata el proceso

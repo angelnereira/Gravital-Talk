@@ -8,6 +8,7 @@ import '../models/connection.dart';
 import '../models/reachability.dart';
 import '../models/session.dart';
 import 'audio_pump.dart';
+import 'knock_codec.dart';
 import 'native_bridge.dart';
 
 /// Estado instantáneo del audio: niveles para los medidores y si hay
@@ -175,7 +176,7 @@ abstract class SessionEngine {
 }
 
 /// Motor nativo: habla con `libgravital_talk_ffi` (Rust real).
-class FfiSessionEngine implements SessionEngine {
+class FfiSessionEngine implements SessionEngine, KnockCodec {
   FfiSessionEngine(this._bridge);
 
   @override
@@ -238,6 +239,17 @@ class FfiSessionEngine implements SessionEngine {
     }
     return FfiSessionEngine(bridge);
   }
+
+  @override
+  Uint8List? contactId(Uint8List secret) => _bridge.contactId(secret);
+
+  @override
+  Uint8List? knockSeal(Uint8List secret, Uint8List payload) =>
+      _bridge.knockSeal(secret, payload);
+
+  @override
+  Uint8List? knockOpen(Uint8List secret, Uint8List datagram) =>
+      _bridge.knockOpen(secret, datagram);
 
   /// Fichero donde la librería nativa anota un fallo interno antes de morir.
   void setCrashLogPath(String path) => _bridge.setCrashLogPath(path);
