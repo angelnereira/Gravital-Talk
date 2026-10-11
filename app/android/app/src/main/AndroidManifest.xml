@@ -48,8 +48,14 @@
                 <category android:name="android.intent.category.BROWSABLE"/>
                 <data android:scheme="gravital-talk" android:host="pair"/>
                 <data android:scheme="gravital-talk" android:host="answer"/>
+                <data android:scheme="gravital-talk" android:host="contact"/>
             </intent-filter>
         </activity>
+        <!-- Mantiene la sala (o la espera de llamadas) con la app oculta. -->
+        <service
+            android:name=".SessionService"
+            android:exported="false"
+            android:foregroundServiceType="microphone|mediaPlayback"/>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

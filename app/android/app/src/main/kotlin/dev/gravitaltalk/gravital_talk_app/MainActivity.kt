@@ -32,11 +32,19 @@ class MainActivity : FlutterActivity() {
         initialLink = intent?.pairingLink()
         channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "gravital_talk/links").also {
             it.setMethodCallHandler { call, result ->
-                if (call.method == "getInitialLink") {
-                    result.success(initialLink)
-                    initialLink = null
-                } else {
-                    result.notImplemented()
+                when (call.method) {
+                    "getInitialLink" -> {
+                        result.success(initialLink)
+                        initialLink = null
+                    }
+                    "share" -> {
+                        val send = Intent(Intent.ACTION_SEND)
+                            .setType("text/plain")
+                            .putExtra(Intent.EXTRA_TEXT, call.argument<String>("text").orEmpty())
+                        val shown = runCatching { startActivity(Intent.createChooser(send, null)) }.isSuccess
+                        if (shown) result.success(true) else result.error("share", "sin panel de compartir", null)
+                    }
+                    else -> result.notImplemented()
                 }
             }
         }

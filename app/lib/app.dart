@@ -173,6 +173,23 @@ class _GravitalTalkAppState extends State<GravitalTalkApp> {
   /// hablar.
   Future<void> _openInvite(String link) async {
     final c = widget.controller;
+    // Un enlace de contacto no abre ninguna sala: guarda a quien lo envió.
+    if (ContactLink.tryParse(link) != null) {
+      final contact = await _contacts.addFromLink(link);
+      toastification.show(
+        type: contact == null
+            ? ToastificationType.error
+            : ToastificationType.success,
+        title: Text(contact == null
+            ? 'No se pudo añadir el contacto'
+            : '${contact.name} añadido a tus contactos'),
+        description: Text(contact == null
+            ? 'El enlace es tuyo o no es válido.'
+            : 'Ya puedes llamarle desde la pantalla de inicio.'),
+        autoCloseDuration: const Duration(seconds: 4),
+      );
+      return;
+    }
     // Una respuesta a la invitación no abre una sala: se le entrega al
     // anfitrión que la está esperando.
     if (PairingAnswer.tryParse(link) != null) {

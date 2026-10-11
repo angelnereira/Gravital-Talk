@@ -6,6 +6,23 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
 
 ### Added
 
+**Añadir contactos por enlace, compartir salas e invitar contactos**
+- **Añadir contacto** (pantalla de inicio → Contactos → Añadir): genera un
+  enlace `gravital-talk://contact?…` con su QR. Quien lo abre con la app
+  instalada queda guardado como contacto y se presenta al que lo envió; no
+  hace falta haber hablado antes. También se puede pegar o escanear el enlace
+  de otro.
+- **Compartir** el enlace de una sala o de contacto por el panel del sistema
+  (Android); en escritorio se copia.
+- Desde una sala en curso, el anfitrión puede **invitar a un contacto**: le
+  llega como una llamada y entra en la misma conversación.
+
+### Fixed
+- Android: el servicio que mantiene la sala en segundo plano no estaba
+  declarado en el manifiesto, así que no llegaba a arrancar. Ahora sí.
+
+### Added
+
 **Contactos: volver a hablar sin código**
 - Al conectar, cada dispositivo **guarda al otro como contacto** (con el nombre
   que cada uno se pone en Ajustes → Contactos). Aparecen en la pantalla de

@@ -7,8 +7,10 @@ import '../core/glass.dart';
 import '../core/states.dart';
 import '../core/tokens.dart';
 import '../models/session.dart';
+import '../services/contacts.dart';
 import '../services/engine.dart';
 import '../services/session_controller.dart';
+import '../services/share.dart';
 import '../widgets/common.dart';
 
 /// Pantalla de hablar.
@@ -184,6 +186,9 @@ class _InviteSheet extends StatefulWidget {
 class _InviteSheetState extends State<_InviteSheet> {
   bool _copied = false;
 
+  /// Contactos ya avisados desde esta hoja.
+  final _rung = <String>{};
+
   Future<void> _copy() async {
     await Clipboard.setData(ClipboardData(text: widget.invite));
     if (mounted) setState(() => _copied = true);
@@ -192,6 +197,7 @@ class _InviteSheetState extends State<_InviteSheet> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final contacts = context.watch<ContactsService>();
     return SafeArea(
       child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(
@@ -235,12 +241,56 @@ class _InviteSheetState extends State<_InviteSheet> {
               ),
             ),
             const SizedBox(height: Spacing.lg),
-            OutlinedButton.icon(
-              onPressed: _copy,
-              icon: Icon(_copied ? Icons.check : Icons.link),
-              label:
-                  Text(_copied ? 'Invitación copiada' : 'Copiar invitación'),
+            Row(
+              children: [
+                Expanded(
+                  child: FilledButton.tonalIcon(
+                    onPressed: () async {
+                      final shared = await shareText(
+                          'Únete a mi sala de Gravital Talk:\n${widget.invite}');
+                      if (!shared && mounted) setState(() => _copied = true);
+                    },
+                    icon: const Icon(Icons.ios_share),
+                    label: const Text('Compartir'),
+                  ),
+                ),
+                const SizedBox(width: Spacing.md),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _copy,
+                    icon: Icon(_copied ? Icons.check : Icons.link),
+                    label: Text(_copied ? 'Copiada' : 'Copiar'),
+                  ),
+                ),
+              ],
             ),
+            if (contacts.available && contacts.contacts.isNotEmpty) ...[
+              const SizedBox(height: Spacing.xl),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'O avisa a un contacto',
+                  style: theme.textTheme.titleSmall
+                      ?.copyWith(fontWeight: FontWeight.w800),
+                ),
+              ),
+              for (final contact in contacts.contacts)
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.person_outline),
+                  title: Text(contact.name),
+                  trailing: _rung.contains(contact.id)
+                      ? const Text('Avisado')
+                      : TextButton(
+                          onPressed: () {
+                            if (contacts.ring(contact)) {
+                              setState(() => _rung.add(contact.id));
+                            }
+                          },
+                          child: const Text('Invitar'),
+                        ),
+                ),
+            ],
           ],
         ),
       ),

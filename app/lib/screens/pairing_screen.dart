@@ -15,6 +15,7 @@ import '../core/tokens.dart';
 import '../models/session.dart';
 import '../services/contacts.dart';
 import '../services/session_controller.dart';
+import '../services/share.dart';
 import 'session_screen.dart';
 
 /// Qué viene a hacer el usuario a la pantalla de emparejamiento.
@@ -305,6 +306,16 @@ class _HostViewState extends State<_HostView> {
                       ErrorBanner(message: c.error!, onDismiss: c.clearError),
                     ],
                     const SizedBox(height: Spacing.lg),
+                    FilledButton.tonalIcon(
+                      onPressed: () async {
+                        final shared = await shareText(
+                            'Únete a mi sala de Gravital Talk:\n$invite');
+                        if (!shared && mounted) setState(() => _copied = true);
+                      },
+                      icon: const Icon(Icons.ios_share),
+                      label: const Text('Compartir enlace de la sala'),
+                    ),
+                    const SizedBox(height: Spacing.md),
                     OutlinedButton.icon(
                       onPressed: () => _copyInvite(invite),
                       icon: Icon(_copied ? Icons.check : Icons.link),
@@ -415,6 +426,21 @@ class _JoinViewState extends State<_JoinView> {
     final c = context.read<SessionController>();
     if (invite.isEmpty) {
       c.reportError('Pega la invitación que te han pasado.');
+      return;
+    }
+    // Escanear o pegar un enlace de contacto aquí también vale: se guarda y
+    // se vuelve, no hay sala en la que entrar.
+    if (ContactLink.tryParse(invite) != null) {
+      final contacts = context.read<ContactsService>();
+      final navigator = Navigator.of(context);
+      final messenger = ScaffoldMessenger.of(context);
+      final contact = await contacts.addFromLink(invite);
+      messenger.showSnackBar(SnackBar(
+        content: Text(contact == null
+            ? 'Ese enlace de contacto no es válido.'
+            : '${contact.name} añadido a tus contactos'),
+      ));
+      if (contact != null) navigator.pop();
       return;
     }
     setState(() {
