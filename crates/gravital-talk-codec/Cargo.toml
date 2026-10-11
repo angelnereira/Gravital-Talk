@@ -16,11 +16,16 @@ path = "src/lib.rs"
 [features]
 default = ["opus"]
 opus    = ["dep:audiopus"]
+# Códec de voz en Rust puro (Opus + reducción de ruido). Sin dependencias de
+# C: compila igual para Android, escritorio y wasm.
+voice   = ["dep:unsafe-libopus", "dep:nnnoiseless"]
 
 [dependencies]
 gravital-talk-core = { workspace = true, default-features = false, features = ["alloc", "std"] }
 thiserror           = { workspace = true }
 audiopus            = { version = "0.2", optional = true }
+unsafe-libopus      = { version = "0.2", optional = true }
+nnnoiseless         = { version = "0.5", optional = true, default-features = false }
 
 [dev-dependencies]
 proptest = { workspace = true }

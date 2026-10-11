@@ -338,6 +338,20 @@ class _TechnicalDetails extends StatelessWidget {
                   icon: Icons.star_outline,
                 ),
                 MetricTile(
+                  label: 'Audio',
+                  value: c.audioBitrate > 0
+                      ? '${(c.audioBitrate / 1000).round()}'
+                      : '—',
+                  unit: c.audioBitrate > 0 ? 'kbps' : '',
+                  icon: Icons.graphic_eq,
+                ),
+                MetricTile(
+                  label: 'Reorden.',
+                  value: m.reorderPercent.toStringAsFixed(1),
+                  unit: '%',
+                  icon: Icons.swap_vert,
+                ),
+                MetricTile(
                   label: 'Paquetes RX',
                   value: '${m.packetsReceived}',
                   icon: Icons.download,

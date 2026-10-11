@@ -183,6 +183,78 @@ class _SettingsScreenState extends State<SettingsScreen>
                       ],
               ),
               _Section(
+                title: 'Audio',
+                subtitle: 'Menos calidad es un audio más ligero: aguanta '
+                    'mejor una red floja y gasta menos datos.',
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: Spacing.md),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Calidad',
+                          style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                                fontWeight: FontWeight.w600,
+                                color: GlassTextTheme.of(context).primary,
+                              ),
+                        ),
+                        const SizedBox(height: Spacing.sm),
+                        SizedBox(
+                          width: double.infinity,
+                          child: SegmentedButton<int>(
+                            showSelectedIcon: false,
+                            segments: [
+                              for (final rate in AppSettings.bitrateOptions)
+                                ButtonSegment(
+                                  value: rate,
+                                  label: Text('${rate ~/ 1000} kbps'),
+                                ),
+                            ],
+                            selected: {
+                              AppSettings.bitrateOptions.contains(s.maxBitrate)
+                                  ? s.maxBitrate
+                                  : AppSettings.bitrateOptions.first,
+                            },
+                            onSelectionChanged: (sel) => c.updateSettings(
+                              s.copyWith(maxBitrate: sel.first),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: Spacing.xs),
+                        Text(
+                          switch (s.maxBitrate) {
+                            >= 128000 => 'Máxima calidad. Unos 1 MB por minuto '
+                                'hablado.',
+                            >= 64000 => 'Equilibrada. Unos 0,5 MB por minuto.',
+                            _ => 'La más ligera y estable. Unos 0,25 MB por '
+                                'minuto.',
+                          },
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                color: GlassTextTheme.of(context).secondary,
+                              ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  _Row(
+                    icon: Icons.noise_control_off,
+                    title: 'Reducción de ruido',
+                    subtitle: 'Quita el ruido de fondo para que sólo se oiga '
+                        'tu voz.',
+                    trailing: Switch(
+                      value: s.noiseSuppression,
+                      onChanged: (on) => c.updateSettings(
+                        s.copyWith(noiseSuppression: on),
+                      ),
+                    ),
+                    onTap: () => c.updateSettings(
+                      s.copyWith(noiseSuppression: !s.noiseSuppression),
+                    ),
+                  ),
+                ],
+              ),
+              _Section(
                 title: 'Conexión',
                 subtitle: 'Las llamadas van directas entre los dos '
                     'dispositivos. No hay nada que configurar.',

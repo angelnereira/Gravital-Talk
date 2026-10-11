@@ -177,6 +177,10 @@ typedef _RxIdleC = Int64 Function(Pointer<Void>);
 typedef _RxIdleD = int Function(Pointer<Void>);
 typedef _ConnectAnyTimeoutC = Int32 Function(Pointer<Void>, Pointer<Utf8>, Uint32);
 typedef _ConnectAnyTimeoutD = int Function(Pointer<Void>, Pointer<Utf8>, int);
+typedef _SetBitrateC = Int32 Function(Pointer<Void>, Uint32);
+typedef _SetBitrateD = int Function(Pointer<Void>, int);
+typedef _GetBitrateC = Uint32 Function(Pointer<Void>);
+typedef _GetBitrateD = int Function(Pointer<Void>);
 typedef _AudioSetPttC = Int32 Function(Pointer<Void>, Int32);
 typedef _AudioSetPttD = int Function(Pointer<Void>, int);
 typedef _AudioStatsC = Int32 Function(Pointer<Void>, Pointer<GsAudioStatsNative>);
@@ -256,6 +260,13 @@ class NativeBridge {
         _connectAnyTimeout =
             lib.lookupFunction<_ConnectAnyTimeoutC, _ConnectAnyTimeoutD>(
                 'gs_session_connect_any_timeout'),
+        _setNoiseSuppression = lib.lookupFunction<_AudioSetPttC, _AudioSetPttD>(
+            'gs_session_set_noise_suppression'),
+        _setBitrate = lib.lookupFunction<_SetBitrateC, _SetBitrateD>(
+            'gs_session_set_bitrate'),
+        _bitrate =
+            lib.lookupFunction<_GetBitrateC, _GetBitrateD>('gs_session_bitrate'),
+        _codec = lib.lookupFunction<_HandleC, _HandleD>('gs_session_codec'),
         _audioSupported =
             lib.lookupFunction<_IntC, _IntD>('gs_audio_supported'),
         _audioStart = lib.lookupFunction<_HandleC, _HandleD>('gs_audio_start'),
@@ -306,6 +317,10 @@ class NativeBridge {
   final _RxIdleD _rxIdleMs;
   final _HandleD _isRelayed;
   final _ConnectAnyTimeoutD _connectAnyTimeout;
+  final _AudioSetPttD _setNoiseSuppression;
+  final _SetBitrateD _setBitrate;
+  final _GetBitrateD _bitrate;
+  final _HandleD _codec;
   final _IntD _audioSupported;
   final _HandleD _audioStart;
   final _HandleD _audioStop;
@@ -711,6 +726,24 @@ class NativeSession {
 
   /// `true` si el audio va por el relay y no directo.
   bool isRelayed() => !_destroyed && _bridge._isRelayed(_handle) == 1;
+
+  /// Activa o desactiva la reducción de ruido del micrófono.
+  void setNoiseSuppression(bool on) {
+    _ensureAlive();
+    _bridge._check(_bridge._setNoiseSuppression(_handle, on ? 1 : 0));
+  }
+
+  /// Tope de la tasa de bits del audio, en bits por segundo.
+  void setBitrate(int bitsPerSecond) {
+    _ensureAlive();
+    _bridge._check(_bridge._setBitrate(_handle, bitsPerSecond));
+  }
+
+  /// Tasa a la que se está enviando ahora, o 0 si aún no se envía o va en PCM.
+  int bitrate() => _destroyed ? 0 : _bridge._bitrate(_handle);
+
+  /// `true` si el audio viaja comprimido (Opus) y no en PCM.
+  bool get compressed => !_destroyed && _bridge._codec(_handle) == 2;
 
   /// Arranca el audio nativo (micrófono → red, red → altavoz).
   ///

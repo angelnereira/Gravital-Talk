@@ -15,7 +15,7 @@ class SettingsStore {
       frameDurationMs: p.getInt(PrefKeys.frameDurationMs) ?? 20,
       jitterBufferMs: p.getInt(PrefKeys.jitterBufferMs) ?? 60,
       mtu: p.getInt(PrefKeys.mtu) ?? 1200,
-      maxBitrate: p.getInt(PrefKeys.maxBitrate) ?? 64000,
+      maxBitrate: p.getInt(PrefKeys.bitrate) ?? 128000,
       codec: AudioCodec.values.firstWhere(
         (c) => c.name == p.getString(PrefKeys.codec),
         orElse: () => AudioCodec.opus,
@@ -25,6 +25,7 @@ class SettingsStore {
         orElse: () => AppThemeMode.system,
       ),
       rendezvous: p.getString(PrefKeys.rendezvous) ?? '',
+      noiseSuppression: p.getBool(PrefKeys.noiseSuppression) ?? true,
     );
   }
 
@@ -35,7 +36,8 @@ class SettingsStore {
     await p.setInt(PrefKeys.frameDurationMs, s.frameDurationMs);
     await p.setInt(PrefKeys.jitterBufferMs, s.jitterBufferMs);
     await p.setInt(PrefKeys.mtu, s.mtu);
-    await p.setInt(PrefKeys.maxBitrate, s.maxBitrate);
+    await p.setInt(PrefKeys.bitrate, s.maxBitrate);
+    await p.setBool(PrefKeys.noiseSuppression, s.noiseSuppression);
     await p.setString(PrefKeys.codec, s.codec.name);
     await p.setString(PrefKeys.themeMode, s.themeMode.name);
     await p.setString(PrefKeys.rendezvous, s.rendezvous);

@@ -492,6 +492,50 @@ GsStatus gs_session_connect_any_timeout(GsSessionHandle *handle,
 GsStatus gs_session_connect_any(GsSessionHandle *handle, const char *candidates);
 
 /*
+ Activa (`on != 0`) o desactiva la reducción de ruido del micrófono.
+
+ Activa por defecto. Sólo actúa cuando la sesión viaja comprimida (ver
+ `gs_session_codec`) a 48 kHz.
+
+ # Safety
+ `handle` debe ser un handle válido de `gs_session_create`.
+ */
+GsStatus gs_session_set_noise_suppression(GsSessionHandle *handle, int on);
+
+/*
+ Fija el tope de la tasa de bits del audio, en bits por segundo.
+
+ Se acota a 24 000–128 000. La tasa real baja por debajo del tope si la red
+ pierde paquetes y vuelve a subir cuando se recupera.
+
+ # Safety
+ `handle` debe ser un handle válido de `gs_session_create`.
+ */
+GsStatus gs_session_set_bitrate(GsSessionHandle *handle, uint32_t bitrate);
+
+/*
+ Tasa de bits a la que se está enviando el audio ahora mismo, o `0` si
+ viaja PCM sin comprimir (o aún no se ha enviado nada).
+
+ # Safety
+ `handle` debe ser un handle válido de `gs_session_create`.
+ */
+uint32_t gs_session_bitrate(GsSessionHandle *handle);
+
+/*
+ Códec negociado para la sesión: `1` = PCM sin comprimir, `2` = Opus,
+ `0` = aún sin negociar.
+
+ Con Opus, `gs_session_send_audio` y `gs_session_recv_audio` siguen
+ trabajando en PCM: la compresión ocurre dentro. Un `recv` puede devolver
+ más de un frame (hasta cuatro) cuando reconstruye audio perdido.
+
+ # Safety
+ `handle` debe ser un handle válido de `gs_session_create`.
+ */
+int gs_session_codec(GsSessionHandle *handle);
+
+/*
  Devuelve `1` si este build trae audio nativo (`gs_audio_start` funciona).
  */
 int gs_audio_supported(void);

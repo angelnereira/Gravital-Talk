@@ -86,6 +86,9 @@ class SessionController extends ChangeNotifier {
   /// `true` si el audio pasa por un servidor intermedio y no directo.
   bool get relayed => _relayed;
 
+  /// Tasa de bits a la que se está enviando el audio, o 0 si no aplica.
+  int get audioBitrate => _state.isLive ? _engine.audioBitrate() : 0;
+
   /// Aviso no bloqueante pendiente de mostrar (p. ej. "sin micrófono").
   String? _notice;
   Timer? _levelTicker;
@@ -152,6 +155,9 @@ class SessionController extends ChangeNotifier {
 
   void updateSettings(AppSettings s) {
     _settings = s;
+    // La calidad y la reducción de ruido se pueden cambiar a media
+    // conversación.
+    _engine.applyAudioSettings(s);
     _store.saveSettings(s);
     notifyListeners();
   }

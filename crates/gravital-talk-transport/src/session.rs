@@ -2451,7 +2451,12 @@ impl Session {
     /// `jitter_buffer_ms × 3` esperando por una secuencia concreta (pérdida
     /// irrecuperable), avanza el cursor y continúa con el siguiente frame.
     pub async fn recv_audio(&self) -> Result<Frame, TransportError> {
-        let skip_us = u64::from(self.config.jitter_buffer_ms) * 3 * 1_000;
+        // Cuánto se espera a un frame que falta antes de darlo por perdido.
+        // Era el triple del jitter buffer (180 ms por defecto): demasiado para
+        // una conversación, porque todo el audio de después queda retenido
+        // ese tiempo. Con un códec que reconstruye el frame perdido a partir
+        // del siguiente, esperar más que el propio jitter buffer no aporta.
+        let skip_us = u64::from(self.config.jitter_buffer_ms) * 1_000;
         let frame_ms = u64::from(self.config.frame_duration_ms).max(5);
 
         loop {
