@@ -1002,6 +1002,39 @@ async fn en_una_sala_de_tres_todos_oyen_a_quien_habla() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn el_anfitrion_no_inunda_de_sondas_a_quien_aun_no_ha_entrado() {
+    // Regresión: con la sala en marcha, el anfitrión sondaba las direcciones
+    // pendientes en cada vuelta del lazo de recepción en vez de una vez por
+    // segundo. En una red real eran ~700 sondas por segundo compitiendo con
+    // el audio.
+    let net = Arc::new(Net::default());
+    let (host, a, _b, mut host_rx) = room_of_three(&net).await;
+    // Alguien invitado que aún no ha entrado: existe en la red (la escucha
+    // sólo cuenta lo que llega a un nodo), pero no participa.
+    let late = net.join("203.0.113.77:40000", Mapping::Open, Filter::PortRestricted);
+    let pending = late.public();
+    host.add_path_hints(&[pending]);
+    net.tap.lock().unwrap().clear();
+
+    // Cinco segundos de conversación: mucho tráfico, muchas vueltas del lazo.
+    for i in 0..5u8 {
+        assert!(audio_gets_through(&a, &mut host_rx, i + 1, Duration::from_secs(3)).await);
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    let probes = net
+        .tap
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, dest)| *dest == pending)
+        .count();
+    assert!(
+        (1..=12).contains(&probes),
+        "una sonda por segundo hacia quien falta, no {probes}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
 async fn mientras_uno_habla_el_que_pisa_no_se_reenvia() {
     // Los demás reciben un único flujo: dos voces mezcladas en él serían
     // ruido. Tiene la palabra quien empezó.

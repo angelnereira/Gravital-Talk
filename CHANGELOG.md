@@ -4,6 +4,20 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
 
 ## [Unreleased]
 
+### Fixed
+
+**Audio entrecortado**
+- El anfitrión de una sala enviaba sondas de perforación sin freno —unas 700
+  por segundo, medido— hacia las direcciones de quien aún no había entrado
+  (incluida la pública del propio invitado), durante toda la conversación.
+  Saturaba la wifi, competía con el audio y gastaba datos móviles. Era un
+  temporizador compartido entre dos tareas, introducido con las salas de más
+  de dos. Ahora es una sonda por segundo, y hay una prueba que lo cuenta.
+- Android: durante la sala se impide que el wifi ahorre energía. En reposo la
+  radio entrega lo recibido a ráfagas y el principio de cada turno llegaba a
+  trompicones. Medido con un tono entre portátil y teléfono: de un 5–19 % de
+  huecos por turno a un 0–5 %.
+
 ### Changed
 - En el tema oscuro la cabecera deja ver el mismo fondo que el resto de la
   pantalla, como en el claro; antes era una franja casi negra.
