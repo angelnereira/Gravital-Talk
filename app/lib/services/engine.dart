@@ -4,6 +4,9 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
+import 'package:permission_handler/permission_handler.dart';
+
+import '../core/constants.dart';
 import '../models/connection.dart';
 import '../models/reachability.dart';
 import '../models/session.dart';
@@ -302,8 +305,23 @@ class FfiSessionEngine implements SessionEngine, KnockCodec {
     if (session == null) return;
     await _stopAudio();
     try {
-      if (session.audioStart()) {
-        _nativeAudio = true;
+      // En el móvil el audio nativo es opcional y exige el permiso de
+      // micrófono concedido de antemano: nadie lo pide por él.
+      final mobile = !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+      final wantNative = !mobile ||
+          (experimentalFeatures &&
+              _settings.nativeAudio &&
+              await Permission.microphone.request().isGranted);
+      if (wantNative && session.audioStart()) {
+        final st = session.audioStats();
+        if (mobile && !(st.captureOk && st.playbackOk)) {
+          // A medias no sirve: se vuelve al camino de siempre.
+          session.audioStop();
+        } else {
+          _nativeAudio = true;
+        }
+      }
+      if (_nativeAudio) {
         final why = session.audioProblems();
         final st = session.audioStats();
         if (!st.captureOk) {

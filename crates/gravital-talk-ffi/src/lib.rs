@@ -1705,9 +1705,11 @@ pub struct GsAudioStats {
 }
 
 /// Devuelve `1` si este build trae audio nativo (`gs_audio_start` funciona).
+///
+/// En Android además exige que la app haya entregado su contexto al arrancar.
 #[no_mangle]
-pub const extern "C" fn gs_audio_supported() -> c_int {
-    cfg!(feature = "audio") as c_int
+pub extern "C" fn gs_audio_supported() -> c_int {
+    c_int::from(cfg!(feature = "audio") && audio::platform_ready())
 }
 
 /// Arranca el audio nativo de la sesión: micrófono → red y red → altavoz.
@@ -1735,6 +1737,10 @@ pub unsafe extern "C" fn gs_audio_start(handle: *mut GsSessionHandle) -> GsStatu
 
 #[cfg(feature = "audio")]
 fn audio_start(inner: &SessionInner) -> GsStatus {
+    if !audio::platform_ready() {
+        set_last_error("audio: la plataforma no ha inicializado el audio nativo");
+        return GsStatus::GS_ERR_UNSUPPORTED;
+    }
     if inner.audio().is_some() {
         return GsStatus::GS_OK;
     }

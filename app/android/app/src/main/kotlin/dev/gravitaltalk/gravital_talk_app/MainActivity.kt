@@ -25,7 +25,15 @@ class MainActivity : FlutterActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         recordUncaughtExceptions()
+        // El audio nativo necesita el contexto de Android para preguntar por
+        // los dispositivos. Si la librería no lo trae, la app usa sus plugins.
+        runCatching {
+            System.loadLibrary("gravital_talk_ffi")
+            nativeInitAudio(applicationContext)
+        }
     }
+
+    private external fun nativeInitAudio(context: Context): Boolean
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)

@@ -4,6 +4,15 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
 
 ## [Unreleased]
 
+### Changed
+- En el tema oscuro la cabecera deja ver el mismo fondo que el resto de la
+  pantalla, como en el claro; antes era una franja casi negra.
+- Android: la librería nativa se compila ya con el motor de audio propio
+  (AAudio/Oboe, `--features android-audio`) y recibe el contexto de Android al
+  arrancar. **Sigue apagado**: la app usa el audio de siempre hasta que el
+  camino nuevo esté medido en dispositivos; sólo se puede activar en builds
+  con `--dart-define=GT_EXPERIMENTAL=true`.
+
 ### Added
 
 **Tonos de turno, perfil de 16 kbps y notificación con controles**

@@ -642,6 +642,8 @@ int gs_session_codec(GsSessionHandle *handle);
 
 /*
  Devuelve `1` si este build trae audio nativo (`gs_audio_start` funciona).
+
+ En Android además exige que la app haya entregado su contexto al arrancar.
  */
 int gs_audio_supported(void);
 
