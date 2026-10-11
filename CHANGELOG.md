@@ -31,6 +31,10 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
 
 ### Changed
 
+- **Los instalables se publican a mano** con `scripts/publish-builds.sh` (o
+  `make publish-builds`): compila Android y Linux, rota el APK anterior a
+  `previous`, sube los nuevos al release `builds` y verifica el hash. El
+  release incluye ahora también el instalable de Linux.
 - La espera por un frame perdido baja de 180 ms a 60 ms (el tamaño del jitter
   buffer): con un códec que reconstruye el frame a partir del siguiente,
   esperar más sólo retenía el audio posterior.
