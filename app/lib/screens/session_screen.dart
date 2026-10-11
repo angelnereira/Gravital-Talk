@@ -68,7 +68,9 @@ class SessionScreen extends StatelessWidget {
           if (c.isLive)
             Padding(
               padding: const EdgeInsets.only(right: Spacing.lg),
-              child: Center(child: _QualityChip(metrics: c.metrics)),
+              child: Center(
+                child: _QualityChip(metrics: c.metrics, relayed: c.relayed),
+              ),
             ),
         ],
       ),
@@ -82,7 +84,8 @@ class SessionScreen extends StatelessWidget {
                     padding: const EdgeInsets.fromLTRB(
                         Spacing.xl, Spacing.md, Spacing.xl, Spacing.xxl),
                     children: [
-                      if (c.state == SessionState.reconnecting) ...[
+                      if (c.state == SessionState.reconnecting ||
+                          c.connectionStalled) ...[
                         const ReconnectingBanner(),
                         const SizedBox(height: Spacing.md),
                       ],
@@ -210,9 +213,13 @@ class _TalkPanel extends StatelessWidget {
 ///
 /// Resume el MOS, que nadie fuera del gremio sabe leer, en tres estados.
 class _QualityChip extends StatelessWidget {
-  const _QualityChip({required this.metrics});
+  const _QualityChip({required this.metrics, required this.relayed});
 
   final SessionMetrics metrics;
+
+  /// El audio va por un servidor intermedio: se dice, porque añade latencia
+  /// y porque el usuario espera una conexión directa.
+  final bool relayed;
 
   @override
   Widget build(BuildContext context) {
@@ -223,7 +230,11 @@ class _QualityChip extends StatelessWidget {
     final measured = metrics.packetsReceived > 20 && metrics.rttMs > 0;
     final mos = measured ? metrics.estimatedMos : 0.0;
     final (label, color, icon) = mos <= 0
-        ? ('Conectado', GravitalColors.online, Icons.check_circle_outline)
+        ? (
+            relayed ? 'Vía servidor' : 'Conectado',
+            GravitalColors.online,
+            relayed ? Icons.cloud_outlined : Icons.check_circle_outline,
+          )
         : mos >= 4
             ? ('Buena señal', GravitalColors.online, Icons.signal_cellular_alt)
             : mos >= 3

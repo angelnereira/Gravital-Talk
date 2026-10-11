@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -36,15 +37,20 @@ enum PairingMode {
 /// En ambos, conectar lleva solo a la pantalla de hablar. No hay campos de red
 /// en ningún sitio: la dirección viaja dentro de la invitación.
 class PairingScreen extends StatelessWidget {
-  const PairingScreen({super.key, required this.mode});
+  const PairingScreen({super.key, required this.mode, this.invite});
 
   final PairingMode mode;
+
+  /// Invitación con la que entrar nada más abrir (modo unirse): la que llegó
+  /// por un enlace. Así quien abre un enlace ve lo mismo que quien escanea,
+  /// incluido el código de respuesta si están en redes distintas.
+  final String? invite;
 
   @override
   Widget build(BuildContext context) {
     return switch (mode) {
       PairingMode.host => const _HostView(),
-      PairingMode.join => const _JoinView(),
+      PairingMode.join => _JoinView(invite: invite),
     };
   }
 }
@@ -98,6 +104,65 @@ class _HostViewState extends State<_HostView> {
     super.dispose();
   }
 
+  /// Sólo el móvil tiene cámara con la que escanear.
+  static bool get _canScan =>
+      !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+
+  Future<void> _useAnswer(String raw) async {
+    final ok = await _controller.acceptAnswer(raw);
+    if (!mounted || !ok) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Respuesta recibida: conectando…')),
+    );
+  }
+
+  Future<void> _pasteAnswer() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final text = data?.text?.trim() ?? '';
+    if (text.isEmpty) {
+      _controller.reportError('No hay ninguna respuesta copiada.');
+      return;
+    }
+    await _useAnswer(text);
+  }
+
+  Future<void> _scanAnswer() async {
+    final raw = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetCtx) => SizedBox(
+        height: 440,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(Spacing.lg),
+              child: Text(
+                'Escanea el código de respuesta',
+                style: Theme.of(sheetCtx).textTheme.titleMedium,
+              ),
+            ),
+            Expanded(
+              child: MobileScanner(
+                controller: MobileScannerController(
+                  formats: const [BarcodeFormat.qrCode],
+                ),
+                onDetect: (capture) {
+                  final value = capture.barcodes.isEmpty
+                      ? null
+                      : capture.barcodes.first.rawValue;
+                  if (value != null && value.trim().isNotEmpty) {
+                    Navigator.of(sheetCtx).pop(value.trim());
+                  }
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (raw != null) await _useAnswer(raw);
+  }
+
   Future<void> _copyInvite(String invite) async {
     await Clipboard.setData(ClipboardData(text: invite));
     if (!mounted) return;
@@ -131,7 +196,7 @@ class _HostViewState extends State<_HostView> {
                     ),
                     const SizedBox(height: Spacing.lg),
                   ],
-                  if (c.error != null)
+                  if (c.error != null && invite == null)
                     ErrorBanner(
                       message: c.error!,
                       onRetry: c.busy ? null : _open,
@@ -209,7 +274,11 @@ class _HostViewState extends State<_HostView> {
                         ],
                       ),
                     ),
-                  if (invite != null && c.error == null) ...[
+                  if (invite != null) ...[
+                    if (c.error != null) ...[
+                      const SizedBox(height: Spacing.lg),
+                      ErrorBanner(message: c.error!, onDismiss: c.clearError),
+                    ],
                     const SizedBox(height: Spacing.lg),
                     OutlinedButton.icon(
                       onPressed: () => _copyInvite(invite),
@@ -217,6 +286,38 @@ class _HostViewState extends State<_HostView> {
                       label: Text(
                         _copied ? 'Invitación copiada' : 'Copiar invitación',
                       ),
+                    ),
+                    const SizedBox(height: Spacing.xl),
+                    // Para cuando los dos están en redes distintas: el
+                    // invitado enseña un código con su dirección y aquí se lee.
+                    Text(
+                      c.reachableFromOtherNetworks
+                          ? '¿No conecta desde otra red?'
+                          : '¿Está en otra red (datos móviles, otra wifi)?',
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.titleSmall
+                          ?.copyWith(color: glass.primary),
+                    ),
+                    const SizedBox(height: Spacing.xs),
+                    Text(
+                      'Al unirse le aparece un código de respuesta. Léelo '
+                      'aquí y os conectáis directo.',
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: glass.secondary),
+                    ),
+                    const SizedBox(height: Spacing.md),
+                    if (_canScan)
+                      FilledButton.tonalIcon(
+                        onPressed: _scanAnswer,
+                        icon: const Icon(Icons.qr_code_scanner),
+                        label: const Text('Escanear su respuesta'),
+                      ),
+                    if (_canScan) const SizedBox(height: Spacing.sm),
+                    OutlinedButton.icon(
+                      onPressed: _pasteAnswer,
+                      icon: const Icon(Icons.content_paste),
+                      label: const Text('Pegar su respuesta'),
                     ),
                   ],
                 ],
@@ -232,7 +333,9 @@ class _HostViewState extends State<_HostView> {
 // ── Unirse ─────────────────────────────────────────────────────────────────
 
 class _JoinView extends StatefulWidget {
-  const _JoinView();
+  const _JoinView({this.invite});
+
+  final String? invite;
 
   @override
   State<_JoinView> createState() => _JoinViewState();
@@ -242,22 +345,40 @@ class _JoinViewState extends State<_JoinView> {
   final _inviteCtl = TextEditingController();
   MobileScannerController? _scanner;
   bool _joining = false;
+  bool _showAnswer = false;
+
+  /// `true` cuando ya se conectó y se pasa a la pantalla de hablar.
+  bool _handedOff = false;
 
   /// Sólo el móvil tiene cámara con la que escanear; en escritorio la
   /// invitación se pega.
   static bool get _canScan =>
       !kIsWeb && (Platform.isAndroid || Platform.isIOS);
 
+  late final SessionController _controller;
+
   @override
   void initState() {
     super.initState();
-    if (_canScan) {
+    _controller = context.read<SessionController>();
+    final invite = widget.invite;
+    if (invite != null) {
+      // Con invitación ya en mano no hace falta la cámara.
+      _joining = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _joining = false;
+        _join(invite);
+      });
+    } else if (_canScan) {
       _scanner = MobileScannerController(formats: const [BarcodeFormat.qrCode]);
     }
   }
 
   @override
   void dispose() {
+    // Salir a medio conectar cancela el intento: si no, la sesión seguiría
+    // sondando en segundo plano (hasta minuto y medio sin servidor).
+    if (_joining && !_handedOff) _controller.reset();
     _inviteCtl.dispose();
     _scanner?.dispose();
     super.dispose();
@@ -271,16 +392,39 @@ class _JoinViewState extends State<_JoinView> {
       c.reportError('Pega la invitación que te han pasado.');
       return;
     }
-    setState(() => _joining = true);
+    setState(() {
+      _joining = true;
+      _showAnswer = false;
+    });
     await _scanner?.stop();
+    // En la misma red se conecta en décimas. Si pasan unos segundos, lo más
+    // probable es que estén en redes distintas: entonces se enseña la
+    // respuesta, no antes, para no pedir un paso que casi nunca hace falta.
+    final reveal = Timer(const Duration(seconds: 3), () {
+      if (mounted) setState(() => _showAnswer = true);
+    });
     final ok = await c.joinFromUri(invite);
+    reveal.cancel();
     if (!mounted) return;
     if (ok && c.isLive) {
+      // Marcado antes de navegar: al sustituir esta pantalla se destruye, y
+      // sin la marca su `dispose` tomaría la sesión recién conectada por un
+      // intento a medias y la cerraría.
+      _handedOff = true;
       _goToSession(context);
       return;
     }
     setState(() => _joining = false);
-    await _scanner?.start();
+    // Falló una invitación abierta por enlace: se ofrece la cámara para
+    // reintentar con otra.
+    if (_scanner == null && _canScan) {
+      setState(() {
+        _scanner =
+            MobileScannerController(formats: const [BarcodeFormat.qrCode]);
+      });
+    } else {
+      await _scanner?.start();
+    }
   }
 
   Future<void> _paste() async {
@@ -313,9 +457,8 @@ class _JoinViewState extends State<_JoinView> {
                     const SizedBox(height: Spacing.lg),
                   ],
                   if (_joining)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 80),
-                      child: LoadingStates.centered(message: 'Conectando…'),
+                    _JoiningPanel(
+                      answer: _showAnswer ? c.answerUri : null,
                     )
                   else ...[
                     if (_scanner != null) ...[
@@ -393,6 +536,116 @@ class _JoinViewState extends State<_JoinView> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Lo que ve el invitado mientras conecta.
+///
+/// Empieza siendo sólo "Conectando…". Si la conexión tarda, aparece el código
+/// de respuesta: la dirección de este dispositivo, para que el anfitrión la
+/// lea y abra su red hacia aquí.
+class _JoiningPanel extends StatefulWidget {
+  const _JoiningPanel({required this.answer});
+
+  /// Respuesta a enseñar, o `null` si aún no toca.
+  final String? answer;
+
+  @override
+  State<_JoiningPanel> createState() => _JoiningPanelState();
+}
+
+class _JoiningPanelState extends State<_JoiningPanel> {
+  bool _copied = false;
+
+  Future<void> _copy(String answer) async {
+    await Clipboard.setData(ClipboardData(text: answer));
+    if (!mounted) return;
+    setState(() => _copied = true);
+    await Future<void>.delayed(const Duration(seconds: 2));
+    if (mounted) setState(() => _copied = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final glass = GlassTextTheme.of(context);
+    final answer = widget.answer;
+
+    if (answer == null) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 80),
+        child: LoadingStates.centered(message: 'Conectando…'),
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        GlassSurface(
+          padding: const EdgeInsets.all(Spacing.xxl),
+          child: Column(
+            children: [
+              Text(
+                'Enséñale este código',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.w800,
+                  color: glass.primary,
+                ),
+              ),
+              const SizedBox(height: Spacing.xs),
+              Text(
+                'Estáis en redes distintas. Quien creó la sala tiene que '
+                'leerlo con "Escanear su respuesta".',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodyMedium
+                    ?.copyWith(color: glass.secondary),
+              ),
+              const SizedBox(height: Spacing.xl),
+              Semantics(
+                label: 'Código QR de respuesta para el anfitrión',
+                child: Container(
+                  padding: const EdgeInsets.all(Spacing.md),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(Radii.glass),
+                  ),
+                  child: QrImageView(
+                    data: answer,
+                    size: 220,
+                    backgroundColor: Colors.white,
+                  ),
+                ),
+              ),
+              const SizedBox(height: Spacing.lg),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  const SizedBox(width: Spacing.md),
+                  Flexible(
+                    child: Text(
+                      'Sigo intentando conectar…',
+                      style: theme.textTheme.bodyMedium
+                          ?.copyWith(color: glass.secondary),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: Spacing.lg),
+        OutlinedButton.icon(
+          onPressed: () => _copy(answer),
+          icon: Icon(_copied ? Icons.check : Icons.link),
+          label: Text(_copied ? 'Respuesta copiada' : 'Copiar respuesta'),
+        ),
+      ],
     );
   }
 }

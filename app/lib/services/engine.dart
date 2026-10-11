@@ -88,7 +88,27 @@ abstract class SessionEngine {
 
   /// Conecta probando varias direcciones del anfitrión (`ip:puerto`) y se
   /// queda con la primera por la que se llega.
-  Future<void> connectAny(List<String> candidates);
+  ///
+  /// [wait] es cuánto se insiste por caminos directos. Hace falta alargarlo
+  /// cuando la dirección de este extremo le llega al anfitrión a mano (el
+  /// código de respuesta): hay que seguir sondando mientras lo escanea.
+  Future<void> connectAny(List<String> candidates, {Duration? wait});
+
+  /// Añade direcciones del otro extremo por las que buscarlo. Mientras se
+  /// espera invitado, el anfitrión las sonda: así se perfora el NAT sin
+  /// servidor.
+  Future<void> addPathHints(List<String> addrs);
+
+  /// Pide al router que abra el puerto de la sala (UPnP). Devuelve la
+  /// dirección pública resultante, o `null` si no es posible.
+  Future<String?> openRouterPort();
+
+  /// Milisegundos sin recibir nada del otro extremo, o `null` si aún no se
+  /// ha recibido nada.
+  int? rxIdleMs();
+
+  /// `true` si el audio va por un relay y no directo.
+  bool get relayed;
 
   /// Fija el servidor de encuentro (`host:puerto`) que coordina la
   /// perforación de NAT entre redes distintas. `null` o vacío lo quita.
@@ -309,8 +329,9 @@ class FfiSessionEngine implements SessionEngine {
       _runHandshake(_handshake(_alive.address, host, port, server: false));
 
   @override
-  Future<void> connectAny(List<String> candidates) {
+  Future<void> connectAny(List<String> candidates, {Duration? wait}) {
     final address = _alive.address;
+    final waitMs = wait?.inMilliseconds;
     return _runHandshake(Isolate.run(() {
       final bridge = NativeBridge.tryLoad();
       if (bridge == null) {
@@ -319,8 +340,30 @@ class FfiSessionEngine implements SessionEngine {
           error: 'librería nativa no disponible',
         );
       }
-      return bridge.runConnectAny(address, candidates);
+      return bridge.runConnectAny(address, candidates, waitMs: waitMs);
     }));
+  }
+
+  @override
+  Future<void> addPathHints(List<String> addrs) async =>
+      _alive.addPathHints(addrs);
+
+  @override
+  Future<String?> openRouterPort() {
+    final address = _alive.address;
+    return Isolate.run(() => NativeBridge.tryLoad()?.runMapPort(address));
+  }
+
+  @override
+  int? rxIdleMs() => _session?.rxIdleMs();
+
+  @override
+  bool get relayed {
+    try {
+      return _session?.isRelayed() ?? false;
+    } on NativeException {
+      return false;
+    }
   }
 
   @override
@@ -539,7 +582,20 @@ class DemoSessionEngine implements SessionEngine {
   Future<void> connect(String host, int port) => _beginHandshake();
 
   @override
-  Future<void> connectAny(List<String> candidates) => _beginHandshake();
+  Future<void> connectAny(List<String> candidates, {Duration? wait}) =>
+      _beginHandshake();
+
+  @override
+  Future<void> addPathHints(List<String> addrs) async {}
+
+  @override
+  Future<String?> openRouterPort() async => null;
+
+  @override
+  int? rxIdleMs() => null;
+
+  @override
+  bool get relayed => false;
 
   @override
   Future<bool> setRendezvous(String? hostPort) async => true;

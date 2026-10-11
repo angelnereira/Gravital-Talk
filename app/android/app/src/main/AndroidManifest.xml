@@ -1,4 +1,14 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Declarados aquí a propósito, aunque algunos plugins también los
+         aportan: lo que la app necesita para funcionar no debe depender de
+         qué plugin los traiga en cada versión. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
+    <uses-permission android:name="android.permission.CAMERA"/>
+    <uses-feature android:name="android.hardware.camera" android:required="false"/>
+    <uses-feature android:name="android.hardware.microphone" android:required="true"/>
     <application
         android:label="Gravital Talk"
         android:name="${applicationName}"
@@ -31,6 +41,7 @@
                 <category android:name="android.intent.category.DEFAULT"/>
                 <category android:name="android.intent.category.BROWSABLE"/>
                 <data android:scheme="gravital-talk" android:host="pair"/>
+                <data android:scheme="gravital-talk" android:host="answer"/>
             </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.

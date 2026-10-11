@@ -171,6 +171,12 @@ typedef _PublicAddrC = Int32 Function(Pointer<Void>, Pointer<Utf8>, UintPtr);
 typedef _PublicAddrD = int Function(Pointer<Void>, Pointer<Utf8>, int);
 typedef _ConnectAnyC = Int32 Function(Pointer<Void>, Pointer<Utf8>);
 typedef _ConnectAnyD = int Function(Pointer<Void>, Pointer<Utf8>);
+typedef _AddHintsC = Int32 Function(Pointer<Void>, Pointer<Utf8>);
+typedef _AddHintsD = int Function(Pointer<Void>, Pointer<Utf8>);
+typedef _RxIdleC = Int64 Function(Pointer<Void>);
+typedef _RxIdleD = int Function(Pointer<Void>);
+typedef _ConnectAnyTimeoutC = Int32 Function(Pointer<Void>, Pointer<Utf8>, Uint32);
+typedef _ConnectAnyTimeoutD = int Function(Pointer<Void>, Pointer<Utf8>, int);
 typedef _AudioSetPttC = Int32 Function(Pointer<Void>, Int32);
 typedef _AudioSetPttD = int Function(Pointer<Void>, int);
 typedef _AudioStatsC = Int32 Function(Pointer<Void>, Pointer<GsAudioStatsNative>);
@@ -239,6 +245,17 @@ class NativeBridge {
             'gs_session_public_addr'),
         _connectAny = lib.lookupFunction<_ConnectAnyC, _ConnectAnyD>(
             'gs_session_connect_any'),
+        _addPathHints = lib.lookupFunction<_AddHintsC, _AddHintsD>(
+            'gs_session_add_path_hints'),
+        _mapPort = lib.lookupFunction<_PublicAddrC, _PublicAddrD>(
+            'gs_session_map_port'),
+        _rxIdleMs =
+            lib.lookupFunction<_RxIdleC, _RxIdleD>('gs_session_rx_idle_ms'),
+        _isRelayed =
+            lib.lookupFunction<_HandleC, _HandleD>('gs_session_is_relayed'),
+        _connectAnyTimeout =
+            lib.lookupFunction<_ConnectAnyTimeoutC, _ConnectAnyTimeoutD>(
+                'gs_session_connect_any_timeout'),
         _audioSupported =
             lib.lookupFunction<_IntC, _IntD>('gs_audio_supported'),
         _audioStart = lib.lookupFunction<_HandleC, _HandleD>('gs_audio_start'),
@@ -284,6 +301,11 @@ class NativeBridge {
   final _SetRendezvousD _setRendezvous;
   final _PublicAddrD _publicAddr;
   final _ConnectAnyD _connectAny;
+  final _AddHintsD _addPathHints;
+  final _PublicAddrD _mapPort;
+  final _RxIdleD _rxIdleMs;
+  final _HandleD _isRelayed;
+  final _ConnectAnyTimeoutD _connectAnyTimeout;
   final _IntD _audioSupported;
   final _HandleD _audioStart;
   final _HandleD _audioStop;
@@ -365,12 +387,15 @@ class NativeBridge {
   /// de encuentro. Bloquea: llamar desde un isolate worker.
   ({int status, String? error}) runConnectAny(
     int handleAddress,
-    List<String> candidates,
-  ) {
+    List<String> candidates, {
+    int? waitMs,
+  }) {
     final ptr = Pointer<Void>.fromAddress(handleAddress);
     final csv = candidates.join(',').toNativeUtf8();
     try {
-      final st = _connectAny(ptr, csv);
+      final st = waitMs == null
+          ? _connectAny(ptr, csv)
+          : _connectAnyTimeout(ptr, csv, waitMs);
       return (status: st, error: st == GsStatus.ok ? null : lastError());
     } finally {
       calloc.free(csv);
@@ -392,6 +417,26 @@ class NativeBridge {
       return (status: st, error: st == GsStatus.ok ? null : lastError());
     } finally {
       calloc.free(cHost);
+    }
+  }
+
+  /// Pide al router que abra un puerto hacia la sesión (UPnP).
+  ///
+  /// Devuelve la dirección pública (`ip:puerto`) o `null` si el router no lo
+  /// admite o está a su vez tras otro NAT. Bloquea: llamar desde un isolate.
+  String? runMapPort(int handleAddress) {
+    const bufLen = 128;
+    final ptr = Pointer<Void>.fromAddress(handleAddress);
+    final buf = calloc<Uint8>(bufLen);
+    try {
+      final st = _mapPort(ptr, buf.cast(), bufLen);
+      if (st != GsStatus.ok) {
+        lastError();
+        return null;
+      }
+      return buf.cast<Utf8>().toDartString();
+    } finally {
+      calloc.free(buf);
     }
   }
 
@@ -643,6 +688,29 @@ class NativeSession {
       calloc.free(len);
     }
   }
+
+  /// Añade direcciones (`ip:puerto`) por las que buscar al otro extremo.
+  ///
+  /// No bloquea: se puede llamar con el handshake en curso en otro isolate.
+  void addPathHints(List<String> addrs) {
+    _ensureAlive();
+    final csv = addrs.join(',').toNativeUtf8();
+    try {
+      _bridge._check(_bridge._addPathHints(_handle, csv));
+    } finally {
+      calloc.free(csv);
+    }
+  }
+
+  /// Milisegundos desde el último paquete recibido, o `null` si ninguno.
+  int? rxIdleMs() {
+    if (_destroyed) return null;
+    final ms = _bridge._rxIdleMs(_handle);
+    return ms < 0 ? null : ms;
+  }
+
+  /// `true` si el audio va por el relay y no directo.
+  bool isRelayed() => !_destroyed && _bridge._isRelayed(_handle) == 1;
 
   /// Arranca el audio nativo (micrófono → red, red → altavoz).
   ///

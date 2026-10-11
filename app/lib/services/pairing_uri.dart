@@ -34,6 +34,61 @@ const pairingScheme = 'gravital-talk';
 /// viejos rechazan en vez de interpretar mal.
 const pairingVersion = 1;
 
+/// Respuesta del invitado a una invitación.
+///
+/// La invitación viaja del anfitrión al invitado y le dice a dónde llamar.
+/// Pero si los dos están detrás de un NAT, el router del anfitrión no deja
+/// entrar la llamada hasta que el anfitrión haya enviado algo hacia el
+/// invitado, y para eso necesita **su** dirección. Esto es lo que se la da:
+/// el invitado la enseña como código y el anfitrión la escanea.
+///
+/// ```text
+/// gravital-talk://answer?v=1&room=GRVT-A3F2&addr=203.0.113.9:51000,192.168.1.7:51000
+/// ```
+///
+/// No lleva secreto: sólo direcciones. Quien la vea no puede entrar en la
+/// sala sin el token, que va en la invitación.
+class PairingAnswer {
+  const PairingAnswer({required this.room, required this.addresses});
+
+  /// Sala a la que responde: evita aplicar la respuesta de otra sala.
+  final String room;
+
+  /// Direcciones (`ip:puerto`) por las que se puede alcanzar al invitado.
+  final List<String> addresses;
+
+  static const _host = 'answer';
+
+  /// `null` si `raw` no es una respuesta de Gravital Talk.
+  static PairingAnswer? tryParse(String raw) {
+    final uri = Uri.tryParse(raw.trim());
+    if (uri == null || uri.scheme != pairingScheme || uri.host != _host) {
+      return null;
+    }
+    final room = (uri.queryParameters['room'] ?? '').trim().toUpperCase();
+    final addresses = (uri.queryParameters['addr'] ?? '')
+        .split(',')
+        .map((a) => a.trim())
+        .where((a) => a.isNotEmpty)
+        .toList();
+    if (room.isEmpty || addresses.isEmpty) return null;
+    return PairingAnswer(room: room, addresses: addresses);
+  }
+
+  String toUri() {
+    final query = {
+      'v': '$pairingVersion',
+      'room': room,
+      'addr': addresses.join(','),
+    }
+        .entries
+        .map((e) =>
+            '${Uri.encodeQueryComponent(e.key)}=${Uri.encodeQueryComponent(e.value)}')
+        .join('&');
+    return '$pairingScheme://$_host?$query';
+  }
+}
+
 /// Un destino de emparejamiento, listo para rellenar un formulario.
 class PairingUri {
   const PairingUri({

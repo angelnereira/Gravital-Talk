@@ -61,8 +61,30 @@ class SessionController extends ChangeNotifier {
   /// `true` si la sala en curso tiene servidor de encuentro operativo.
   bool _rendezvousActive = false;
 
-  /// `true` si a esta sala se puede entrar desde otra red.
-  bool get reachableFromOtherNetworks => _rendezvousActive;
+  /// `true` si el router abrió el puerto de la sala (UPnP).
+  bool _portOpened = false;
+
+  /// `true` si a esta sala se puede entrar desde otra red sin más pasos: el
+  /// router abrió el puerto, o hay un servidor que presenta a los dos.
+  bool get reachableFromOtherNetworks => _rendezvousActive || _portOpened;
+
+  /// Respuesta de este dispositivo a la invitación, mientras se une.
+  PairingAnswer? _answer;
+
+  /// Código que el invitado enseña al anfitrión cuando están en redes
+  /// distintas, o `null` si no se está uniendo a ninguna sala.
+  String? get answerUri => _answer?.toUri();
+
+  bool _stalled = false;
+  bool _relayed = false;
+
+  /// `true` si hace varios segundos que no llega nada del otro extremo: un
+  /// cambio de red, o falta de cobertura. La sesión sigue intentando
+  /// recuperarse sola.
+  bool get connectionStalled => _stalled;
+
+  /// `true` si el audio pasa por un servidor intermedio y no directo.
+  bool get relayed => _relayed;
 
   /// Aviso no bloqueante pendiente de mostrar (p. ej. "sin micrófono").
   String? _notice;
@@ -252,11 +274,24 @@ class SessionController extends ChangeNotifier {
       _log.warn('No se pudo usar el servidor de encuentro '
           '${_settings.rendezvous}: sólo se podrá entrar desde esta red.');
     }
-    _stunEndpoint = await _engine
-        .discoverPublicEndpoint()
-        // Más que el tope del motor (3 s) a propósito: hay que esperar a que
-        // suelte el socket antes de empezar a aceptar por él.
-        .timeout(const Duration(seconds: 6), onTimeout: () => null);
+    // En paralelo: la dirección pública que ve STUN y la que da el router si
+    // acepta abrir el puerto. La segunda es mejor —por ella se entra desde
+    // cualquier red sin más— así que tiene preferencia.
+    final found = await Future.wait([
+      _engine
+          .discoverPublicEndpoint()
+          // Más que el tope del motor (3 s) a propósito: hay que esperar a
+          // que suelte el socket antes de empezar a aceptar por él.
+          .timeout(const Duration(seconds: 6), onTimeout: () => null),
+      _engine
+          .openRouterPort()
+          .timeout(const Duration(seconds: 8), onTimeout: () => null),
+    ]);
+    _portOpened = found[1] != null;
+    _stunEndpoint = found[1] ?? found[0];
+    if (_portOpened) {
+      _log.success('El router abrió el puerto: sala alcanzable en ${found[1]}.');
+    }
 
     final code = _generateRoomCode();
     _roomCode = code;
@@ -330,6 +365,35 @@ class SessionController extends ChangeNotifier {
     );
   }
 
+  /// El anfitrión recibe la respuesta del invitado (escaneada, pegada o por
+  /// enlace) y empieza a sondar sus direcciones.
+  ///
+  /// Devuelve `false` si aquello no era una respuesta para esta sala.
+  Future<bool> acceptAnswer(String raw) async {
+    final answer = PairingAnswer.tryParse(raw);
+    if (answer == null) {
+      reportError('Ese código no es una respuesta de Gravital Talk.');
+      return false;
+    }
+    if (_role != ConnectionRole.host || _state.isLive) {
+      reportError('La respuesta se escanea desde la pantalla de tu sala, '
+          'mientras esperas a que se unan.');
+      return false;
+    }
+    if (answer.room != _roomCode) {
+      reportError('Esa respuesta es de otra sala (${answer.room}).');
+      return false;
+    }
+    try {
+      await _engine.addPathHints(answer.addresses);
+    } catch (e) {
+      reportError('No se pudo usar la respuesta: $e');
+      return false;
+    }
+    _log.info('Respuesta del invitado recibida: buscando camino…');
+    return true;
+  }
+
   /// Entra en la sala probando todas las direcciones de la invitación.
   Future<bool> _joinCandidates(List<String> candidates, {String? rendezvous}) {
     return _guard(() async {
@@ -340,14 +404,37 @@ class SessionController extends ChangeNotifier {
       }
       // El servidor de encuentro es el del anfitrión, no el de los ajustes de
       // este dispositivo: los dos tienen que registrarse en el mismo.
-      if (rendezvous != null) await _engine.setRendezvous(rendezvous);
+      final hasServer =
+          rendezvous != null && await _engine.setRendezvous(rendezvous);
       _roomCode = profile.roomCode;
       _mode = ConnectionMode.server;
       _role = ConnectionRole.join;
+
+      // La respuesta a la invitación: por dónde se llega a ESTE dispositivo.
+      // Si los dos están tras un NAT, es lo que el anfitrión necesita para
+      // abrir el suyo hacia aquí.
+      final public = await _engine
+          .discoverPublicEndpoint()
+          .timeout(const Duration(seconds: 6), onTimeout: () => null);
+      final lanIp = await _engine.discoverLocalEndpoint();
+      final port = await _engine.localPort();
+      final own = <String>[
+        ?public,
+        if (lanIp != null && lanIp.isNotEmpty) '$lanIp:$port',
+      ];
+      _answer = own.isEmpty
+          ? null
+          : PairingAnswer(room: profile.roomCode, addresses: own);
       _startTicker();
       notifyListeners();
 
-      await _engine.connectAny(candidates);
+      await _engine.connectAny(
+        candidates,
+        // Sin servidor que presente, la dirección de este dispositivo llega al
+        // anfitrión cuando escanea la respuesta: hay que darle tiempo.
+        wait: hasServer ? null : const Duration(seconds: 90),
+      );
+      _answer = null;
       _onConnected('Conectado a la sala ${profile.roomCode}');
     });
   }
@@ -558,6 +645,10 @@ class SessionController extends ChangeNotifier {
     _publicEndpoint = '';
     _stunEndpoint = null;
     _rendezvousActive = false;
+    _portOpened = false;
+    _answer = null;
+    _stalled = false;
+    _relayed = false;
     if (_busy) _cancelled = true;
     // Dejar de observar la sala: si no, el stream sigue abierto tras colgar y
     // la siguiente conexión se encuentra eventos de la sala anterior.
@@ -662,9 +753,9 @@ class SessionController extends ChangeNotifier {
         e.status == GsStatus.handshake ||
         e.message.contains('timeout')) {
       return _role == ConnectionRole.join
-          ? 'No se pudo llegar a la sala. Comprueba que sigue abierta; si '
-              'estáis en redes distintas, el anfitrión necesita un servidor '
-              'de encuentro configurado en Ajustes.'
+          ? 'No se pudo llegar a la sala. Comprueba que sigue abierta. Si '
+              'estáis en redes distintas, el anfitrión tiene que escanear el '
+              'código de respuesta que aparece al unirte.'
           : 'Nadie llegó a conectarse. Vuelve a crear la sala.';
     }
     return 'No se pudo conectar: ${e.message}';
@@ -727,6 +818,13 @@ class SessionController extends ChangeNotifier {
           _elapsed = DateTime.now().difference(_connectedAt!);
         }
         if (_notice == null) _takeAudioWarning();
+        if (st.isLive) {
+          final idle = _engine.rxIdleMs();
+          _stalled = idle != null && idle > 4000;
+          _relayed = _engine.relayed;
+        } else {
+          _stalled = false;
+        }
         if (changed || st.isLive) notifyListeners();
       } catch (_) {
         // El motor aún no está listo; el siguiente tick reintenta.

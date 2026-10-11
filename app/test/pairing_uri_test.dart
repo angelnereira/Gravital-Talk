@@ -173,6 +173,43 @@ void main() {
     });
   });
 
+  group('respuesta a la invitación', () {
+    test('va y vuelve con todas las direcciones', () {
+      const original = PairingAnswer(
+        room: 'GRVT-A3F2',
+        addresses: ['203.0.113.9:51000', '192.168.1.7:51000'],
+      );
+      final parsed = PairingAnswer.tryParse(original.toUri())!;
+      expect(parsed.room, 'GRVT-A3F2');
+      expect(parsed.addresses, ['203.0.113.9:51000', '192.168.1.7:51000']);
+    });
+
+    test('no lleva ningún secreto', () {
+      // Se enseña en pantalla a quien esté cerca: sólo puede llevar
+      // direcciones, nunca el token de la sala.
+      const answer = PairingAnswer(room: 'R-1', addresses: ['203.0.113.9:1']);
+      expect(answer.toUri(), isNot(contains('token')));
+    });
+
+    test('una invitación no se confunde con una respuesta', () {
+      const invite = PairingUri(host: '192.168.0.13', room: 'R-1', udpPort: 9);
+      expect(PairingAnswer.tryParse(invite.toUri()), isNull);
+      // Y al revés: una respuesta no abre una sala.
+      const answer = PairingAnswer(room: 'R-1', addresses: ['203.0.113.9:1']);
+      expect(PairingUri.tryParse(answer.toUri())?.isComplete ?? false, isFalse);
+    });
+
+    test('sin sala o sin direcciones no es válida', () {
+      expect(PairingAnswer.tryParse('gravital-talk://answer?v=1&room=R-1'),
+          isNull);
+      expect(
+        PairingAnswer.tryParse('gravital-talk://answer?v=1&addr=203.0.113.9:1'),
+        isNull,
+      );
+      expect(PairingAnswer.tryParse('texto cualquiera'), isNull);
+    });
+  });
+
   group('isComplete', () {
     test('hace falta el host para conectar sin teclear', () {
       const sinHost = PairingUri(host: '', room: 'R');

@@ -41,6 +41,7 @@ dependencies:
   introduction_screen: ^5.0.1
   # Lanzar enlaces (repositorio/docs en "Acerca de").
   url_launcher: ^6.3.2
+  permission_handler: ^13.0.2
 
 dev_dependencies:
   flutter_test:

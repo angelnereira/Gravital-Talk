@@ -81,6 +81,34 @@ void main() {
     expect(find.textContaining('sólo trae el código'), findsOneWidget);
   });
 
+  testWidgets('unirse por invitación deja la sesión viva al pasar a hablar',
+      (WidgetTester tester) async {
+    // Regresión: al conectar, la pantalla de unirse se sustituye por la de
+    // hablar; su `dispose` tomaba la sesión recién conectada por un intento a
+    // medias y la cerraba. Los dos extremos veían "La conversación terminó".
+    final controller = await _pumpApp(tester);
+
+    await tester.tap(find.text('Unirse'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byType(TextField),
+      'gravital-talk://pair?v=1&host=192.0.2.10&room=GRVT-2847&udp=40000&token=t',
+    );
+    await tester.tap(find.widgetWithText(FilledButton, 'Unirse'));
+    await tester.pump();
+    for (var i = 0; i < 8; i++) {
+      await tester.pump(const Duration(milliseconds: 500));
+    }
+
+    expect(controller.isLive, isTrue);
+    expect(find.text('Mantén pulsado para hablar'), findsOneWidget);
+    expect(find.text('La conversación terminó'), findsNothing);
+
+    await controller.reset();
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump(const Duration(seconds: 1));
+  });
+
   testWidgets('crear sala lleva sola a la pantalla de hablar al conectar',
       (WidgetTester tester) async {
     final controller = await _pumpApp(tester);

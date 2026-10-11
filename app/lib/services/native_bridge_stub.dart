@@ -44,10 +44,13 @@ class NativeBridge {
   }) =>
       (status: GsStatus.internal, error: 'FFI no disponible en esta plataforma');
 
+  String? runMapPort(int handleAddress) => null;
+
   ({int status, String? error}) runConnectAny(
     int handleAddress,
-    List<String> candidates,
-  ) =>
+    List<String> candidates, {
+    int? waitMs,
+  }) =>
       (status: GsStatus.internal, error: 'FFI no disponible en esta plataforma');
 
   ({int status, String? error}) runSetRendezvous(
@@ -112,6 +115,9 @@ class NativeSession {
   void pttRelease() => _unavailable();
   bool peerPttActive() => _unavailable();
   void destroy() => _unavailable();
+  void addPathHints(List<String> addrs) => _unavailable();
+  int? rxIdleMs() => null;
+  bool isRelayed() => false;
   bool audioStart() => false;
   String? audioProblems() => null;
   void audioStop() {}
