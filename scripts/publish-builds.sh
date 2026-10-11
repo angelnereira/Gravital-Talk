@@ -58,7 +58,9 @@ if [ -n "$(git status --porcelain -- app crates)" ]; then
   echo "aviso: hay cambios sin commitear en app/ o crates/; lo publicado puede no coincidir con $SHA" >&2
 fi
 # La app de escritorio sin motor de audio arranca, pero muda.
-if ! nm -D "$BUNDLE/lib/libgravital_talk_ffi.so" 2>/dev/null | grep -q snd_pcm_open; then
+# Sin `grep -q`: corta la tubería al primer acierto, `nm` muere por SIGPIPE y
+# con `pipefail` eso se leía como "no lleva audio".
+if [ "$(nm -D "$BUNDLE/lib/libgravital_talk_ffi.so" 2>/dev/null | grep -c snd_pcm_open)" = 0 ]; then
   echo "el bundle de Linux no lleva audio nativo: recompila con make app-linux" >&2; exit 1
 fi
 
