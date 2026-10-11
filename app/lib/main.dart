@@ -7,6 +7,7 @@ import 'services/engine.dart';
 import 'services/event_log.dart';
 import 'services/grpc_room_api.dart';
 import 'services/launch_links.dart';
+import 'services/mailbox.dart';
 import 'services/room_api.dart';
 import 'services/room_events.dart';
 import 'services/session_controller.dart';
@@ -57,6 +58,12 @@ Future<void> main(List<String> args) async {
     controller,
     codec: engine is FfiSessionEngine ? engine : null,
     prefs: prefs,
+    // Buzones de señalización: lo que hace que una invitación funcione entre
+    // redes distintas. Lista vacía en Ajustes = sólo red local.
+    mailbox: engine is FfiSessionEngine &&
+            ContactsService.mailboxServers(prefs).isNotEmpty
+        ? MqttMailbox(ContactsService.mailboxServers(prefs))
+        : null,
   );
   await contacts.init();
 

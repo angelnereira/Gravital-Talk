@@ -344,6 +344,17 @@ Si el audio se corta, mira primero el tráfico (`tcpdump` por el puerto de la se
 sala sana son ~50 paquetes por segundo y sentido mientras alguien habla, y unos pocos en
 silencio.
 
+## Buzón de señalización (apagado)
+
+`app/lib/services/mailbox.dart` lleva los mismos datagramas sellados de `knock` por MQTT,
+para emparejar entre redes sin código de respuesta. La lógica está probada con un servidor
+falso (`test/contacts_test.dart`), pero **no** contra servidores públicos: el 2026-10-11
+emqx devolvía «servidor no disponible», hivemq no contestaba y mosquitto cerraba la
+conexión (puede que por las muchas conexiones de prueba seguidas). Por eso la lista por
+defecto está vacía. Para retomarlo: `cd app && dart run tool/mailbox_probe.dart`, y sólo si
+entrega, activar la lista. Ojo: la librería `mqtt_client` habla MQTT 3.1 salvo que se llame
+a `setProtocolV311()`.
+
 ## Tonos de turno
 
 Se generan en Rust (`gravital_talk_transport::tone::turn_start_tone` / `turn_end_tone`) y

@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'background_session.dart';
 import 'knock_codec.dart';
+import 'mailbox.dart';
 import 'session_controller.dart';
 
 /// Un dispositivo con el que ya se habló y al que se puede volver a llamar.
@@ -187,7 +188,57 @@ class ContactsService extends ChangeNotifier {
     this.codec,
     this.prefs,
     this.transport,
+    this.mailbox,
   });
+
+  /// Buzón por el que también viajan llamadas e invitaciones, para cuando
+  /// los dos dispositivos no están en la misma red. `null` = sólo red local.
+  final Mailbox? mailbox;
+  StreamSubscription<Uint8List>? _mail;
+  final Set<String> _subscribed = {};
+
+  /// Prueba: no usar la red local, para comprobar que el buzón basta.
+  static final _lanOff = Platform.environment['GT_NO_LAN'] == '1';
+
+  /// Servidores de buzón configurados (`host:puerto`).
+  ///
+  /// Sin configurar, **ninguno**: el buzón está escrito pero no validado
+  /// contra servidores reales (el día de la prueba los públicos rechazaban o
+  /// no contestaban), y no se activa por defecto algo que no se ha visto
+  /// funcionar. `MqttMailbox.defaultServers` queda como lista candidata.
+  static List<String> mailboxServers(SharedPreferences prefs) {
+    final saved = prefs.getString('net.mailboxes');
+    if (saved == null) return const [];
+    return [
+      for (final s in saved.split(','))
+        if (s.trim().isNotEmpty) s.trim(),
+    ];
+  }
+
+  static Future<void> setMailboxServers(
+    SharedPreferences prefs,
+    List<String> servers,
+  ) =>
+      prefs.setString('net.mailboxes', servers.join(','));
+
+  static String _topic(String contactId) => 'gt/1/$contactId';
+
+  /// Escucha el buzón de cada contacto y deja de escuchar el de los que ya
+  /// no están.
+  void _syncMailbox() {
+    final box = mailbox;
+    if (box == null) return;
+    final wanted = {for (final c in _contacts) c.id};
+    for (final id in wanted.difference(_subscribed)) {
+      box.subscribe(_topic(id));
+    }
+    for (final id in _subscribed.difference(wanted)) {
+      box.unsubscribe(_topic(id));
+    }
+    _subscribed
+      ..clear()
+      ..addAll(wanted);
+  }
 
   /// Quien cifra las llamadas; `null` sin librería nativa.
   final KnockCodec? codec;
@@ -289,7 +340,9 @@ class ContactsService extends ChangeNotifier {
       ..deviceName = _deviceName
       ..onPaired = _onPaired
       ..addListener(_onController);
-    if (transport == null) await _listen();
+    if (transport == null && !_lanOff) await _listen();
+    _mail = mailbox?.messages.listen((data) => handleDatagram(data, null));
+    _syncMailbox();
     if (_background) unawaited(BackgroundSession.setStandby(true));
     notifyListeners();
   }
@@ -377,6 +430,7 @@ class ContactsService extends ChangeNotifier {
       _contactsKey,
       jsonEncode([for (final c in _contacts) c.toJson()]),
     );
+    _syncMailbox();
     notifyListeners();
   }
 
@@ -491,7 +545,8 @@ class ContactsService extends ChangeNotifier {
     // Quien abre una invitación quiere hablar: si le llaman enseguida, entra.
     _autoAcceptId = contact.id;
     _autoAcceptUntil = DateTime.now().add(const Duration(seconds: 30));
-    for (final wait in const [0, 1, 3]) {
+    // Varias veces y espaciadas: el otro puede tardar en estar a la escucha.
+    for (final wait in const [0, 1, 3, 6, 10]) {
       Timer(Duration(seconds: wait), () => _send(contact, 'hello'));
     }
     return contact;
@@ -618,6 +673,8 @@ class ContactsService extends ChangeNotifier {
       Uint8List.fromList(payload),
     );
     if (sealed == null) return;
+    mailbox?.publish(_topic(contact.id), sealed);
+    if (_lanOff && transport == null) return;
     final targets = <String>{
       ?contact.lastLocal,
       ?contact.lastPublic,
@@ -662,7 +719,7 @@ class ContactsService extends ChangeNotifier {
 
   /// Procesa un datagrama llegado de `address`.
   @visibleForTesting
-  void handleDatagram(Uint8List data, InternetAddress address) {
+  void handleDatagram(Uint8List data, InternetAddress? address) {
     final codec = this.codec;
     // "GTKN", versión, 8 bytes de id: lo justo para saber de quién es.
     if (codec == null || data.length < 41 || data[0] != 0x47) return;
@@ -687,14 +744,16 @@ class ContactsService extends ChangeNotifier {
     if (age.abs() > _maxAge.inMilliseconds) return;
 
     final name = msg['name'];
-    final from = address.address;
+    // Lo que llega por un buzón no trae dirección de origen.
+    final from = address?.address;
+    final private = address != null && _isPrivate(address);
     final updated = contact.copyWith(
       device: device,
       name: !contact.custom && name is String && name.trim().isNotEmpty
           ? name.trim()
           : null,
-      lastLocal: _isPrivate(address) ? from : null,
-      lastPublic: _isPrivate(address) ? null : from,
+      lastLocal: private ? from : null,
+      lastPublic: private ? null : from,
       lastSeen: DateTime.now().millisecondsSinceEpoch,
     );
     unawaited(_put(updated));
@@ -770,6 +829,8 @@ class ContactsService extends ChangeNotifier {
   @override
   void dispose() {
     _controller.removeListener(_onController);
+    _mail?.cancel();
+    mailbox?.dispose();
     _stopCalling();
     _answerTimer?.cancel();
     autoCall.dispose();

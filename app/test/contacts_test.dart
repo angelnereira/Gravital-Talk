@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -7,6 +8,7 @@ import 'package:gravital_talk_app/services/contacts.dart';
 import 'package:gravital_talk_app/services/engine.dart';
 import 'package:gravital_talk_app/services/event_log.dart';
 import 'package:gravital_talk_app/services/knock_codec.dart';
+import 'package:gravital_talk_app/services/mailbox.dart';
 import 'package:gravital_talk_app/services/room_api.dart';
 import 'package:gravital_talk_app/services/session_controller.dart';
 import 'package:gravital_talk_app/services/settings_store.dart';
@@ -42,6 +44,43 @@ class _FakeCodec implements KnockCodec {
     }
     return Uint8List.sublistView(datagram, 41);
   }
+}
+
+/// Un servidor de buzón de mentira: entrega a cada suscrito lo que se
+/// publica en su tema, también al que publica (como hace MQTT).
+class _Broker {
+  final boxes = <_FakeMailbox>[];
+  int published = 0;
+}
+
+class _FakeMailbox implements Mailbox {
+  _FakeMailbox(this.broker) {
+    broker.boxes.add(this);
+  }
+
+  final _Broker broker;
+  final topics = <String>{};
+  final _in = StreamController<Uint8List>.broadcast(sync: true);
+
+  @override
+  Stream<Uint8List> get messages => _in.stream;
+
+  @override
+  void subscribe(String topic) => topics.add(topic);
+
+  @override
+  void unsubscribe(String topic) => topics.remove(topic);
+
+  @override
+  void publish(String topic, Uint8List data) {
+    broker.published++;
+    for (final box in broker.boxes) {
+      if (box.topics.contains(topic) && !box._in.isClosed) box._in.add(data);
+    }
+  }
+
+  @override
+  void dispose() => _in.close();
 }
 
 class _Device {
@@ -314,5 +353,55 @@ void main() {
     expect(now?.secret, old.secret);
     expect(now?.device, 'aa11');
     expect(now?.ip, '10.0.0.2');
+  });
+
+  test('sin red local en común, la invitación llega por el buzón', () async {
+    SharedPreferences.setMockInitialValues({});
+    final a = _Device(await SharedPreferences.getInstance());
+    SharedPreferences.resetStatic();
+    SharedPreferences.setMockInitialValues({});
+    final b = _Device(await SharedPreferences.getInstance());
+    final broker = _Broker();
+    // La red local no entrega nada: están en redes distintas.
+    a.contacts = ContactsService(a.controller,
+        codec: _FakeCodec(),
+        prefs: a.prefs,
+        transport: (_, _) {},
+        mailbox: _FakeMailbox(broker));
+    b.contacts = ContactsService(b.controller,
+        codec: _FakeCodec(),
+        prefs: b.prefs,
+        transport: (_, _) {},
+        mailbox: _FakeMailbox(broker));
+    await a.contacts.init();
+    await b.contacts.init();
+    await a.contacts.setDeviceName('Ana');
+    await b.contacts.setDeviceName('Beto');
+
+    final link = await a.contacts.contactLink();
+    a.contacts.startInviting(link!);
+    await b.contacts.addFromLink(link);
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+
+    expect(a.contacts.contacts.single.name, 'Beto');
+    final callee = a.contacts.autoCall.value;
+    expect(callee, isNotNull);
+
+    final room = a.controller.createRoom();
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    a.contacts.call(callee!);
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect(b.contacts.incoming.value?.auto, isTrue);
+    expect(b.contacts.incoming.value?.invite,
+        a.controller.pairingUri?.toUri());
+
+    // Al borrar un contacto se deja de escuchar su buzón.
+    await room;
+    a.contacts.cancelCall();
+    await a.controller.reset();
+    final before = broker.boxes.first.topics.length;
+    await a.contacts.remove(a.contacts.contacts.single);
+    expect(broker.boxes.first.topics.length, before - 1);
+    await Future<void>.delayed(const Duration(seconds: 4));
   });
 }

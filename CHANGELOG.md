@@ -17,6 +17,9 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
 - El invitado manda solo las direcciones por las que se le alcanza (lo que
   antes era el «código de respuesta» que había que enseñar).
 - Los enlaces anteriores (`pair`, `contact`, `answer`) siguen funcionando.
+- Escrito pero **apagado**: un buzón de señalización (MQTT) para que la
+  invitación funcione también entre redes distintas sin código de respuesta.
+  No se activa porque no se pudo validar contra servidores públicos reales.
 
 ### Fixed
 
