@@ -247,6 +247,9 @@ pub struct Session {
     multi_peer: AtomicBool,
     /// Ir siempre por el relay, sin intentar caminos directos.
     relay_only: AtomicBool,
+    /// Último latido enviado y último acuse recibido, en µs desde `epoch`.
+    last_keepalive: AtomicU64,
+    last_ack: AtomicU64,
     /// Dirección pública de este extremo según STUN, si se llegó a pedir.
     own_public: std::sync::Mutex<Option<SocketAddr>>,
     /// Último anuncio de direcciones, en µs desde `epoch`.
@@ -309,6 +312,8 @@ impl Session {
             last_register: AtomicU64::new(0),
             multi_peer: AtomicBool::new(false),
             relay_only: AtomicBool::new(false),
+            last_keepalive: AtomicU64::new(0),
+            last_ack: AtomicU64::new(0),
             own_public: std::sync::Mutex::new(None),
             last_advert: AtomicU64::new(0),
             gap_since: AtomicU64::new(0),
@@ -657,12 +662,18 @@ impl Session {
         let now = self.micros_since_epoch();
         let since = |mark: &AtomicU64| now.saturating_sub(mark.load(Ordering::Acquire)) / 1_000;
 
-        if since(&self.last_tx) >= KEEPALIVE_INTERVAL_MS {
+        // Un latido por segundo, se esté enviando audio o no: además de
+        // mantener el NAT abierto, su acuse es la única prueba de que lo que
+        // sale de aquí llega.
+        if since(&self.last_keepalive) >= KEEPALIVE_INTERVAL_MS {
+            if self.last_keepalive.swap(now, Ordering::AcqRel) == 0 {
+                // Primer latido: el plazo del acuse cuenta desde ahora.
+                self.last_ack.store(now, Ordering::Release);
+            }
             self.send_keepalive().await;
         }
 
-        let last_rx = self.last_rx.load(Ordering::Acquire);
-        let stale = last_rx != 0 && now.saturating_sub(last_rx) / 1_000 >= PATH_STALE_MS;
+        let stale = self.path_is_stale(now);
 
         if let Some(server) = self.rendezvous_server() {
             let every = if stale {
@@ -725,6 +736,19 @@ impl Session {
         }
     }
 
+    /// `true` si el camino actual ha dejado de funcionar en algún sentido.
+    ///
+    /// Hay que mirar los dos. Recibir no demuestra que lo enviado llegue: un
+    /// teléfono que pasa de datos a wifi sigue recibiendo un rato por datos
+    /// mientras lo que envía sale ya por la wifi, y por ahí puede no haber
+    /// camino. Sin la segunda comprobación, ese extremo oye al otro, cree que
+    /// todo va bien y no busca alternativa.
+    fn path_is_stale(&self, now: u64) -> bool {
+        let silent_for = |mark: u64| mark != 0 && now.saturating_sub(mark) / 1_000 >= PATH_STALE_MS;
+        silent_for(self.last_rx.load(Ordering::Acquire))
+            || silent_for(self.last_ack.load(Ordering::Acquire))
+    }
+
     /// Cambia la dirección de un peer conservando su estado.
     async fn switch_peer(&self, old: SocketAddr, new: SocketAddr) {
         if !self.book.lock().await.replace(old, new) {
@@ -738,6 +762,9 @@ impl Session {
         // La dirección anterior queda como alternativa: si el cambio fue
         // pasajero (wifi que va y viene), por ahí se vuelve.
         self.add_path_hints(&[old]);
+        // Camino nuevo, plazo nuevo para su primer acuse.
+        self.last_ack
+            .store(self.micros_since_epoch(), Ordering::Release);
         tracing::info!(?old, ?new, "el peer ha cambiado de dirección");
     }
 
@@ -857,7 +884,7 @@ impl Session {
             // nuestra dirección.
             RvMessage::PunchAck { nonce } if nonce == self.probe_nonce() => {
                 let current = self.book.lock().await.primary();
-                let stale = self.rx_idle_ms().is_some_and(|ms| ms >= PATH_STALE_MS);
+                let stale = self.path_is_stale(self.micros_since_epoch());
                 if let Some(old) = current.filter(|old| *old != from && stale) {
                     if self.book.lock().await.len() == 1 {
                         self.switch_peer(old, from).await;
@@ -2644,7 +2671,10 @@ impl Session {
                 self.send_control(MessageType::HeartbeatAck, sid, &[], from)
                     .await?;
             }
-            Ok(MessageType::HeartbeatAck) => {}
+            Ok(MessageType::HeartbeatAck) => {
+                self.last_ack
+                    .store(self.micros_since_epoch(), Ordering::Release);
+            }
             Ok(MessageType::AudioFec) => {
                 let sid = self.session_id.load(Ordering::Acquire);
                 let seq = view.header().sequence;

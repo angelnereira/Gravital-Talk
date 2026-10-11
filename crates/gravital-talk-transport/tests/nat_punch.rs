@@ -46,6 +46,12 @@ enum Filter {
 }
 
 struct Node {
+    /// Segunda dirección por la que también se llega a este extremo (su IP
+    /// en otra red).
+    alias: Option<SocketAddr>,
+    /// Con qué dirección propia se habló por última vez con cada peer: las
+    /// respuestas salen de la misma por la que entró la pregunta.
+    reached_via: HashMap<SocketAddr, SocketAddr>,
     inbox: mpsc::UnboundedSender<Datagram>,
     mapping: Mapping,
     filter: Filter,
@@ -65,6 +71,8 @@ struct Net {
     tap: Mutex<Vec<(Vec<u8>, SocketAddr)>>,
     /// Mientras esté activo, la red se traga todo lo que se envía.
     blackout: std::sync::atomic::AtomicBool,
+    /// Destinos a los que ya no se llega (aunque desde ellos sí se reciba).
+    dead_destinations: Mutex<HashSet<SocketAddr>>,
 }
 
 impl Net {
@@ -72,6 +80,8 @@ impl Net {
         let (tx, rx) = mpsc::unbounded_channel();
         let mut nodes = self.nodes.lock().unwrap();
         nodes.push(Node {
+            alias: None,
+            reached_via: HashMap::new(),
             inbox: tx,
             mapping,
             filter,
@@ -96,7 +106,9 @@ impl Net {
     }
 
     fn deliver(&self, from: usize, bytes: &[u8], dest: SocketAddr) {
-        if self.blackout.load(std::sync::atomic::Ordering::Acquire) {
+        if self.blackout.load(std::sync::atomic::Ordering::Acquire)
+            || self.dead_destinations.lock().unwrap().contains(&dest)
+        {
             return;
         }
         let mut nodes = self.nodes.lock().unwrap();
@@ -105,7 +117,11 @@ impl Net {
         let sender = &mut nodes[from];
         sender.sent_to.insert(dest);
         let source = match sender.mapping {
-            Mapping::Open | Mapping::Cone => sender.public,
+            Mapping::Open | Mapping::Cone => sender
+                .reached_via
+                .get(&dest)
+                .copied()
+                .unwrap_or(sender.public),
             Mapping::Symmetric => {
                 let next = sender.public.port() + 1 + sender.ports.len() as u16;
                 let port = *sender.ports.entry(dest).or_insert(next);
@@ -115,7 +131,7 @@ impl Net {
 
         // A quién pertenece la dirección de destino.
         let target = nodes.iter().position(|n| match n.mapping {
-            Mapping::Open | Mapping::Cone => n.public == dest,
+            Mapping::Open | Mapping::Cone => n.public == dest || n.alias == Some(dest),
             Mapping::Symmetric => {
                 n.public.ip() == dest.ip() && n.ports.values().any(|p| *p == dest.port())
             }
@@ -136,6 +152,12 @@ impl Net {
         if allowed {
             let _ = node.inbox.send((bytes.to_vec(), source));
             self.tap.lock().unwrap().push((bytes.to_vec(), dest));
+            // Sólo importa cuando entró por la segunda dirección.
+            if nodes[target].alias == Some(dest) {
+                nodes[target].reached_via.insert(source, dest);
+            } else {
+                nodes[target].reached_via.remove(&source);
+            }
         }
         drop(nodes);
     }
@@ -864,4 +886,39 @@ async fn un_extremo_callado_manda_latidos_aunque_se_lea_con_plazo_corto() {
         "latidos del invitado en 5 s: {beats}"
     );
     assert!(host.rx_idle_ms().is_some_and(|ms| ms < 1_500));
+}
+
+#[tokio::test(start_paused = true)]
+async fn un_camino_roto_en_un_solo_sentido_tambien_se_detecta() {
+    // Lo que le pasa a un teléfono al pasar de datos a wifi: sigue recibiendo
+    // por el camino viejo, pero lo que envía ya no llega. Como oye al otro,
+    // sólo se entera de que algo va mal porque sus latidos dejan de tener
+    // acuse; entonces busca por las demás direcciones conocidas.
+    let net = Arc::new(Net::default());
+    let host_t = net.join("203.0.113.1:40000", Mapping::Open, Filter::PortRestricted);
+    let guest_t = net.join("203.0.113.2:50000", Mapping::Open, Filter::PortRestricted);
+    let first = host_t.public();
+    let other: SocketAddr = "192.168.0.13:40000".parse().unwrap();
+    net.nodes.lock().unwrap()[host_t.id].alias = Some(other);
+
+    let (joined, host, guest) = pair(host_t, guest_t, None, vec![first, other]).await;
+    joined.expect("conexión inicial");
+    // De las dos, se empezó por la de red local.
+    assert_eq!(guest.peers().await, vec![other]);
+    let mut host_rx = spawn_receiver(&host);
+    let mut guest_rx = spawn_receiver(&guest);
+    assert!(audio_gets_through(&guest, &mut host_rx, 1, Duration::from_secs(2)).await);
+
+    // Hacia ella ya no se llega; desde el anfitrión se sigue recibiendo.
+    net.dead_destinations.lock().unwrap().insert(other);
+    assert!(
+        audio_gets_through(&host, &mut guest_rx, 2, Duration::from_secs(2)).await,
+        "el invitado tiene que seguir oyendo: es lo que hace difícil el caso"
+    );
+
+    assert!(
+        audio_gets_through(&guest, &mut host_rx, 3, Duration::from_secs(15)).await,
+        "el invitado debe darse cuenta y pasar a la otra dirección"
+    );
+    assert_eq!(guest.peers().await, vec![first]);
 }
