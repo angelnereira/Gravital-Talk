@@ -492,6 +492,17 @@ GsStatus gs_session_connect_any_timeout(GsSessionHandle *handle,
 GsStatus gs_session_connect_any(GsSessionHandle *handle, const char *candidates);
 
 /*
+ Número de dispositivos conectados a esta sesión, sin contar el propio.
+
+ En una sala lo normal es llamarlo desde el anfitrión: los invitados sólo
+ están conectados a él y siempre ven `1`.
+
+ # Safety
+ `handle` debe ser un handle válido de `gs_session_create`.
+ */
+int gs_session_peer_count(GsSessionHandle *handle);
+
+/*
  Activa (`on != 0`) o desactiva la reducción de ruido del micrófono.
 
  Activa por defecto. Sólo actúa cuando la sesión viaja comprimida (ver

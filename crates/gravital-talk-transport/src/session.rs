@@ -95,6 +95,12 @@ const PUNCH_SPREAD_EVERY: u32 = 4;
 /// sesión en marcha y el camino sano.
 const ACTIVE_REGISTER_MS: u64 = 5_000;
 
+/// Cuánto conserva la palabra quien habla en una sala tras su último frame.
+const FLOOR_HOLD_MS: u64 = 400;
+
+/// Silencio tras el que un peer de una sala se da por ido.
+const PEER_GONE_MS: u64 = 20_000;
+
 /// Cada cuánto anuncia cada extremo sus direcciones al otro.
 const ADVERTISE_INTERVAL_MS: u64 = 5_000;
 
@@ -254,9 +260,37 @@ pub struct Session {
     own_public: std::sync::Mutex<Option<SocketAddr>>,
     /// Último anuncio de direcciones, en µs desde `epoch`.
     last_advert: AtomicU64,
+    /// Claves AEAD por peer: (cifrar hacia él, descifrar lo suyo).
+    ///
+    /// En una sala cada participante hace su propio handshake con el
+    /// anfitrión y obtiene sus propias claves. Con un único par de claves en
+    /// la sesión, admitir al segundo participante sustituía las del primero.
+    peer_keys: Mutex<HashMap<SocketAddr, (SessionKey, SessionKey)>>,
+    /// Participantes a medio entrar en la sala.
+    pending_joins: Mutex<HashMap<SocketAddr, PendingJoin>>,
+    /// Último paquete válido recibido de cada peer, en µs desde `epoch`.
+    peer_seen: Mutex<HashMap<SocketAddr, u64>>,
+    /// Quién tiene la palabra en la sala, hasta cuándo, y el desfase entre su
+    /// numeración de audio y la local.
+    floor: std::sync::Mutex<Option<(SocketAddr, u64, u32)>>,
     /// Desde cuándo se espera a un frame que falta con otros ya recibidos
     /// detrás, en µs desde `epoch`. `0` = no se está esperando.
     gap_since: AtomicU64,
+}
+
+/// Handshake de un participante que está entrando en una sala ya en marcha.
+struct PendingJoin {
+    /// Saludo del cliente al que responde: si llega repetido es un
+    /// reintento (se reenvía `msg2`); si llega otro distinto, es un intento
+    /// nuevo.
+    msg1: Vec<u8>,
+    msg2: Vec<u8>,
+    session_id: u32,
+    enc_key: SessionKey,
+    dec_key: SessionKey,
+    expected_client_tag: [u8; 16],
+    confirm: [u8; SessionConfirm::SIZE],
+    started: u64,
 }
 
 impl core::fmt::Debug for Session {
@@ -316,6 +350,10 @@ impl Session {
             last_ack: AtomicU64::new(0),
             own_public: std::sync::Mutex::new(None),
             last_advert: AtomicU64::new(0),
+            peer_keys: Mutex::new(HashMap::new()),
+            pending_joins: Mutex::new(HashMap::new()),
+            peer_seen: Mutex::new(HashMap::new()),
+            floor: std::sync::Mutex::new(None),
             gap_since: AtomicU64::new(0),
         }
     }
@@ -353,6 +391,9 @@ impl Session {
         // vuelo de la sesión anterior pueda descifrarse con ellas.
         *self.encrypt_key.lock().await = None;
         *self.decrypt_key.lock().await = None;
+        self.peer_keys.lock().await.clear();
+        self.pending_joins.lock().await.clear();
+        self.peer_seen.lock().await.clear();
         self.replay_by_peer.lock().await.clear();
         self.book.lock().await.clear();
 
@@ -509,6 +550,53 @@ impl Session {
         self.multi_peer.store(enabled, Ordering::Release);
     }
 
+    /// Guarda las claves negociadas con `peer`.
+    ///
+    /// Las de la sesión (`encrypt_key`/`decrypt_key`) son las del primer peer
+    /// y no se sustituyen: indican que la sesión está establecida. Las de cada
+    /// peer van además en su propia entrada.
+    async fn install_keys(&self, peer: SocketAddr, enc: SessionKey, dec: SessionKey) {
+        self.peer_keys.lock().await.insert(peer, (enc, dec));
+        self.peer_seen
+            .lock()
+            .await
+            .insert(peer, self.micros_since_epoch());
+        let mut first = self.encrypt_key.lock().await;
+        if first.is_none() {
+            *first = Some(enc);
+            drop(first);
+            *self.decrypt_key.lock().await = Some(dec);
+        }
+    }
+
+    /// Clave para cifrar hacia `peer`.
+    async fn enc_key_for(&self, peer: SocketAddr) -> Option<SessionKey> {
+        let own = self.peer_keys.lock().await.get(&peer).map(|k| k.0);
+        match own {
+            Some(key) => Some(key),
+            None => *self.encrypt_key.lock().await,
+        }
+    }
+
+    /// Clave para descifrar lo que manda `peer`.
+    async fn dec_key_for(&self, peer: SocketAddr) -> Option<SessionKey> {
+        let own = self.peer_keys.lock().await.get(&peer).map(|k| k.1);
+        match own {
+            Some(key) => Some(key),
+            None => *self.decrypt_key.lock().await,
+        }
+    }
+
+    /// Da de baja a un peer de la sala: deja de recibir audio y sus claves se
+    /// olvidan.
+    async fn drop_peer(&self, peer: SocketAddr) {
+        self.book.lock().await.remove(peer);
+        self.peer_keys.lock().await.remove(&peer);
+        self.peer_seen.lock().await.remove(&peer);
+        self.replay_by_peer.lock().await.remove(&peer);
+        tracing::info!(?peer, "peer fuera de la sala");
+    }
+
     /// Fuerza a que el audio vaya siempre por el relay.
     ///
     /// Por defecto el relay es el último recurso, cuando ningún camino directo
@@ -622,14 +710,10 @@ impl Session {
             return;
         }
         let mut body = [0u8; TAG_SIZE];
-        let sealed = {
-            let key = self.encrypt_key.lock().await;
-            let sealed = key
-                .as_ref()
-                .map(|key| encrypt_in_place(key, &make_nonce(seq, sid), &hdr, &mut body, 0).ok());
-            drop(key);
-            sealed
-        };
+        let sealed = self
+            .enc_key_for(peer)
+            .await
+            .map(|key| encrypt_in_place(&key, &make_nonce(seq, sid), &hdr, &mut body, 0).ok());
         // Sin claves aún no hay sesión que mantener.
         let Some(sealed) = sealed else {
             return;
@@ -705,6 +789,10 @@ impl Session {
             self.last_probe.store(0, Ordering::Release);
         }
 
+        if self.multi_peer.load(Ordering::Acquire) {
+            self.maintain_room(now).await;
+        }
+
         // Anunciar las direcciones propias mientras el camino funciona: es
         // la única forma de que el otro sepa dónde buscar cuando deje de
         // hacerlo. Avisar "he cambiado de red" después del cambio no sirve si
@@ -736,6 +824,42 @@ impl Session {
         }
     }
 
+    /// Mantenimiento propio de quien aloja una sala.
+    ///
+    /// - Da de baja a quien lleva mucho sin dar señales (se fue sin avisar: se
+    ///   quedó sin batería, sin red). Cada peer manda un latido por segundo,
+    ///   así que el silencio largo es inequívoco.
+    /// - Sigue abriendo el NAT hacia las direcciones de quienes aún no han
+    ///   entrado: la sala admite gente mientras dure.
+    async fn maintain_room(&self, now: u64) {
+        let gone: Vec<SocketAddr> = {
+            let seen = self.peer_seen.lock().await;
+            seen.iter()
+                .filter(|(_, at)| now.saturating_sub(**at) / 1_000 >= PEER_GONE_MS)
+                .map(|(addr, _)| *addr)
+                .collect()
+        };
+        for peer in gone {
+            self.drop_peer(peer).await;
+        }
+
+        let since = now.saturating_sub(self.last_probe.load(Ordering::Acquire)) / 1_000;
+        if since < KEEPALIVE_INTERVAL_MS {
+            return;
+        }
+        self.last_probe.store(now, Ordering::Release);
+        if let Some(server) = self.rendezvous_server() {
+            self.send_rv(&RvMessage::Register, server).await;
+        }
+        let nonce = self.probe_nonce();
+        let known = self.book.lock().await.all();
+        for hint in self.path_hints() {
+            if !known.contains(&hint) {
+                self.send_rv(&RvMessage::Punch { nonce }, hint).await;
+            }
+        }
+    }
+
     /// `true` si el camino actual ha dejado de funcionar en algún sentido.
     ///
     /// Hay que mirar los dos. Recibir no demuestra que lo enviado llegue: un
@@ -759,6 +883,16 @@ impl Session {
             windows.insert(new, window);
         }
         drop(windows);
+        let mut keys = self.peer_keys.lock().await;
+        if let Some(pair) = keys.remove(&old) {
+            keys.insert(new, pair);
+        }
+        drop(keys);
+        let mut seen = self.peer_seen.lock().await;
+        if let Some(at) = seen.remove(&old) {
+            seen.insert(new, at);
+        }
+        drop(seen);
         // La dirección anterior queda como alternativa: si el cambio fue
         // pasajero (wifi que va y viene), por ahí se vuelve.
         self.add_path_hints(&[old]);
@@ -777,8 +911,9 @@ impl Session {
     /// paquete legítimo podría reenviarlo desde otra dirección y llevarse el
     /// tráfico de la sesión.
     ///
-    /// Sólo en sesiones con un peer: con varios, un paquete de una dirección
-    /// nueva no dice cuál de ellos se ha movido.
+    /// En una sala con varios peers, quién se ha movido lo dicen las claves:
+    /// cada uno tiene las suyas, y el paquete sólo verifica con las de su
+    /// dueño.
     async fn try_migrate(&self, view: &PacketView<'_>, raw_buf: &[u8], from: SocketAddr) -> bool {
         let header = view.header();
         let kind = MessageType::from_code(header.msg_type);
@@ -787,34 +922,26 @@ impl Session {
         {
             return false;
         }
-        let old = {
-            let book = self.book.lock().await;
-            if book.len() != 1 {
-                return false;
-            }
-            match book.primary() {
-                Some(p) => p,
-                None => return false,
-            }
-        };
-
-        // 1. Autenticidad. No toca ningún estado: un paquete falso no deja
-        //    rastro.
+        // 1. Autenticidad: ¿con las claves de qué peer verifica? No toca
+        //    ningún estado, así que un paquete falso no deja rastro.
         let sid = self.session_id.load(Ordering::Acquire);
-        let mut tmp = view.payload().to_vec();
-        let len = tmp.len();
         let nonce = make_nonce(header.sequence, sid);
-        let authentic = {
-            let key = self.decrypt_key.lock().await;
-            let verdict = key.as_ref().map(|key| {
-                decrypt_in_place(key, &nonce, &raw_buf[..HEADER_SIZE], &mut tmp, len).is_ok()
-            });
-            drop(key);
-            verdict.unwrap_or(false)
+        let candidates: Vec<(SocketAddr, SessionKey)> = {
+            let keys = self.peer_keys.lock().await;
+            keys.iter().map(|(addr, pair)| (*addr, pair.1)).collect()
         };
-        if !authentic {
-            return false;
+        let mut owner = None;
+        for (addr, key) in candidates {
+            let mut tmp = view.payload().to_vec();
+            let len = tmp.len();
+            if decrypt_in_place(&key, &nonce, &raw_buf[..HEADER_SIZE], &mut tmp, len).is_ok() {
+                owner = Some(addr);
+                break;
+            }
         }
+        let Some(old) = owner else {
+            return false;
+        };
 
         // 2. Frescura, sobre una copia: quien marca la secuencia es el flujo
         //    normal, que procesa este mismo paquete a continuación.
@@ -1110,9 +1237,16 @@ impl Session {
 
     /// Resuelve el `session_id` a usar: el pre-fijado o uno aleatorio.
     fn resolved_session_id(&self) -> u32 {
-        match self.preset_session_id() {
-            0 => rand_u32_secure(),
-            id => id,
+        // Una sala ya en marcha conserva su id: el nonce de cada paquete
+        // deriva de él, y cambiarlo al entrar otro participante dejaría a los
+        // anteriores sin poder descifrar.
+        match (
+            self.session_id.load(Ordering::Acquire),
+            self.preset_session_id(),
+        ) {
+            (0, 0) => rand_u32_secure(),
+            (0, preset) => preset,
+            (current, _) => current,
         }
     }
 
@@ -1480,6 +1614,59 @@ impl Session {
         }
     }
 
+    /// Empieza a admitir a un participante en una sala en marcha: contesta a
+    /// su saludo y deja guardado lo necesario para terminar cuando responda.
+    #[cfg(feature = "noise")]
+    async fn begin_join(&self, peer: SocketAddr, msg1: &[u8]) -> Result<(), TransportError> {
+        let mut pending = self.pending_joins.lock().await;
+        // Los intentos abandonados no se acumulan.
+        let now = self.micros_since_epoch();
+        pending.retain(|_, p| now.saturating_sub(p.started) / 1_000 < HANDSHAKE_TIMEOUT_MS);
+        let reply = match pending.get(&peer) {
+            // El mismo saludo otra vez: se perdió la respuesta. Hay que
+            // reenviar la misma, porque el cliente puede haber recibido ya la
+            // primera y sus claves dependen de ella.
+            Some(p) if p.msg1 == msg1 => (p.session_id, p.msg2.clone()),
+            _ => {
+                if pending.len() >= crate::address_book::MAX_PEERS {
+                    return Err(TransportError::Handshake("too many pending joins"));
+                }
+                let fresh = self.noise_server_begin(msg1)?;
+                let reply = (fresh.session_id, fresh.msg2.clone());
+                pending.insert(peer, fresh);
+                reply
+            }
+        };
+        drop(pending);
+        self.send_control(MessageType::HandshakeNoiseHello2, reply.0, &reply.1, peer)
+            .await
+    }
+
+    /// Termina de admitir a un participante cuando llega su respuesta.
+    /// Devuelve `true` si el paquete era parte de una admisión en curso.
+    async fn finish_join(&self, view: &PacketView<'_>, from: SocketAddr) -> bool {
+        if view.header().msg_type != MessageType::HandshakeKeyExchange.code() {
+            return false;
+        }
+        let Some(pending) = self.pending_joins.lock().await.remove(&from) else {
+            return false;
+        };
+        let Ok(ke_msg) = KeyExchangeMsg::decode(view.payload()) else {
+            return true;
+        };
+        // Primero las claves y la confirmación, luego la agenda: desde que
+        // está en la agenda se le manda audio, y tiene que poder descifrarlo.
+        match self.noise_server_finish(from, &pending, &ke_msg).await {
+            Ok(()) => {
+                self.book.lock().await.insert(from);
+                let n = self.book.lock().await.len();
+                tracing::info!(peers = n, peer = ?from, "participante admitido en la sala");
+            }
+            Err(e) => tracing::debug!(?from, %e, "admisión rechazada"),
+        }
+        true
+    }
+
     /// Promueve a un peer ya detectado dentro del lazo de recepción.
     ///
     /// `first` y `peer` provienen del datagrama que `recv_audio` ya consumió, de
@@ -1698,8 +1885,7 @@ impl Session {
                 self.local_ssrc.store(ssrc, Ordering::Release);
                 self.negotiated_codec
                     .store(server_hello.codec_accepted, Ordering::Release);
-                *self.encrypt_key.lock().await = Some(enc_key);
-                *self.decrypt_key.lock().await = Some(dec_key);
+                self.install_keys(peer, enc_key, dec_key).await;
                 return Ok(());
             }
 
@@ -1919,8 +2105,7 @@ impl Session {
         .await?;
 
         // 9. Almacenar claves.
-        *self.encrypt_key.lock().await = Some(enc_key);
-        *self.decrypt_key.lock().await = Some(dec_key);
+        self.install_keys(peer, enc_key, dec_key).await;
         Ok(())
     }
 
@@ -2131,8 +2316,7 @@ impl Session {
                 "server auth tag mismatch (noise)",
             ));
         }
-        *self.encrypt_key.lock().await = Some(enc_key);
-        *self.decrypt_key.lock().await = Some(dec_key);
+        self.install_keys(peer, enc_key, dec_key).await;
         Ok(())
     }
 
@@ -2146,16 +2330,19 @@ impl Session {
 
     /// Handshake Noise como servidor (tras leer `NoiseHello1`).
     #[cfg(feature = "noise")]
-    async fn handshake_noise_server_after_hello1(
-        &self,
-        peer: SocketAddr,
-        msg1: Vec<u8>,
-    ) -> Result<(), TransportError> {
+    /// Primera mitad del handshake Noise de servidor: lee el saludo del
+    /// cliente y deja preparado todo lo que hará falta para terminarlo.
+    ///
+    /// No lee del socket ni espera nada: quien admite a un participante con
+    /// la sala en marcha lo hace desde el lazo de recepción, que no puede
+    /// quedarse esperando la respuesta de uno mientras los demás hablan (y
+    /// que además se cancela cada pocos milisegundos).
+    fn noise_server_begin(&self, msg1: &[u8]) -> Result<PendingJoin, TransportError> {
         let psk = self.room_psk();
         let mut hs = NoiseHandshake::new_responder(psk.as_ref())
             .map_err(|_| TransportError::Handshake("noise responder init failed"))?;
         let payload1 = hs
-            .read(&msg1)
+            .read(msg1)
             .map_err(|_| TransportError::Handshake("noise msg1 invalid"))?;
         let hello1 = NoiseHello1::decode(&payload1).map_err(TransportError::Protocol)?;
         if hello1.protocol_version < PROTOCOL_VERSION_MIN {
@@ -2197,6 +2384,78 @@ impl Session {
             .write(&p2)
             .map_err(|_| TransportError::Handshake("noise write msg2 failed"))?;
 
+        // Con el segundo mensaje escrito, el lado servidor de Noise ya ha
+        // terminado: las claves se pueden derivar ahora y guardar.
+        let hash = hs
+            .handshake_hash()
+            .map_err(|_| TransportError::Handshake("noise handshake incomplete"))?;
+        let transcript = build_transcript(&hello1.client_nonce, &server_nonce, session_id);
+        let (client_enc, client_dec) = derive_session_keys(&hash, &transcript);
+        let (enc_key, dec_key) = (client_dec, client_enc);
+        let confirm = SessionConfirm {
+            session_id,
+            server_auth_tag: derive_auth_tag(&enc_key, b"GS-server-fin-v2", &transcript),
+        };
+        let mut sc_payload = [0u8; SessionConfirm::SIZE];
+        confirm
+            .encode(&mut sc_payload)
+            .map_err(TransportError::Protocol)?;
+        Ok(PendingJoin {
+            msg1: msg1.to_vec(),
+            msg2,
+            session_id,
+            enc_key,
+            dec_key,
+            expected_client_tag: derive_auth_tag(&dec_key, b"GS-client-fin-v2", &transcript),
+            confirm: sc_payload,
+            started: self.micros_since_epoch(),
+        })
+    }
+
+    /// Segunda mitad: comprueba la respuesta del cliente y, si es buena, lo
+    /// da de alta con sus claves y se lo confirma.
+    async fn noise_server_finish(
+        &self,
+        peer: SocketAddr,
+        pending: &PendingJoin,
+        ke_msg: &KeyExchangeMsg,
+    ) -> Result<(), TransportError> {
+        if ke_msg.session_id != pending.session_id {
+            return Err(TransportError::Handshake(
+                "session_id mismatch in KeyExchange",
+            ));
+        }
+        if !constant_time_eq(&ke_msg.auth_tag, &pending.expected_client_tag) {
+            return Err(TransportError::AuthenticationFailed(
+                "client auth tag mismatch (noise)",
+            ));
+        }
+        self.send_control(
+            MessageType::HandshakeSessionConfirm,
+            pending.session_id,
+            &pending.confirm,
+            peer,
+        )
+        .await?;
+        self.install_keys(peer, pending.enc_key, pending.dec_key)
+            .await;
+        Ok(())
+    }
+
+    async fn handshake_noise_server_after_hello1(
+        &self,
+        peer: SocketAddr,
+        msg1: Vec<u8>,
+    ) -> Result<(), TransportError> {
+        let pending = self.noise_server_begin(&msg1)?;
+        let session_id = pending.session_id;
+        let msg2 = pending.msg2.clone();
+        // La respuesta se envía ya. Antes sólo se reenviaba cuando el cliente
+        // repetía su saludo, así que todo handshake esperaba un reintento
+        // (200 ms) sin necesidad.
+        self.send_control(MessageType::HandshakeNoiseHello2, session_id, &msg2, peer)
+            .await?;
+
         let mut buf = vec![0u8; self.config.mtu];
         let ke_msg: KeyExchangeMsg = loop {
             if self.closed.load(Ordering::Acquire) {
@@ -2230,46 +2489,7 @@ impl Session {
             }
         };
 
-        if ke_msg.session_id != session_id {
-            return Err(TransportError::Handshake(
-                "session_id mismatch in KeyExchange",
-            ));
-        }
-
-        let hash = hs
-            .handshake_hash()
-            .map_err(|_| TransportError::Handshake("noise handshake incomplete"))?;
-        let transcript = build_transcript(&hello1.client_nonce, &server_nonce, session_id);
-        let (client_enc, client_dec) = derive_session_keys(&hash, &transcript);
-        let (enc_key, dec_key) = (client_dec, client_enc);
-
-        let expected_client_tag = derive_auth_tag(&dec_key, b"GS-client-fin-v2", &transcript);
-        if !constant_time_eq(&ke_msg.auth_tag, &expected_client_tag) {
-            return Err(TransportError::AuthenticationFailed(
-                "client auth tag mismatch (noise)",
-            ));
-        }
-
-        let server_auth_tag = derive_auth_tag(&enc_key, b"GS-server-fin-v2", &transcript);
-        let confirm = SessionConfirm {
-            session_id,
-            server_auth_tag,
-        };
-        let mut sc_payload = [0u8; SessionConfirm::SIZE];
-        confirm
-            .encode(&mut sc_payload)
-            .map_err(TransportError::Protocol)?;
-        self.send_control(
-            MessageType::HandshakeSessionConfirm,
-            session_id,
-            &sc_payload,
-            peer,
-        )
-        .await?;
-
-        *self.encrypt_key.lock().await = Some(enc_key);
-        *self.decrypt_key.lock().await = Some(dec_key);
-        Ok(())
+        self.noise_server_finish(peer, &pending, &ke_msg).await
     }
 
     /// Stub cuando la feature `noise` no está compilada.
@@ -2327,7 +2547,15 @@ impl Session {
         if targets.is_empty() {
             return Err(TransportError::InvalidState("no peer"));
         }
+        self.send_audio_to(payload, &targets).await
+    }
 
+    /// Cifra y envía un frame a cada destino, con las claves de cada uno.
+    async fn send_audio_to(
+        &self,
+        payload: &[u8],
+        targets: &[SocketAddr],
+    ) -> Result<(), TransportError> {
         // audio_tx_seq es el contador exclusivo de frames de audio.  Se embebe
         // en los 4 primeros bytes del plaintext cifrado para que el jitter buffer
         // del receptor use una secuencia continua sin huecos (los paquetes FEC y
@@ -2338,65 +2566,116 @@ impl Session {
         let sid = self.session_id.load(Ordering::Acquire);
 
         // Plaintext = [audio_seq: 4 BE] || payload
-        let mut prefixed = Vec::with_capacity(4 + payload.len());
-        prefixed.extend_from_slice(&audio_seq.to_be_bytes());
-        prefixed.extend_from_slice(payload);
+        let plain_len = 4 + payload.len();
+        let mut plain = Vec::with_capacity(plain_len + TAG_SIZE);
+        plain.extend_from_slice(&audio_seq.to_be_bytes());
+        plain.extend_from_slice(payload);
 
-        // Construir header con flag ENCRYPTED.
-        let mut header = PacketHeader {
-            version: 1,
-            flags: Flags::ENCRYPTED,
-            msg_type: MessageType::AudioFrame.code(),
-            session_id: sid,
-            sequence: seq,
-            timestamp: ts,
-        };
-
-        // Cifrar prefixed si hay clave disponible.
-        let (wire_payload, encrypt_flag_active) =
-            if let Some(key) = self.encrypt_key.lock().await.as_ref() {
-                let nonce = make_nonce(seq, sid);
-                let mut hdr_buf = [0u8; HEADER_SIZE];
-                header
-                    .encode(&mut hdr_buf)
-                    .map_err(TransportError::Protocol)?;
-
-                let plain_len = prefixed.len();
-                prefixed.resize(plain_len + TAG_SIZE, 0);
-                let enc_len = encrypt_in_place(key, &nonce, &hdr_buf, &mut prefixed, plain_len)
-                    .map_err(TransportError::Protocol)?;
-                (Bytes::copy_from_slice(&prefixed[..enc_len]), true)
-            } else {
-                // Sin clave: fallback a texto claro (no debería ocurrir en sesión Active).
-                header.flags = Flags::empty();
-                (Bytes::copy_from_slice(&prefixed), false)
-            };
-        let _ = encrypt_flag_active;
-
-        let mut buf = BytesMut::with_capacity(self.config.mtu);
-        buf.resize(self.config.mtu, 0);
-        let n = PacketBuilder::new(header, &wire_payload)
-            .encode(&mut buf)
-            .map_err(TransportError::Protocol)?;
-        let mut sent_total = 0u64;
         let mut parity = {
             let mut enc = self.fec_enc.lock().await;
             enc.push(audio_seq, payload)
         };
-        for p in targets {
-            let sent = self.transport.send_to(&buf[..n], p).await?;
-            sent_total += sent as u64;
-            // La paridad FEC se envía al mismo destino que el frame, para que
+        let mut buf = BytesMut::with_capacity(self.config.mtu);
+        buf.resize(self.config.mtu, 0);
+        let mut sealed = vec![0u8; plain_len + TAG_SIZE];
+        let mut sent_total = 0u64;
+
+        for &peer in targets {
+            // El mismo frame se cifra aparte para cada peer: en una sala cada
+            // uno tiene sus claves.
+            let mut header = PacketHeader {
+                version: 1,
+                flags: Flags::ENCRYPTED,
+                msg_type: MessageType::AudioFrame.code(),
+                session_id: sid,
+                sequence: seq,
+                timestamp: ts,
+            };
+            let wire: &[u8] = if let Some(key) = self.enc_key_for(peer).await {
+                let mut hdr_buf = [0u8; HEADER_SIZE];
+                header
+                    .encode(&mut hdr_buf)
+                    .map_err(TransportError::Protocol)?;
+                sealed[..plain_len].copy_from_slice(&plain);
+                let n = encrypt_in_place(
+                    &key,
+                    &make_nonce(seq, sid),
+                    &hdr_buf,
+                    &mut sealed,
+                    plain_len,
+                )
+                .map_err(TransportError::Protocol)?;
+                &sealed[..n]
+            } else {
+                // Sin clave: texto claro (no debería ocurrir en sesión Active).
+                header.flags = Flags::empty();
+                &plain
+            };
+            let n = PacketBuilder::new(header, wire)
+                .encode(&mut buf)
+                .map_err(TransportError::Protocol)?;
+            // Un destino que falla no debe dejar sin audio a los demás.
+            match self.transport.send_to(&buf[..n], peer).await {
+                Ok(sent) => sent_total += sent as u64,
+                Err(e) if targets.len() == 1 => return Err(e),
+                Err(e) => tracing::debug!(?peer, %e, "envío de audio fallido"),
+            }
+            // La paridad FEC acompaña al frame hacia cada destino, para que
             // cada peer pueda recuperar sus propias pérdidas.
-            if let Some(par) = parity.take() {
-                let _ = self.send_fec_parity(par, p, sid).await;
+            if let Some(par) = parity.as_ref() {
+                let _ = self.send_fec_parity(par.clone(), peer, sid).await;
             }
         }
+        parity.take();
         self.metrics.counters.record_sent(sent_total);
         self.last_tx
             .store(self.micros_since_epoch(), Ordering::Release);
 
         Ok(())
+    }
+
+    /// Reenvía a los demás de la sala lo que acaba de decir `from`.
+    ///
+    /// Es lo que hace que una sala sea de más de dos: los invitados sólo
+    /// están conectados al anfitrión, y es él quien reparte. Se reenvía el
+    /// frame tal como llegó (ya comprimido), sin decodificar.
+    ///
+    /// Sólo habla uno a la vez: los demás reciben un único flujo, y mezclar
+    /// dos voces en él lo haría ininteligible. Tiene la palabra quien empezó,
+    /// hasta que lleva un rato callado; y el anfitrión, si está hablando él.
+    async fn forward_audio(&self, from: SocketAddr, payload: &[u8]) {
+        if self.ptt_active.load(Ordering::Acquire) {
+            return;
+        }
+        let targets = self.book.lock().await.others(from);
+        if !targets.is_empty() {
+            let _ = self.send_audio_to(payload, &targets).await;
+        }
+    }
+
+    /// En una sala, decide si `from` tiene la palabra y, si la tiene, a qué
+    /// número de secuencia local corresponde el suyo.
+    ///
+    /// Cada participante numera su audio por su cuenta. El anfitrión los
+    /// recibe a todos en un mismo buffer, así que al cambiar de orador
+    /// traduce su numeración para que continúe donde lo dejó el anterior: sin
+    /// eso, el audio del nuevo se descartaría por "ya reproducido" o "demasiado
+    /// futuro" según le hubiera tocado un número menor o mayor.
+    ///
+    /// Devuelve `None` si otro tiene la palabra: ese frame no se reproduce ni
+    /// se reenvía.
+    fn room_sequence(&self, from: SocketAddr, audio_seq: u32) -> Option<u32> {
+        let now = self.micros_since_epoch();
+        let mut floor = self.floor.lock().unwrap_or_else(|p| p.into_inner());
+        let offset = match *floor {
+            Some((holder, until, _)) if holder != from && now < until => return None,
+            Some((holder, _, offset)) if holder == from => offset,
+            // Orador nuevo: su primer frame continúa la secuencia local.
+            _ => self.jitter.next_sequence().wrapping_sub(audio_seq),
+        };
+        *floor = Some((from, now + FLOOR_HOLD_MS * 1_000, offset));
+        drop(floor);
+        Some(audio_seq.wrapping_add(offset))
     }
 
     async fn send_fec_parity(
@@ -2422,7 +2701,7 @@ impl Session {
             timestamp: ts,
         };
 
-        if let Some(key) = self.encrypt_key.lock().await.as_ref() {
+        if let Some(key) = self.enc_key_for(peer).await.as_ref() {
             let nonce = make_nonce(seq, sid);
             let mut hdr_buf = [0u8; HEADER_SIZE];
             header
@@ -2513,11 +2792,19 @@ impl Session {
                         // tareas leyeran el mismo `Transport`, compartirían los
                         // datagramas y se robarían audio.
                         if let Some(first) = self.peek_new_peer(&view, from) {
-                            if self.promote_peer(first, from).await.is_err() {
+                            let joined = match first {
+                                #[cfg(feature = "noise")]
+                                FirstHandshake::Noise(msg1) => self.begin_join(from, &msg1).await,
+                                other => self.promote_peer(other, from).await,
+                            };
+                            if joined.is_err() {
                                 // Un handshake fallido no rompe la sesión: el
                                 // peer simplemente no se une.
                                 tracing::debug!(?from, "handshake de peer nuevo fallido");
                             }
+                            continue;
+                        }
+                        if self.finish_join(&view, from).await {
                             continue;
                         }
                         self.dispatch_packet(view, &buf[..n], from).await?;
@@ -2590,6 +2877,10 @@ impl Session {
             tracing::trace!(?from, "dropping datagram from unknown peer");
             return Ok(());
         }
+        self.peer_seen
+            .lock()
+            .await
+            .insert(from, self.micros_since_epoch());
 
         // Anti-replay: una vez establecidas las claves, cada secuencia sólo se
         // acepta una vez (ventana deslizante). Protege contra reinyección de
@@ -2622,7 +2913,7 @@ impl Session {
                 let ts = view.header().timestamp;
 
                 let plaintext = if view.header().flags.contains(Flags::ENCRYPTED) {
-                    if let Some(key) = self.decrypt_key.lock().await.as_ref() {
+                    if let Some(key) = self.dec_key_for(from).await.as_ref() {
                         let nonce = make_nonce(seq, sid);
                         let aad = &raw_buf[..HEADER_SIZE];
                         let cipher_payload = view.payload();
@@ -2648,9 +2939,19 @@ impl Session {
                     tracing::debug!(seq, "AudioFrame plaintext too short for audio_seq prefix");
                     return Ok(());
                 }
-                let audio_seq =
+                let sender_seq =
                     u32::from_be_bytes([plaintext[0], plaintext[1], plaintext[2], plaintext[3]]);
                 let audio_payload = plaintext.slice(4..);
+                let in_room = self.multi_peer.load(Ordering::Acquire);
+                let audio_seq = if in_room {
+                    // Otro tiene la palabra: este frame se pierde a propósito.
+                    let Some(local) = self.room_sequence(from, sender_seq) else {
+                        return Ok(());
+                    };
+                    local
+                } else {
+                    sender_seq
+                };
 
                 let frame = Frame {
                     sequence: audio_seq,
@@ -2664,9 +2965,12 @@ impl Session {
                 self.fec_dec
                     .lock()
                     .await
-                    .push_data(audio_seq, audio_payload);
+                    .push_data(audio_seq, audio_payload.clone());
                 if !self.jitter.push(frame) {
                     tracing::trace!(seq, audio_seq, "jitter buffer rejected frame");
+                }
+                if in_room {
+                    self.forward_audio(from, &audio_payload).await;
                 }
             }
             Ok(MessageType::Heartbeat) => {
@@ -2684,7 +2988,7 @@ impl Session {
                 let sid = self.session_id.load(Ordering::Acquire);
                 let seq = view.header().sequence;
                 if view.header().flags.contains(Flags::ENCRYPTED) {
-                    if let Some(key) = self.decrypt_key.lock().await.as_ref() {
+                    if let Some(key) = self.dec_key_for(from).await.as_ref() {
                         let nonce = make_nonce(seq, sid);
                         let aad = &raw_buf[..HEADER_SIZE];
                         let cipher_payload = view.payload();
@@ -2692,12 +2996,27 @@ impl Session {
                         match decrypt_in_place(key, &nonce, aad, &mut tmp, cipher_payload.len()) {
                             Ok(plain_len) if plain_len >= 5 => {
                                 let fec_data = &tmp[..plain_len];
-                                let seq_base = u32::from_be_bytes([
+                                let sender_base = u32::from_be_bytes([
                                     fec_data[0],
                                     fec_data[1],
                                     fec_data[2],
                                     fec_data[3],
                                 ]);
+                                // En una sala la paridad sólo vale si es de
+                                // quien tiene la palabra, y con su numeración
+                                // traducida a la local.
+                                let seq_base = if self.multi_peer.load(Ordering::Acquire) {
+                                    let floor =
+                                        *self.floor.lock().unwrap_or_else(|p| p.into_inner());
+                                    match floor {
+                                        Some((holder, _, offset)) if holder == from => {
+                                            sender_base.wrapping_add(offset)
+                                        }
+                                        _ => return Ok(()),
+                                    }
+                                } else {
+                                    sender_base
+                                };
                                 let window = fec_data[4];
                                 let fec_parity = FecParity {
                                     seq_base,
@@ -2771,6 +3090,11 @@ impl Session {
                     self.congestion.set_bitrate(msg.requested_bitrate);
                     tracing::debug!(bitrate = msg.requested_bitrate, "ControlBitrate received");
                 }
+            }
+            // En una sala, que uno se vaya no cierra la sala: se le da de
+            // baja y los demás siguen.
+            Ok(MessageType::Close) if self.multi_peer.load(Ordering::Acquire) => {
+                self.drop_peer(from).await;
             }
             Ok(MessageType::Close) => {
                 self.state

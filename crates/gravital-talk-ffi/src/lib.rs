@@ -935,6 +935,9 @@ pub unsafe extern "C" fn gs_session_accept_any(handle: *mut GsSessionHandle) -> 
     }
     let inner = unsafe { &*(handle as *mut SessionInner) };
     let session = inner.session.clone();
+    // Quien acepta a cualquiera aloja una sala: tras el primer invitado sigue
+    // admitiendo a más.
+    session.set_multi_peer(true);
     match inner
         .runtime
         .block_on(async move { session.handshake_open().await })
@@ -1298,6 +1301,27 @@ pub unsafe extern "C" fn gs_session_connect_any(
             GsStatus::GS_ERR_HANDSHAKE
         }
     }
+}
+
+/// Número de dispositivos conectados a esta sesión, sin contar el propio.
+///
+/// En una sala lo normal es llamarlo desde el anfitrión: los invitados sólo
+/// están conectados a él y siempre ven `1`.
+///
+/// # Safety
+/// `handle` debe ser un handle válido de `gs_session_create`.
+#[no_mangle]
+pub unsafe extern "C" fn gs_session_peer_count(handle: *mut GsSessionHandle) -> c_int {
+    if handle.is_null() {
+        return 0;
+    }
+    // SAFETY: `handle` no es nulo y viene de `gs_session_create` (contrato).
+    let inner = unsafe { &*(handle as *mut SessionInner) };
+    let session = inner.session.clone();
+    let count = inner
+        .runtime
+        .block_on(async move { session.peer_count().await });
+    c_int::try_from(count).unwrap_or(c_int::MAX)
 }
 
 // ─── Códec de voz ──────────────────────────────────────────────────────
