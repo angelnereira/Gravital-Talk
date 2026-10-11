@@ -44,7 +44,12 @@ class PairingScreen extends StatelessWidget {
     required this.mode,
     this.invite,
     this.callee,
+    this.caller,
   });
+
+  /// Nombre del contacto cuya llamada se está aceptando (modo unirse): con
+  /// él no hay nada que escanear, sólo esperar a que conecte.
+  final String? caller;
 
   /// Contacto al que se llama (modo anfitrión): la sala se abre igual, pero
   /// la invitación se le envía sola en vez de esperar a que la escanee.
@@ -61,7 +66,7 @@ class PairingScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return switch (mode) {
       PairingMode.host => _HostView(callee: callee),
-      PairingMode.join => _JoinView(invite: invite),
+      PairingMode.join => _JoinView(invite: invite, caller: caller),
     };
   }
 }
@@ -197,12 +202,17 @@ class _HostViewState extends State<_HostView> {
     final glass = GlassTextTheme.of(context);
     final invite = c.pairingUri?.toUri();
 
+    final callee = widget.callee;
+    if (callee != null) {
+      return _CallingView(
+        name: callee.name,
+        error: c.error,
+        onCancel: () => Navigator.of(context).maybePop(),
+      );
+    }
+
     return Scaffold(
-      appBar: AppBar(
-        title: Text(widget.callee == null
-            ? 'Tu sala'
-            : 'Llamando a ${widget.callee!.name}'),
-      ),
+      appBar: AppBar(title: const Text('Tu sala')),
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
@@ -287,10 +297,7 @@ class _HostViewState extends State<_HostView> {
                               const SizedBox(width: Spacing.md),
                               Flexible(
                                 child: Text(
-                                  widget.callee == null
-                                      ? 'Esperando a que alguien se una…'
-                                      : 'Esperando a que acepte. Si no le '
-                                          'llega, que escanee el código.',
+                                  'Esperando a que alguien se una…',
                                   style: theme.textTheme.bodyMedium
                                       ?.copyWith(color: glass.secondary),
                                 ),
@@ -369,9 +376,10 @@ class _HostViewState extends State<_HostView> {
 // ── Unirse ─────────────────────────────────────────────────────────────────
 
 class _JoinView extends StatefulWidget {
-  const _JoinView({this.invite});
+  const _JoinView({this.invite, this.caller});
 
   final String? invite;
+  final String? caller;
 
   @override
   State<_JoinView> createState() => _JoinViewState();
@@ -488,6 +496,16 @@ class _JoinViewState extends State<_JoinView> {
 
   @override
   Widget build(BuildContext context) {
+    final caller = widget.caller;
+    if (caller != null) {
+      return _CallingView(
+        name: caller,
+        title: 'Conectando',
+        status: 'Entrando en la conversación…',
+        error: context.watch<SessionController>().error,
+        onCancel: () => Navigator.of(context).maybePop(),
+      );
+    }
     final c = context.watch<SessionController>();
     final theme = Theme.of(context);
     final glass = GlassTextTheme.of(context);
@@ -697,6 +715,142 @@ class _JoiningPanelState extends State<_JoiningPanel> {
           label: Text(_copied ? 'Respuesta copiada' : 'Copiar respuesta'),
         ),
       ],
+    );
+  }
+}
+
+/// Llamada a un contacto: sólo se espera a que conteste.
+///
+/// Con un contacto no hay nada que escanear ni que pegar: la confianza se
+/// estableció al añadirlo (el secreto compartido) y la llamada viaja sellada
+/// con él. Por eso aquí no hay códigos, sólo el estado de la llamada.
+class _CallingView extends StatefulWidget {
+  const _CallingView({
+    required this.name,
+    required this.error,
+    required this.onCancel,
+    this.title = 'Llamando',
+    this.status = 'Esperando a que conteste…',
+  });
+
+  final String title;
+  final String status;
+  final String name;
+  final String? error;
+  final VoidCallback onCancel;
+
+  @override
+  State<_CallingView> createState() => _CallingViewState();
+}
+
+class _CallingViewState extends State<_CallingView> {
+  Timer? _timer;
+  bool _slow = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer(const Duration(seconds: 15), () {
+      if (mounted) setState(() => _slow = true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final glass = GlassTextTheme.of(context);
+    final name = widget.name;
+    final initial = name.isEmpty ? '?' : name.characters.first.toUpperCase();
+
+    return Scaffold(
+      appBar: AppBar(title: Text(widget.title)),
+      body: SafeArea(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
+            child: Padding(
+              padding: const EdgeInsets.all(Spacing.xl),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  CircleAvatar(
+                    radius: 48,
+                    backgroundColor:
+                        theme.colorScheme.primary.withValues(alpha: 0.2),
+                    child: Text(
+                      initial,
+                      style: theme.textTheme.displaySmall?.copyWith(
+                        fontWeight: FontWeight.w800,
+                        color: glass.primary,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: Spacing.xl),
+                  Text(
+                    name,
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.w800,
+                      color: glass.primary,
+                    ),
+                  ),
+                  const SizedBox(height: Spacing.sm),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                      const SizedBox(width: Spacing.md),
+                      Text(
+                        widget.status,
+                        style: theme.textTheme.bodyLarge
+                            ?.copyWith(color: glass.secondary),
+                      ),
+                    ],
+                  ),
+                  if (_slow) ...[
+                    const SizedBox(height: Spacing.lg),
+                    Text(
+                      'Está tardando. Puede que no tenga la app abierta o '
+                      'que no tenga conexión ahora mismo.',
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.bodyMedium
+                          ?.copyWith(color: glass.secondary),
+                    ),
+                  ],
+                  if (widget.error != null) ...[
+                    const SizedBox(height: Spacing.lg),
+                    Text(
+                      widget.error!,
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.bodyMedium
+                          ?.copyWith(color: theme.colorScheme.error),
+                    ),
+                  ],
+                  const SizedBox(height: Spacing.xxxl),
+                  OutlinedButton.icon(
+                    onPressed: widget.onCancel,
+                    icon: Icon(Icons.call_end, color: theme.colorScheme.error),
+                    label: Text(
+                      'Cancelar',
+                      style: TextStyle(color: theme.colorScheme.error),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

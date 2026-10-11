@@ -352,16 +352,20 @@ quedarse con el recorte anterior: los iconos nuevos salen como un rombo o en bla
 mano, pásalo también. Otra causa de «icono que no se ve»: mismo color que su fondo (pasó
 en el onboarding con el primario sobre un vidrio con resplandor primario).
 
-## Buzón de señalización (apagado)
+## Buzón de señalización
 
-`app/lib/services/mailbox.dart` lleva los mismos datagramas sellados de `knock` por MQTT,
-para emparejar entre redes sin código de respuesta. La lógica está probada con un servidor
-falso (`test/contacts_test.dart`), pero **no** contra servidores públicos: el 2026-10-11
-emqx devolvía «servidor no disponible», hivemq no contestaba y mosquitto cerraba la
-conexión (puede que por las muchas conexiones de prueba seguidas). Por eso la lista por
-defecto está vacía. Para retomarlo: `cd app && dart run tool/mailbox_probe.dart`, y sólo si
-entrega, activar la lista. Ojo: la librería `mqtt_client` habla MQTT 3.1 salvo que se llame
-a `setProtocolV311()`.
+`app/lib/services/mailbox.dart` lleva los datagramas sellados de `knock` (saludo, llamada,
+respuesta) por MQTT, además de por la red local. Es lo que deja llamar a un contacto en
+otra red sin códigos. Activo por defecto con `MqttMailbox.defaultServers`.
+
+- Los servidores públicos son irregulares: el 2026-10-11 pasaron de no aceptar ninguno a
+  entregar sólo hivemq. `cd app && dart run tool/mailbox_probe.dart` dice cuáles responden.
+- `GT_NO_LAN=1` apaga la señalización por red local: es como se prueba que el buzón basta.
+- La librería `mqtt_client` habla MQTT 3.1 salvo que se llame a `setProtocolV311()`; con
+  3.1 los servidores no contestan y el error no lo dice.
+- Lo que se publica antes de conectar se guarda 20 s (abrir la app desde un enlace y
+  saludar en el acto era justo ese caso).
+- El buzón sólo presenta: el audio sigue necesitando camino directo (o el relay).
 
 ## Tonos de turno
 

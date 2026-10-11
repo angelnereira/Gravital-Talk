@@ -172,16 +172,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   .animate(delay: 180.ms)
                   .fadeIn(duration: 300.ms)
                   .slideY(begin: 0.08, end: 0),
-              Align(
-                alignment: Alignment.centerRight,
-                child: TextButton.icon(
-                  onPressed: canPair ? _pasteInvite : null,
-                  icon: const Icon(Icons.content_paste_go, size: 18),
-                  label: const Text('Abrir invitación copiada'),
-                ),
+              const SizedBox(height: Spacing.xxl),
+              ContactsSection(
+                enabled: canPair,
+                onPaste: canPair ? _pasteInvite : null,
               ),
-              const SizedBox(height: Spacing.lg),
-              ContactsSection(enabled: canPair),
               const SizedBox(height: Spacing.xxl),
               _TechnicalDetails(
                 controller: c,

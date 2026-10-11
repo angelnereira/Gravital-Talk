@@ -109,8 +109,10 @@ Tener internet permite **salir**; para hablar directo, al menos uno tiene que po
 1. **Misma red** (misma wifi): conexión inmediata por la red local.
 2. **Redes distintas**: cada uno averigua su dirección pública (STUN) y ambos envían a
    la vez para abrir sus routers («perforar el NAT»), con barrido de puertos para los
-   NAT que cambian de puerto. Para esto el anfitrión necesita la dirección del invitado:
-   hoy el invitado se la da enseñándole un **código de respuesta** (QR o enlace).
+   NAT que cambian de puerto. Para esto cada uno necesita la dirección del otro: se la
+   pasan solos, cifrada, por un **buzón público** (servidores de mensajería MQTT de
+   terceros). Si ninguno responde, queda el camino manual: el invitado enseña un
+   código de respuesta.
 3. **Router que abre el puerto solo** (UPnP): si el router lo permite, el anfitrión
    queda alcanzable sin más pasos.
 4. **Servidor de respaldo** (opcional, `gs-relay` desplegado por ti): presenta a los
@@ -122,8 +124,9 @@ Límites reales:
   existe camino directo. Sin servidor de respaldo no conectan.
 - Una llamada a un contacto sólo llega si el otro tiene la app en marcha y es
   alcanzable. No hay notificaciones *push* de un tercero.
-- Entre redes distintas, la invitación de un solo enlace todavía **no** arranca sola:
-  hace falta el código de respuesta del punto 2. Ver la siguiente sección.
+- El buzón público sólo sirve para encontrarse: no lleva audio, no puede leer lo que
+  transporta y no es nuestro. Es gratuito y a ratos no responde; por eso se usan varios
+  y, sin ninguno, la app sigue funcionando en la red local.
 
 ## Qué funciona y qué no
 
@@ -135,7 +138,7 @@ portátil Linux); lo demás lo cubren pruebas automáticas o no se ha comprobado
 | Audio bidireccional, misma wifi | Funciona. **Medido**: 0–5 % de huecos por turno, ~170–220 ms del aviso al sonido (portátil → teléfono). |
 | Audio entre wifi de casa y datos móviles | Ha funcionado en pruebas puntuales con perforación y barrido de puertos; no hay estadística de fiabilidad. |
 | Invitación de un solo enlace, misma red | Funciona. **Medido**: 4 s desde abrir el enlace hasta estar hablando. |
-| Invitación de un solo enlace, redes distintas | **No.** Hace falta el código de respuesta. Hay un buzón de señalización escrito (MQTT) pero apagado: no se pudo validar contra servidores públicos. |
+| Invitación y llamadas entre redes distintas | La señalización viaja por buzones públicos (MQTT, de terceros). **Medido** con la señalización local apagada: invitación completa entre dos apps y llamada de portátil a teléfono. Con el teléfono en datos móviles **no** se ha podido probar. Depende de que algún servidor público responda. |
 | Contactos y llamadas entre ellos | Funciona en la misma red. Entre redes sólo si el otro es alcanzable. |
 | Salas de más de dos | El núcleo lo soporta y hay pruebas automáticas; con tres dispositivos reales no se ha probado. |
 | Segundo plano en Android | Funciona. **Medido** en Android 17: micrófono activo con la app oculta, notificación con hablar/soltar/salir. |
