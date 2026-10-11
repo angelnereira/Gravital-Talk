@@ -356,3 +356,16 @@ invitación dentro de un datagrama sellado (UDP, puerto 47800):
 Límite: no hay intermediario, así que la llamada sólo llega a un dispositivo con la app
 en marcha y alcanzable en ese puerto. Entre redes distintas detrás de NAT no llega; ahí
 se comparte el enlace de la sala, que sí conecta por las técnicas de arriba.
+
+### Enlace de contacto
+
+```text
+gravital-talk://contact?v=1&s=SECRETO&n=Ana&dev=ID&ip=192.168.1.10
+```
+
+Añade un contacto sin sala de por medio. `s` es el secreto que compartirán (32
+caracteres aleatorios; se rechaza con menos de 16), `n` y `dev` identifican a quien lo
+envía e `ip` es su dirección local. Quien lo genera guarda ya un contacto sin nombre con
+ese secreto; quien lo abre guarda el suyo y envía un `hello` sellado para presentarse.
+Es un secreto: se pasa por un canal de confianza. Si lo abren varias personas, todas
+comparten la misma clave con quien lo envió.

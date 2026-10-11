@@ -208,4 +208,53 @@ void main() {
     expect(b.contacts.incoming.value?.invite, uri);
     expect(a.sent, isEmpty);
   });
+
+  test('un enlace de contacto deja guardados a los dos, sin sala de por medio',
+      () async {
+    final (a, b) = await pair();
+    await a.contacts.setDeviceName('Ana');
+    await b.contacts.setDeviceName('Beto');
+
+    final link = await a.contacts.contactLink();
+    expect(link, startsWith('gravital-talk://contact?'));
+    // Enseñarlo dos veces no crea dos contactos a medias.
+    expect(await a.contacts.contactLink(), link);
+    expect(a.contacts.contacts.single.name, ContactsService.pendingName);
+
+    final added = await b.contacts.addFromLink(link!);
+    expect(added?.name, 'Ana');
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    // El saludo de Beto pone nombre al contacto que Ana tenía pendiente.
+    expect(a.contacts.contacts.single.name, 'Beto');
+    expect(a.contacts.contacts.single.device, b.controller.deviceId);
+
+    // Abierto ya por alguien, el siguiente enlace es otro secreto.
+    expect(await a.contacts.contactLink(), isNot(link));
+    // El enlace propio no añade nada, ni uno con el secreto recortado.
+    expect(await a.contacts.addFromLink(link), isNull);
+    expect(await b.contacts.addFromLink('gravital-talk://contact?s=corto'),
+        isNull);
+    expect(await b.contacts.addFromLink('gravital-talk://pair?room=X'), isNull);
+  });
+
+  test('invitar a un contacto a la sala en curso le llega como llamada',
+      () async {
+    final (a, b) = await pair();
+    final link = await a.contacts.contactLink();
+    await b.contacts.addFromLink(link!);
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+
+    // Sin sala no hay nada que ofrecer.
+    expect(a.contacts.ring(a.contacts.contacts.first), isFalse);
+    final room = a.controller.createRoom();
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect(a.contacts.ring(a.contacts.contacts.first), isTrue);
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect(b.contacts.incoming.value?.invite,
+        a.controller.pairingUri?.toUri());
+    await room;
+    await a.controller.reset();
+    // Los reintentos pendientes ya no tienen sala: no deben fallar.
+    await Future<void>.delayed(const Duration(seconds: 7));
+  });
 }

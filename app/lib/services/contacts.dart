@@ -89,6 +89,63 @@ class Contact {
       };
 }
 
+/// Enlace para añadirse como contacto sin haber hablado antes.
+///
+/// ```text
+/// gravital-talk://contact?v=1&s=SECRETO&n=Ana&dev=ID&ip=192.168.1.10
+/// ```
+///
+/// Lleva el secreto que compartirán los dos: quien lo abre queda guardado como
+/// contacto de quien lo envió, y al revés. Hay que pasarlo por un canal de
+/// confianza, igual que una invitación a una sala.
+@immutable
+class ContactLink {
+  const ContactLink({
+    required this.secret,
+    this.name = '',
+    this.device = '',
+    this.ip,
+  });
+
+  final String secret;
+  final String name;
+  final String device;
+
+  /// IP de red local de quien invita, para saludarle si están en la misma.
+  final String? ip;
+
+  /// `null` si `raw` no es un enlace de contacto de Gravital Talk.
+  static ContactLink? tryParse(String raw) {
+    final uri = Uri.tryParse(raw.trim());
+    if (uri == null || uri.scheme != 'gravital-talk' || uri.host != 'contact') {
+      return null;
+    }
+    final q = uri.queryParameters;
+    final secret = (q['s'] ?? '').trim();
+    // Un secreto corto se adivina: no se acepta.
+    if (secret.length < 16) return null;
+    final ip = (q['ip'] ?? '').trim();
+    return ContactLink(
+      secret: secret,
+      name: (q['n'] ?? '').trim(),
+      device: (q['dev'] ?? '').trim(),
+      ip: ip.isEmpty ? null : ip,
+    );
+  }
+
+  String toUri() => Uri(
+        scheme: 'gravital-talk',
+        host: 'contact',
+        queryParameters: {
+          'v': '1',
+          's': secret,
+          if (name.isNotEmpty) 'n': name,
+          if (device.isNotEmpty) 'dev': device,
+          'ip': ?ip,
+        },
+      ).toString();
+}
+
 /// Solicitud de un contacto para hablar, pendiente de aceptar.
 @immutable
 class IncomingCall {
@@ -135,6 +192,11 @@ class ContactsService extends ChangeNotifier {
   static const _deviceIdKey = 'device.id';
   static const _deviceNameKey = 'device.name';
   static const _backgroundKey = 'contacts.background';
+  static const _pendingKey = 'contacts.pendingLink';
+
+  /// Nombre de un contacto del que aún no se sabe nada: quien abra el enlace
+  /// lo sustituye por el suyo al saludar.
+  static const pendingName = 'Contacto nuevo';
 
   /// Margen para la fecha de una llamada: tolera relojes desajustados, pero
   /// una capturada ayer no vuelve a hacer sonar el teléfono.
@@ -295,6 +357,90 @@ class ContactsService extends ChangeNotifier {
 
   static String _hex(List<int> bytes) =>
       bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+
+  // ── Añadir por enlace ────────────────────────────────────────────────────
+
+  /// Enlace para que otra persona se añada como contacto de este dispositivo.
+  ///
+  /// Crea ya el contacto de este lado, sin nombre: lo pone el otro al abrir
+  /// el enlace. Mientras nadie lo haya abierto se reutiliza el mismo, para no
+  /// llenar la lista de contactos a medias cada vez que se enseña.
+  Future<String?> contactLink() async {
+    final prefs = this.prefs;
+    if (!available || prefs == null) return null;
+    var secret = prefs.getString(_pendingKey) ?? '';
+    final pending = secret.isEmpty ? null : _byId(_idFor(secret) ?? '');
+    if (pending == null || pending.device.isNotEmpty) {
+      const alphabet =
+          'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+      final rnd = Random.secure();
+      secret = List.generate(
+          32, (_) => alphabet[rnd.nextInt(alphabet.length)]).join();
+      final id = _idFor(secret);
+      if (id == null) return null;
+      await prefs.setString(_pendingKey, secret);
+      // Al final de la lista: aún no es nadie.
+      _contacts = [
+        ..._contacts,
+        Contact(id: id, secret: secret, name: pendingName),
+      ];
+      await _save();
+    }
+    return ContactLink(
+      secret: secret,
+      name: _deviceName,
+      device: _deviceId,
+      ip: await _controller.localIp(),
+    ).toUri();
+  }
+
+  /// Guarda como contacto a quien envió el enlace `raw` y le saluda para que
+  /// él sepa quién lo abrió. `null` si aquello no era un enlace de contacto.
+  Future<Contact?> addFromLink(String raw) async {
+    final link = ContactLink.tryParse(raw);
+    if (link == null || !available) return null;
+    // El enlace propio, abierto en el mismo dispositivo: no es un contacto.
+    if (link.device == _deviceId) return null;
+    final id = _idFor(link.secret);
+    if (id == null) return null;
+    final known = link.device.isEmpty
+        ? null
+        : _contacts.where((c) => c.device == link.device).firstOrNull;
+    final contact = Contact(
+      id: id,
+      secret: link.secret,
+      name: known != null && known.custom
+          ? known.name
+          : link.name.isNotEmpty
+              ? link.name
+              : pendingName,
+      custom: known?.custom ?? false,
+      device: link.device,
+      lastLocal: link.ip,
+      lastSeen: known?.lastSeen ?? 0,
+    );
+    await _put(contact);
+    for (final wait in const [0, 1, 3]) {
+      Timer(Duration(seconds: wait), () => _send(contact, 'hello'));
+    }
+    return contact;
+  }
+
+  /// Invita a `contact` a la sala ya en curso: le llega como una llamada.
+  /// Devuelve `false` si no hay sala que ofrecer.
+  bool ring(Contact contact) {
+    final invite = _controller.pairingUri?.toUri();
+    if (invite == null) return false;
+    for (final wait in const [0, 1, 2, 4, 6]) {
+      Timer(Duration(seconds: wait), () {
+        final target = _byId(contact.id);
+        if (target != null && _controller.pairingUri?.toUri() == invite) {
+          _send(target, 'call', invite: invite);
+        }
+      });
+    }
+    return true;
+  }
 
   // ── Al emparejar ─────────────────────────────────────────────────────────
 
