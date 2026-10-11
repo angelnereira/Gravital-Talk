@@ -34,8 +34,18 @@ async fn make_session_pair() -> (
     );
     let server_addr = srv_transport.local_addr().unwrap();
     let client_addr = cli_transport.local_addr().unwrap();
-    let server = Arc::new(Session::new(srv_transport, Config::default()));
-    let client = Arc::new(Session::new(cli_transport, Config::default()));
+    // Jitter buffer holgado. Estos tests exigen que llegue el 100 % de los
+    // frames con varios emisores concurrentes, y el plazo para dar un frame por
+    // perdido es el del jitter buffer: con el de producción (60 ms), un emisor
+    // que el planificador retrase más que eso pierde su frame y el test falla
+    // por tiempos, no por lo que quiere comprobar (que no haya bloqueos ni
+    // corrupción).
+    let config = Config {
+        jitter_buffer_ms: 1_000,
+        ..Config::default()
+    };
+    let server = Arc::new(Session::new(srv_transport, config.clone()));
+    let client = Arc::new(Session::new(cli_transport, config));
     (client, server, client_addr, server_addr)
 }
 
