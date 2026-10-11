@@ -200,15 +200,11 @@ class ContactsService extends ChangeNotifier {
   /// Prueba: no usar la red local, para comprobar que el buzón basta.
   static final _lanOff = Platform.environment['GT_NO_LAN'] == '1';
 
-  /// Servidores de buzón configurados (`host:puerto`).
-  ///
-  /// Sin configurar, **ninguno**: el buzón está escrito pero no validado
-  /// contra servidores reales (el día de la prueba los públicos rechazaban o
-  /// no contestaban), y no se activa por defecto algo que no se ha visto
-  /// funcionar. `MqttMailbox.defaultServers` queda como lista candidata.
+  /// Servidores de buzón configurados (`host:puerto`). Sin configurar, los
+  /// públicos por defecto; una cadena vacía guardada los desactiva.
   static List<String> mailboxServers(SharedPreferences prefs) {
     final saved = prefs.getString('net.mailboxes');
-    if (saved == null) return const [];
+    if (saved == null) return MqttMailbox.defaultServers;
     return [
       for (final s in saved.split(','))
         if (s.trim().isNotEmpty) s.trim(),

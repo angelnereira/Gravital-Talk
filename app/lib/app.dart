@@ -110,7 +110,7 @@ class _GravitalTalkAppState extends State<GravitalTalkApp> {
       return;
     }
     final invite = _contacts.accept();
-    if (invite != null) await _openInvite(invite);
+    if (invite != null) await _openInvite(invite, caller: call.contact.name);
   }
 
   late bool _showOnboarding = widget.showOnboarding &&
@@ -190,7 +190,7 @@ class _GravitalTalkAppState extends State<GravitalTalkApp> {
 
   /// Entra en la sala de una invitación y, si conecta, abre la pantalla de
   /// hablar.
-  Future<void> _openInvite(String link) async {
+  Future<void> _openInvite(String link, {String? caller}) async {
     final c = widget.controller;
     // Un enlace de contacto no abre ninguna sala: guarda a quien lo envió.
     if (ContactLink.tryParse(link) != null) {
@@ -237,7 +237,11 @@ class _GravitalTalkAppState extends State<GravitalTalkApp> {
     if (nav == null) return;
     nav.popUntil((route) => route.isFirst);
     await nav.push(ForwardRoute(
-      builder: (_) => PairingScreen(mode: PairingMode.join, invite: link),
+      builder: (_) => PairingScreen(
+        mode: PairingMode.join,
+        invite: link,
+        caller: caller,
+      ),
     ));
   }
 

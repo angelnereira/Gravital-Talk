@@ -10,7 +10,10 @@ import '../services/contacts.dart';
 
 /// Lista de contactos de la home: un toque para volver a hablar con alguien.
 class ContactsSection extends StatelessWidget {
-  const ContactsSection({super.key, required this.enabled});
+  const ContactsSection({super.key, required this.enabled, this.onPaste});
+
+  /// Abre la invitación que haya en el portapapeles.
+  final VoidCallback? onPaste;
 
   /// `false` mientras hay una sala en curso: no se puede llamar a otro.
   final bool enabled;
@@ -35,6 +38,11 @@ class ContactsSection extends StatelessWidget {
                   color: glass.primary,
                 ),
               ),
+            ),
+            IconButton(
+              tooltip: 'Abrir invitación copiada',
+              onPressed: onPaste,
+              icon: const Icon(Icons.content_paste_go),
             ),
             TextButton.icon(
               onPressed: () => Navigator.push(

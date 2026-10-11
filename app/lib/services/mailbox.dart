@@ -42,9 +42,9 @@ class MqttMailbox implements Mailbox {
     }
   }
 
-  /// Candidatos: públicos y con certificado válido el 2026-10-11, pero ese
-  /// mismo día no llegaron a aceptar conexiones de forma fiable. Volver a
-  /// probarlos con `dart run tool/mailbox_probe.dart` antes de activarlos.
+  /// Servidores públicos, de terceros. Son irregulares: el 2026-10-11 sólo
+  /// uno de los tres entregaba (cambia de un rato a otro), y por eso van
+  /// varios. `dart run tool/mailbox_probe.dart` dice cuáles responden.
   static const defaultServers = <String>[
     'broker.emqx.io:8883',
     'broker.hivemq.com:8883',

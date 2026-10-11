@@ -4,6 +4,21 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
 
 ## [Unreleased]
 
+### Changed
+
+**Llamar a un contacto ya no enseña códigos**
+- Al llamar o contestar a un contacto sólo se ve «Llamando a X» /
+  «Conectando»: sin QR, sin enlaces y sin código de respuesta. La confianza se
+  estableció al añadirlo (el secreto compartido) y no se vuelve a pedir.
+- **Buzón de señalización activado.** Las llamadas, saludos y respuestas entre
+  contactos viajan también, selladas, por servidores públicos de mensajería
+  (MQTT): es lo que permite llamar a un contacto que está en otra red sin
+  repetir el emparejamiento. Validado: invitación y llamada completas con la
+  señalización local desactivada, entre dos apps de Linux y de portátil a
+  teléfono. Los servidores son de terceros e irregulares (ese día respondía
+  uno de tres); si ninguno responde, queda la red local.
+- «Abrir invitación copiada» pasa a ser un icono junto a «Añadir».
+
 ### Added
 
 **Abrir invitaciones sin copiar y pegar**
