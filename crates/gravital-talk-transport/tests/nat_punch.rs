@@ -747,3 +747,84 @@ async fn un_frame_perdido_no_para_el_audio_aunque_se_lea_con_plazo_corto() {
     }
     assert!(heard.ends_with(&[6, 7]), "oído: {heard:?}");
 }
+
+#[tokio::test(start_paused = true)]
+async fn el_peer_anuncia_sus_direcciones_y_asi_se_le_encuentra_tras_cambiar_de_red() {
+    // El invitado sólo conocía una dirección del anfitrión. Durante la
+    // sesión, el anfitrión le anuncia otra; cuando la primera deja de
+    // responder, el invitado ya sabe dónde buscar.
+    use gravital_talk_transport::rendezvous::{Message, RoomKey};
+
+    let net = Arc::new(Net::default());
+    let host_t = net.join("192.168.0.13:40000", Mapping::Open, Filter::PortRestricted);
+    let guest_t = net.join("192.168.0.20:50000", Mapping::Open, Filter::PortRestricted);
+    let first = host_t.public();
+    let guest_addr = guest_t.public();
+    let later: SocketAddr = "203.0.113.50:40000".parse().unwrap();
+
+    let (joined, host, guest) = pair(host_t.clone(), guest_t, None, vec![first]).await;
+    joined.expect("conexión inicial");
+    let mut host_rx = spawn_receiver(&host);
+    let _guest_rx = spawn_receiver(&guest);
+    assert!(audio_gets_through(&guest, &mut host_rx, 1, Duration::from_secs(2)).await);
+
+    // El anuncio, tal como lo manda la sesión del anfitrión.
+    let key = RoomKey::from_token(TOKEN.as_bytes());
+    host_t
+        .send_to(
+            &Message::Addrs { addrs: vec![later] }.encode(key),
+            guest_addr,
+        )
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    host_t.rehome("203.0.113.50:40000");
+    assert!(
+        audio_gets_through(&guest, &mut host_rx, 2, Duration::from_secs(15)).await,
+        "el invitado debe encontrar la dirección anunciada"
+    );
+    assert_eq!(guest.peers().await, vec![later]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn un_anuncio_de_direcciones_de_un_tercero_se_ignora() {
+    // Quien no es el peer no puede meter direcciones a las que mandar sondas.
+    use gravital_talk_transport::rendezvous::{Message, RoomKey};
+
+    let net = Arc::new(Net::default());
+    let host_t = net.join("192.168.0.13:40000", Mapping::Open, Filter::PortRestricted);
+    let guest_t = net.join("192.168.0.20:50000", Mapping::Open, Filter::PortRestricted);
+    let intruder = net.join("198.51.100.66:6666", Mapping::Open, Filter::PortRestricted);
+    let victim = net.join("198.51.100.99:9999", Mapping::Open, Filter::PortRestricted);
+    let first = host_t.public();
+    let guest_addr = guest_t.public();
+
+    let (joined, host, guest) = pair(host_t.clone(), guest_t, None, vec![first]).await;
+    joined.expect("conexión inicial");
+    let _host_rx = spawn_receiver(&host);
+    let _guest_rx = spawn_receiver(&guest);
+
+    let key = RoomKey::from_token(TOKEN.as_bytes());
+    intruder
+        .send_to(
+            &Message::Addrs {
+                addrs: vec![victim.public()],
+            }
+            .encode(key),
+            guest_addr,
+        )
+        .await
+        .unwrap();
+    // Se corta el camino para que el invitado sonde todo lo que conozca.
+    host_t.rehome("203.0.113.77:1");
+    tokio::time::sleep(Duration::from_secs(6)).await;
+
+    let mut buf = [0u8; 256];
+    assert!(
+        timeout(Duration::from_millis(200), victim.recv(&mut buf))
+            .await
+            .is_err(),
+        "la víctima no debe recibir sondas"
+    );
+}

@@ -95,6 +95,12 @@ const PUNCH_SPREAD_EVERY: u32 = 4;
 /// sesión en marcha y el camino sano.
 const ACTIVE_REGISTER_MS: u64 = 5_000;
 
+/// Cada cuánto anuncia cada extremo sus direcciones al otro.
+const ADVERTISE_INTERVAL_MS: u64 = 5_000;
+
+/// Direcciones alternativas del otro extremo que se recuerdan.
+const MAX_PATH_HINTS: usize = 12;
+
 /// Margen que se da a un camino local para contestar cuando ya contestó uno
 /// público: entre dos caminos que funcionan, el local tiene menos latencia.
 const LOCAL_PATH_GRACE_MS: u64 = 150;
@@ -241,6 +247,10 @@ pub struct Session {
     multi_peer: AtomicBool,
     /// Ir siempre por el relay, sin intentar caminos directos.
     relay_only: AtomicBool,
+    /// Dirección pública de este extremo según STUN, si se llegó a pedir.
+    own_public: std::sync::Mutex<Option<SocketAddr>>,
+    /// Último anuncio de direcciones, en µs desde `epoch`.
+    last_advert: AtomicU64,
     /// Desde cuándo se espera a un frame que falta con otros ya recibidos
     /// detrás, en µs desde `epoch`. `0` = no se está esperando.
     gap_since: AtomicU64,
@@ -299,6 +309,8 @@ impl Session {
             last_register: AtomicU64::new(0),
             multi_peer: AtomicBool::new(false),
             relay_only: AtomicBool::new(false),
+            own_public: std::sync::Mutex::new(None),
+            last_advert: AtomicU64::new(0),
             gap_since: AtomicU64::new(0),
         }
     }
@@ -467,12 +479,17 @@ impl Session {
     /// no debe retrasar la sala, y quien llama tiene que poder contar con que
     /// al volver ya nadie lee del socket.
     pub async fn discover_public_addr(&self) -> Result<SocketAddr, crate::stun::StunError> {
-        timeout(
+        let found = timeout(
             Duration::from_secs(3),
             crate::stun::discover_public_addr_on(self.transport.as_ref()),
         )
         .await
-        .unwrap_or(Err(crate::stun::StunError::Timeout))
+        .unwrap_or(Err(crate::stun::StunError::Timeout));
+        // Se recuerda para anunciársela al otro extremo durante la sesión.
+        if let Ok(addr) = found {
+            *self.own_public.lock().unwrap_or_else(|p| p.into_inner()) = Some(addr);
+        }
+        found
     }
 
     /// Permite que entren más peers con la sesión ya establecida (modo sala).
@@ -524,6 +541,29 @@ impl Session {
                 hints.push(*addr);
             }
         }
+        // Se conservan las más recientes: tras varios cambios de red, las
+        // direcciones viejas dejan de servir.
+        let excess = hints.len().saturating_sub(MAX_PATH_HINTS);
+        hints.drain(..excess);
+    }
+
+    /// Direcciones por las que se puede alcanzar a este extremo ahora mismo:
+    /// la de la red en la que está y la pública que le vio STUN.
+    async fn own_addresses(&self) -> Vec<SocketAddr> {
+        let mut addrs = Vec::with_capacity(2);
+        if let (Ok(local), Ok(bound)) = (
+            crate::stun::discover_local_addr().await,
+            self.transport.local_addr(),
+        ) {
+            if !local.ip().is_unspecified() {
+                addrs.push(SocketAddr::new(local.ip(), bound.port()));
+            }
+        }
+        let public = *self.own_public.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(public) = public.filter(|p| !addrs.contains(p)) {
+            addrs.push(public);
+        }
+        addrs
     }
 
     fn path_hints(&self) -> Vec<SocketAddr> {
@@ -637,10 +677,35 @@ impl Session {
         }
 
         if stale && since(&self.last_probe) >= PUNCH_INTERVAL_MS * 2 {
-            self.last_probe.store(now, Ordering::Release);
+            let first = self.last_probe.swap(now, Ordering::AcqRel) == 0;
             let nonce = self.probe_nonce();
             for hint in self.path_hints() {
                 self.send_rv(&RvMessage::Punch { nonce }, hint).await;
+                // El barrido de vecinos, sólo al empezar a buscar y luego cada
+                // pocos segundos: es caro y sólo hace falta si el otro lado
+                // tiene un NAT simétrico.
+                if (first || now / 1_000 % 4_000 < PUNCH_INTERVAL_MS * 2)
+                    && !rendezvous::is_local(&hint)
+                {
+                    self.punch_neighbours(hint, nonce).await;
+                }
+            }
+        } else if !stale {
+            self.last_probe.store(0, Ordering::Release);
+        }
+
+        // Anunciar las direcciones propias mientras el camino funciona: es
+        // la única forma de que el otro sepa dónde buscar cuando deje de
+        // hacerlo. Avisar "he cambiado de red" después del cambio no sirve si
+        // el aviso tiene que viajar por el camino que se acaba de perder.
+        if !stale && since(&self.last_advert) >= ADVERTISE_INTERVAL_MS {
+            self.last_advert.store(now, Ordering::Release);
+            let addrs = self.own_addresses().await;
+            if !addrs.is_empty() {
+                let msg = RvMessage::Addrs { addrs };
+                for peer in self.broadcast_targets().await {
+                    self.send_rv(&msg, peer).await;
+                }
             }
         }
     }
@@ -670,6 +735,9 @@ impl Session {
             windows.insert(new, window);
         }
         drop(windows);
+        // La dirección anterior queda como alternativa: si el cambio fue
+        // pasajero (wifi que va y viene), por ahí se vuelve.
+        self.add_path_hints(&[old]);
         tracing::info!(?old, ?new, "el peer ha cambiado de dirección");
     }
 
@@ -774,6 +842,14 @@ impl Session {
             }
             RvMessage::Punch { nonce } => {
                 self.send_rv(&RvMessage::PunchAck { nonce }, from).await;
+            }
+            // El peer anuncia por dónde se le puede alcanzar. Sólo se acepta
+            // de quien ya es el peer: es información para recuperar el camino
+            // con él, no una forma de que un tercero redirija las sondas.
+            RvMessage::Addrs { addrs } => {
+                if self.book.lock().await.contains(from) {
+                    self.add_path_hints(&addrs);
+                }
             }
             // Respuesta a una sonda de recuperación: por `from` sí se llega al
             // otro extremo. Se le pasa a hablar ahí y se le manda un latido,
