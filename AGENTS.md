@@ -202,7 +202,7 @@ cargo test -p gravital-talk-transport --test nat_punch   # red simulada, sin pri
   llamadas vive en `Session`, no en variables locales: quien lo llama suele
   usar un timeout corto y cancela el futuro.
 
-## REGLA: cada cambio deja un APK instalable en `outputs/`
+## REGLA: cada cambio deja un APK instalable en `outputs/` y se publica a mano
 
 Obligatorio después de tocar Dart o el FFI. El repo debe tener siempre la última versión
 instalable, para poder probar cualquier cambio sin compilar nada.
@@ -222,21 +222,36 @@ adb shell am start -n dev.gravitaltalk.gravital_talk_app/.MainActivity
 ```
 
 **Las builds no se versionan en git** (`outputs/` está en el `.gitignore`), así que el APK
-de un commit concreto sólo existe en la máquina que lo construyó. Para que se pueda
-descargar desde el móvil, el CI lo publica en el release `builds` con dos nombres fijos:
+de un commit concreto sólo existe en la máquina que lo construyó. Para que se puedan
+descargar, los instalables se publican **a mano** en el release `builds`:
+
+```bash
+scripts/publish-builds.sh --build    # compila Android y Linux y los sube
+scripts/publish-builds.sh            # sube lo último ya compilado
+make publish-builds                  # lo mismo que --build
+```
+
+Es el flujo de publicación del proyecto, decidido así: no depende del CI. El script
+comprueba que el APK es del commit actual y que el bundle de Linux lleva audio nativo,
+pasa el APK publicado a `previous`, sube los nuevos y verifica el hash de lo publicado.
 
 | Fichero | Para qué |
 |---|---|
-| `gravital-talk-latest.apk` | El último build. Este es el que hay que instalar. |
-| `gravital-talk-previous.apk` | El anterior, para volver atrás si algo va mal. |
+| `gravital-talk-latest.apk` | Android, el último build. Este es el que hay que instalar. |
+| `gravital-talk-previous.apk` | Android, el anterior, para volver atrás si algo va mal. |
+| `gravital-talk-latest-linux-x64.tar.gz` | Linux x64: descomprimir y ejecutar `gravital-talk/gravital_talk_app`. |
 
 ```
 https://github.com/angelnereira/Gravital-Talk/releases/download/builds/gravital-talk-latest.apk
 ```
 
-El release los actualiza el workflow: el actual pasa a `previous.apk` antes de subir el
-nuevo y los antiguos se borran, así nunca se acumulan. Un build local no se sube solo:
-para publicarlo hay que subirlo a mano con `gh release upload`.
+Después de publicar, instala el APK en el dispositivo de pruebas: un teléfono con un build
+viejo y otro extremo con el nuevo pueden no entenderse (cambio de códec), y el síntoma es
+"conecta pero no se oye".
+
+`build-apk.sh` puede fallar en el paso de Flutter **después** de compilar las libs nativas.
+Comprueba siempre que `outputs/android/release/LATEST.txt` nombra el commit actual; mirar
+sólo el final de la salida no basta.
 
 Requisitos que la máquina de desarrollo necesita una sola vez:
 
