@@ -404,6 +404,28 @@ mandes por la sesión: el códec y RNNoise se los comen.
 - Los botones del tema ocupan todo el ancho (`Size.fromHeight`): dentro de un `Row` hay que
   darles `minimumSize: Size(0, …)` o aplastan al resto.
 
+## Llamadas con la app oculta, timbre y vibración
+
+- Una llamada sólo llega si el proceso está vivo: lo mantiene `SessionService` en modo
+  espera («Recibir llamadas en segundo plano», activo por defecto). Sigue sin haber push de
+  terceros: con la app cerrada desde recientes, o con el teléfono en reposo profundo
+  (Doze), no llega nada. No prometas otra cosa.
+- El tono y la vibración de llamada los pone `Ringer.kt`, no el canal de notificación: así
+  son los mismos con la app a la vista y se paran al contestar. Respeta el modo del
+  teléfono (silencio / sólo vibración) y se calla solo a los 30 s.
+- El tono es `res/raw/gt_ring.wav`, generado por `scripts/make-ringtone.py`. Para cambiarlo
+  se edita el script y se regenera; no se edita el WAV a mano.
+- Un canal de notificaciones no cambia de sonido una vez creado en el teléfono: si hay que
+  cambiar su configuración, se le da otro id (`calls.silent` sustituyó a `calls`).
+- La notificación de llamada trae «Contestar» y «Ahora no»; llegan a Dart por
+  `BackgroundSession.onCallAction` y cierran el mismo diálogo que se ve dentro de la app.
+- Para probarlo sin tocar el teléfono: app abierta y `adb shell input keyevent KEYCODE_HOME`,
+  una instancia de escritorio que ya lo tenga de contacto con `--call-first`, y mirar
+  `dumpsys notification --noredact`, `dumpsys vibrator_manager` y `dumpsys audio`
+  (un `MediaPlayer` con `USAGE_NOTIFICATION_RINGTONE`).
+- Las vibraciones cortas (botón de hablar, código leído, avisos) son `Haptics`
+  (`app/lib/services/haptics.dart`); no necesitan permiso.
+
 ## Sala en segundo plano (Android)
 
 `SessionService` es un servicio en primer plano (`microphone|mediaPlayback`) que arranca

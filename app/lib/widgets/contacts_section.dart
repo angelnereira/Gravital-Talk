@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../core/glass.dart';
 import '../core/routes.dart';
 import '../core/tokens.dart';
+import '../screens/contact_screen.dart';
 import '../screens/invite_screen.dart';
 import '../screens/pairing_screen.dart';
 import '../services/contacts.dart';
@@ -151,7 +152,15 @@ class _ContactRow extends StatelessWidget {
           ),
           const SizedBox(width: Spacing.md),
           Expanded(
-            child: Column(
+            child: InkWell(
+              borderRadius: BorderRadius.circular(Radii.sm),
+              onTap: () => Navigator.push(
+                context,
+                ForwardRoute(
+                  builder: (_) => ContactScreen(contactId: contact.id),
+                ),
+              ),
+              child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
@@ -166,24 +175,35 @@ class _ContactRow extends StatelessWidget {
                 Text(
                   pending
                       ? 'Enlace enviado, aún sin abrir'
-                      : _lastSeen(contact.lastSeen),
+                      : contact.muted
+                          ? 'Silenciado'
+                          : _lastSeen(contact.lastSeen),
                   style: theme.textTheme.bodySmall
                       ?.copyWith(color: glass.secondary),
                 ),
               ],
+              ),
             ),
           ),
           PopupMenuButton<String>(
             tooltip: 'Más',
             icon: Icon(Icons.more_vert, color: glass.secondary),
             onSelected: (action) {
-              if (action == 'rename') {
+              if (action == 'details') {
+                Navigator.push(
+                  context,
+                  ForwardRoute(
+                    builder: (_) => ContactScreen(contactId: contact.id),
+                  ),
+                );
+              } else if (action == 'rename') {
                 _rename(context);
               } else {
                 context.read<ContactsService>().remove(contact);
               }
             },
             itemBuilder: (_) => const [
+              PopupMenuItem(value: 'details', child: Text('Ver ficha')),
               PopupMenuItem(value: 'rename', child: Text('Cambiar nombre')),
               PopupMenuItem(value: 'remove', child: Text('Eliminar')),
             ],

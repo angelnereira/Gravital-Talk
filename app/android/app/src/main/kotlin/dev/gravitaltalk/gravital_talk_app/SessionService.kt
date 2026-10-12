@@ -245,43 +245,93 @@ class SessionService : Service() {
         private const val CHANNEL_ID = "session"
         private const val NOTIFICATION_ID = 1
 
-        private const val CALL_CHANNEL_ID = "calls"
+        // Nuevo id: un canal no cambia de sonido una vez creado.
+        private const val CALL_CHANNEL_ID = "calls.silent"
         private const val CALL_NOTIFICATION_ID = 2
 
-        /** Avisa de que un contacto quiere hablar; tocarla abre la app. */
+        private const val INFO_CHANNEL_ID = "info"
+        private const val INFO_NOTIFICATION_ID = 3
+
+        const val EXTRA_ANSWER = "dev.gravitaltalk.gravital_talk_app.ANSWER"
+
+        private fun builder(context: Context, channel: String, name: String, importance: Int): Notification.Builder {
+            val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+                @Suppress("DEPRECATION")
+                return Notification.Builder(context)
+            }
+            manager.createNotificationChannel(
+                NotificationChannel(channel, name, importance).apply {
+                    if (channel == CALL_CHANNEL_ID) {
+                        // El tono y la vibración los pone [Ringer]: así son
+                        // los mismos con la app a la vista y se pueden parar.
+                        setSound(null, null)
+                        enableVibration(false)
+                    } else {
+                        enableVibration(true)
+                        vibrationPattern = longArrayOf(0, 40, 80, 40)
+                    }
+                },
+            )
+            return Notification.Builder(context, channel)
+        }
+
+        /**
+         * Avisa de que un contacto quiere hablar. Tocarla abre la app;
+         * "Contestar" además entra en su sala y "Ahora no" la rechaza.
+         */
         fun notifyCall(context: Context, name: String) {
             val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                manager.createNotificationChannel(
-                    NotificationChannel(
-                        CALL_CHANNEL_ID,
-                        "Llamadas de contactos",
-                        NotificationManager.IMPORTANCE_HIGH,
-                    ),
-                )
-            }
-            val open = PendingIntent.getActivity(
+            val flags = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            val activity = Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            val open = PendingIntent.getActivity(context, 2, activity, flags)
+            val answer = PendingIntent.getActivity(
                 context,
-                2,
-                Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
-                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+                4,
+                Intent(activity).putExtra(EXTRA_ANSWER, true),
+                flags,
             )
-            val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                Notification.Builder(context, CALL_CHANNEL_ID)
-            } else {
-                @Suppress("DEPRECATION")
-                Notification.Builder(context)
-            }
+            val decline = PendingIntent.getBroadcast(
+                context,
+                5,
+                Intent(context, CallActionReceiver::class.java),
+                flags,
+            )
             // Sin permiso de notificaciones no se enseña: la solicitud espera
             // dentro de la app.
             runCatching {
                 manager.notify(
                     CALL_NOTIFICATION_ID,
-                    builder
+                    builder(context, CALL_CHANNEL_ID, "Llamadas de contactos", NotificationManager.IMPORTANCE_HIGH)
                         .setSmallIcon(android.R.drawable.stat_sys_phone_call)
                         .setContentTitle("$name quiere hablar")
                         .setContentText("Toca para contestar.")
                         .setCategory(Notification.CATEGORY_CALL)
+                        .setContentIntent(open)
+                        .setAutoCancel(true)
+                        .addAction(Notification.Action.Builder(null, "Ahora no", decline).build())
+                        .addAction(Notification.Action.Builder(null, "Contestar", answer).build())
+                        .build(),
+                )
+            }
+        }
+
+        /** Aviso corriente (alguien aceptó tu invitación…); tocarlo abre la app. */
+        fun notifyInfo(context: Context, title: String, text: String) {
+            val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val open = PendingIntent.getActivity(
+                context,
+                6,
+                Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+            runCatching {
+                manager.notify(
+                    INFO_NOTIFICATION_ID,
+                    builder(context, INFO_CHANNEL_ID, "Avisos", NotificationManager.IMPORTANCE_DEFAULT)
+                        .setSmallIcon(android.R.drawable.stat_notify_chat)
+                        .setContentTitle(title)
+                        .setContentText(text)
                         .setContentIntent(open)
                         .setAutoCancel(true)
                         .build(),
@@ -299,5 +349,8 @@ class SessionService : Service() {
 
         /** Hablar o soltar desde la notificación. */
         var onTogglePtt: (() -> Unit)? = null
+
+        /** Contestar (`true`) o rechazar la llamada desde su notificación. */
+        var onCallAction: ((Boolean) -> Unit)? = null
     }
 }

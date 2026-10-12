@@ -72,6 +72,9 @@ class MainActivity : FlutterActivity() {
         val background = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "gravital_talk/background")
         SessionService.onLeave = { runOnUiThread { background.invokeMethod("leave", null) } }
         SessionService.onTogglePtt = { runOnUiThread { background.invokeMethod("togglePtt", null) } }
+        SessionService.onCallAction = { accept ->
+            runOnUiThread { background.invokeMethod(if (accept) "answerCall" else "declineCall", null) }
+        }
         background.setMethodCallHandler { call, result ->
             val service = Intent(this, SessionService::class.java)
             when (call.method) {
@@ -103,6 +106,18 @@ class MainActivity : FlutterActivity() {
                     SessionService.cancelCall(this)
                     result.success(true)
                 }
+                "ring" -> {
+                    if (call.argument<Boolean>("on") == true) Ringer.start(this) else Ringer.stop()
+                    result.success(true)
+                }
+                "notifyInfo" -> {
+                    SessionService.notifyInfo(
+                        this,
+                        call.argument<String>("title").orEmpty(),
+                        call.argument<String>("text").orEmpty(),
+                    )
+                    result.success(true)
+                }
                 else -> result.notImplemented()
             }
         }
@@ -112,6 +127,8 @@ class MainActivity : FlutterActivity() {
         // Sin actividad no hay Dart que mantenga la sesión.
         SessionService.onLeave = null
         SessionService.onTogglePtt = null
+        SessionService.onCallAction = null
+        Ringer.stop()
         stopService(Intent(this, SessionService::class.java))
         super.onDestroy()
     }
@@ -120,6 +137,10 @@ class MainActivity : FlutterActivity() {
         super.onNewIntent(intent)
         // La app ya estaba abierta: el enlace llega aquí, no al arranque.
         intent.pairingLink()?.let { channel?.invokeMethod("onLink", it) }
+        // "Contestar" en la notificación de una llamada.
+        if (intent.getBooleanExtra(SessionService.EXTRA_ANSWER, false)) {
+            SessionService.onCallAction?.invoke(true)
+        }
     }
 
     /** Invitación que trae el intent: un enlace abierto o un texto compartido. */

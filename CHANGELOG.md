@@ -4,6 +4,25 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
 
 ## [Unreleased]
 
+### Added
+
+**Llamadas que se notan: timbre, vibración y avisos**
+- Una llamada entrante **suena y vibra**, también con la app en segundo plano.
+  El tono es propio (cuatro notas suaves de campana, no un timbre de
+  teléfono), respeta el modo silencio y el de vibración, y se calla solo a los
+  30 s. La notificación trae **Contestar** y **Ahora no**.
+- **Recibir llamadas en segundo plano** viene activado (Ajustes lo apaga):
+  deja una notificación fija. Sin servidor de por medio sigue habiendo un
+  límite: con la app cerrada del todo, o el teléfono en reposo profundo, la
+  llamada no llega.
+- **Aviso cuando aceptan tu invitación**: notificación si la app está oculta,
+  mensaje y vibración si está a la vista.
+- **Vibración corta** al pulsar y soltar el botón de hablar y al leer un
+  código.
+- **Ficha de contacto** (tocar el contacto): nombre, nota, «Contestar sin
+  preguntar» (entra solo a escuchar, como un walkie-talkie), «Silenciar sus
+  llamadas», última vez, direcciones conocidas y código de seguridad.
+
 ### Fixed
 
 **Un solo enlace basta también con los enlaces de sala**

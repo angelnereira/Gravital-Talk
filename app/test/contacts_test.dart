@@ -284,6 +284,9 @@ void main() {
     expect(a.contacts.contacts.single.name, 'Beto');
     expect(a.contacts.contacts.single.device, b.controller.deviceId);
 
+    // Y Ana se entera de que aceptaron su invitación, una sola vez.
+    expect(a.contacts.accepted.value?.name, 'Beto');
+
     // Abierto ya por alguien, el siguiente enlace es otro secreto.
     expect(await a.contacts.contactLink(), isNot(link));
     // El enlace propio no añade nada, ni uno con el secreto recortado.
@@ -456,5 +459,41 @@ void main() {
 
     a.contacts.dispose();
     b.contacts.dispose();
+  });
+
+  test('la ficha decide si una llamada avisa, se calla o se contesta sola',
+      () async {
+    final (a, b) = await pair();
+    a.controller.onPaired!(
+        const PairedEvent(isHost: true, token: 'secreto', room: 'GRVT-1'));
+    b.controller.onPaired!(
+        const PairedEvent(isHost: false, token: 'secreto', room: 'GRVT-1'));
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    final ana = b.contacts.contacts.single;
+
+    final room = a.controller.createRoom();
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+
+    // Silenciada: la llamada llega y no avisa.
+    await b.contacts.edit(ana.id, muted: true, note: '  del trabajo ');
+    expect(b.contacts.byId(ana.id)!.note, 'del trabajo');
+    a.contacts.call(a.contacts.contacts.single);
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect(b.contacts.incoming.value, isNull);
+
+    // Con respuesta automática entra sin preguntar.
+    await b.contacts.edit(ana.id, muted: false, autoAnswer: true);
+    b.contacts.handleDatagram(a.sent.last, InternetAddress('192.168.1.10'));
+    expect(b.contacts.incoming.value?.auto, isTrue);
+
+    // Lo editado sobrevive a guardarse y volverse a leer.
+    final saved = Contact.fromJson(b.contacts.byId(ana.id)!.toJson());
+    expect((saved.note, saved.muted, saved.autoAnswer),
+        ('del trabajo', false, true));
+
+    b.contacts.reject();
+    await room;
+    a.contacts.cancelCall();
+    await a.controller.reset();
   });
 }

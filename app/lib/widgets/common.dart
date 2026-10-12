@@ -8,6 +8,7 @@ import '../core/glass.dart';
 import '../core/tokens.dart';
 import '../models/session.dart';
 import '../services/event_log.dart';
+import '../services/haptics.dart';
 import '../services/room_events.dart';
 import '../services/session_controller.dart';
 
@@ -453,8 +454,18 @@ class _PttButtonState extends State<PttButton> {
         : (widget.peerSpeaking ? scheme.tertiary : scheme.primary);
 
     final disc = GestureDetector(
-      onTapDown: enabled ? (_) => widget.onDown() : null,
-      onTapUp: enabled ? (_) => widget.onUp() : null,
+      onTapDown: enabled
+          ? (_) {
+              Haptics.pttDown();
+              widget.onDown();
+            }
+          : null,
+      onTapUp: enabled
+          ? (_) {
+              Haptics.pttUp();
+              widget.onUp();
+            }
+          : null,
       onTapCancel: enabled ? widget.onUp : null,
       child: Semantics(
         button: true,

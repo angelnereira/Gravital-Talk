@@ -14,6 +14,7 @@ import '../core/states.dart';
 import '../core/tokens.dart';
 import '../models/session.dart';
 import '../services/contacts.dart';
+import '../services/haptics.dart';
 import '../services/session_controller.dart';
 import '../services/share.dart';
 import 'session_screen.dart';
@@ -175,6 +176,7 @@ class _HostViewState extends State<_HostView> {
                       ? null
                       : capture.barcodes.first.rawValue;
                   if (value != null && value.trim().isNotEmpty) {
+                    Haptics.scanned();
                     Navigator.of(sheetCtx).pop(value.trim());
                   }
                 },
@@ -552,6 +554,7 @@ class _JoinViewState extends State<_JoinView> {
                                   ? null
                                   : capture.barcodes.first.rawValue;
                               if (value != null && value.trim().isNotEmpty) {
+                                if (!_joining) Haptics.scanned();
                                 _join(value);
                               }
                             },

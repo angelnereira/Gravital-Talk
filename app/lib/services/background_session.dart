@@ -27,6 +27,10 @@ class BackgroundSession {
     _standby = on;
     if (!_supported || _inSession) return;
     try {
+      // Sin permiso de notificaciones la llamada no se ve con la app oculta.
+      if (on && await Permission.notification.isDenied) {
+        await Permission.notification.request();
+      }
       await _channel.invokeMethod<bool>(on ? 'start' : 'stop', {
         'mode': 'standby',
       });
@@ -41,6 +45,27 @@ class BackgroundSession {
   static Future<void> notifyCall(String name) => _plain('notifyCall', name);
 
   static Future<void> cancelCall() => _plain('cancelCall', '');
+
+  /// Arranca o para el tono y la vibración de llamada entrante.
+  static Future<void> ring(bool on) => _invoke('ring', {'on': on});
+
+  /// Aviso corriente del sistema, para cuando la app no está a la vista.
+  static Future<void> notifyInfo(String title, String text) =>
+      _invoke('notifyInfo', {'title': title, 'text': text});
+
+  /// Contestar (`true`) o rechazar desde la notificación de la llamada.
+  static void Function(bool accept)? onCallAction;
+
+  static Future<void> _invoke(String method, Map<String, Object> args) async {
+    if (!_supported) return;
+    try {
+      await _channel.invokeMethod<bool>(method, args);
+    } on PlatformException {
+      // Sin aviso: lo mismo se ve al abrir la app.
+    } on MissingPluginException {
+      // Idem.
+    }
+  }
 
   static Future<void> _plain(String method, String name) async {
     if (!_supported) return;
@@ -112,6 +137,8 @@ class BackgroundSession {
     _channel.setMethodCallHandler((call) async {
       if (call.method == 'leave') leave();
       if (call.method == 'togglePtt') togglePtt?.call();
+      if (call.method == 'answerCall') onCallAction?.call(true);
+      if (call.method == 'declineCall') onCallAction?.call(false);
     });
   }
 }

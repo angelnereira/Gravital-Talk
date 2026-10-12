@@ -22,6 +22,9 @@ class Contact {
     required this.name,
     this.device = '',
     this.custom = false,
+    this.note = '',
+    this.muted = false,
+    this.autoAnswer = false,
     this.lastLocal,
     this.lastPublic,
     this.lastSeen = 0,
@@ -33,6 +36,9 @@ class Contact {
         name: j['name'] as String? ?? 'Contacto',
         device: j['device'] as String? ?? '',
         custom: j['custom'] as bool? ?? false,
+        note: j['note'] as String? ?? '',
+        muted: j['muted'] as bool? ?? false,
+        autoAnswer: j['autoAnswer'] as bool? ?? false,
         lastLocal: j['lastLocal'] as String?,
         lastPublic: j['lastPublic'] as String?,
         lastSeen: j['lastSeen'] as int? ?? 0,
@@ -53,6 +59,15 @@ class Contact {
   /// otro dispositivo.
   final bool custom;
 
+  /// Nota libre del usuario sobre el contacto. No sale de este dispositivo.
+  final String note;
+
+  /// `true` si sus llamadas no deben avisar.
+  final bool muted;
+
+  /// `true` si sus llamadas se contestan solas, como un walkie-talkie.
+  final bool autoAnswer;
+
   /// Última IP de red local y pública conocidas del contacto.
   final String? lastLocal;
   final String? lastPublic;
@@ -64,6 +79,9 @@ class Contact {
     String? name,
     String? device,
     bool? custom,
+    String? note,
+    bool? muted,
+    bool? autoAnswer,
     String? lastLocal,
     String? lastPublic,
     int? lastSeen,
@@ -74,6 +92,9 @@ class Contact {
         name: name ?? this.name,
         device: device ?? this.device,
         custom: custom ?? this.custom,
+        note: note ?? this.note,
+        muted: muted ?? this.muted,
+        autoAnswer: autoAnswer ?? this.autoAnswer,
         lastLocal: lastLocal ?? this.lastLocal,
         lastPublic: lastPublic ?? this.lastPublic,
         lastSeen: lastSeen ?? this.lastSeen,
@@ -85,6 +106,9 @@ class Contact {
         'name': name,
         'device': device,
         'custom': custom,
+        if (note.isNotEmpty) 'note': note,
+        if (muted) 'muted': true,
+        if (autoAnswer) 'autoAnswer': true,
         if (lastLocal != null) 'lastLocal': lastLocal,
         if (lastPublic != null) 'lastPublic': lastPublic,
         'lastSeen': lastSeen,
@@ -270,7 +294,7 @@ class ContactsService extends ChangeNotifier {
   List<Contact> _contacts = const [];
   String _deviceId = '';
   String _deviceName = '';
-  bool _background = false;
+  bool _background = true;
 
   /// Contacto de la llamada en curso (hecha o aceptada): al conectar no se
   /// crea uno nuevo, se actualiza ese.
@@ -297,6 +321,28 @@ class ContactsService extends ChangeNotifier {
   /// Solicitud pendiente de aceptar o rechazar, o `null`.
   final ValueNotifier<IncomingCall?> incoming = ValueNotifier(null);
 
+  /// Contacto que acaba de abrir una invitación de este dispositivo.
+  final ValueNotifier<Contact?> accepted = ValueNotifier(null);
+
+  Timer? _ringTimer;
+
+  /// Suena mientras haya una llamada esperando respuesta, y como mucho medio
+  /// minuto: quien llama puede haber desistido sin avisar.
+  void _onIncomingChanged() {
+    final call = incoming.value;
+    _ringTimer?.cancel();
+    _ringTimer = null;
+    if (call == null || call.auto) {
+      unawaited(BackgroundSession.ring(false));
+      return;
+    }
+    unawaited(BackgroundSession.ring(true));
+    _ringTimer = Timer(
+      const Duration(seconds: 30),
+      () => unawaited(BackgroundSession.ring(false)),
+    );
+  }
+
   /// `false` sin librería nativa (modo demostración): no hay con qué cifrar.
   bool get available => codec != null && prefs != null;
 
@@ -322,7 +368,9 @@ class ContactsService extends ChangeNotifier {
     }
     _deviceName = prefs.getString(_deviceNameKey) ??
         'Dispositivo ${_deviceId.substring(0, 4).toUpperCase()}';
-    _background = prefs.getBool(_backgroundKey) ?? false;
+    // Activo salvo que se apague: sin esto una llamada sólo llega con la app
+    // a la vista.
+    _background = prefs.getBool(_backgroundKey) ?? true;
     try {
       final raw = jsonDecode(prefs.getString(_contactsKey) ?? '[]') as List;
       _contacts = [
@@ -337,6 +385,7 @@ class ContactsService extends ChangeNotifier {
       ..deviceName = _deviceName
       ..onPaired = _onPaired
       ..addListener(_onController);
+    incoming.addListener(_onIncomingChanged);
     if (transport == null && !_lanOff) await _listen();
     _mail = mailbox?.messages.listen((data) => handleDatagram(data, null));
     _syncMailbox();
@@ -400,6 +449,33 @@ class ContactsService extends ChangeNotifier {
     if (clean.isEmpty) return;
     await _put(contact.copyWith(name: clean, custom: true));
   }
+
+  /// Guarda lo que el usuario cambia en la ficha de un contacto. Se parte
+  /// del contacto guardado, no del que tenga la pantalla: puede ser viejo.
+  Future<void> edit(
+    String contactId, {
+    String? note,
+    bool? muted,
+    bool? autoAnswer,
+  }) async {
+    final current = _byId(contactId);
+    if (current == null) return;
+    final clean = note?.trim();
+    final updated = current.copyWith(
+      note: clean == null
+          ? null
+          : (clean.length > 280 ? clean.substring(0, 280) : clean),
+      muted: muted,
+      autoAnswer: autoAnswer,
+    );
+    _contacts = [
+      for (final c in _contacts) c.id == contactId ? updated : c,
+    ];
+    await _save();
+  }
+
+  /// El contacto `id` tal como está guardado ahora, o `null` si se borró.
+  Contact? byId(String id) => _byId(id);
 
   Future<void> remove(Contact contact) async {
     _contacts = [
@@ -847,7 +923,20 @@ class ContactsService extends ChangeNotifier {
     unawaited(_put(updated));
 
     final invite = msg['uri'];
-    if (msg['t'] == 'hello') _onGreeting(updated);
+    if (msg['t'] == 'hello') {
+      // Primer saludo por una invitación de este dispositivo: la aceptaron.
+      if (contact.device.isEmpty && contact.name == pendingName) {
+        accepted.value = updated;
+        if (WidgetsBinding.instance.lifecycleState !=
+            AppLifecycleState.resumed) {
+          unawaited(BackgroundSession.notifyInfo(
+            '${updated.name} aceptó tu invitación',
+            'Ya está en tus contactos.',
+          ));
+        }
+      }
+      _onGreeting(updated);
+    }
     // El invitado manda solo las direcciones por las que se le alcanza: es
     // el antiguo "código de respuesta", sin que nadie tenga que enseñarlo.
     if (msg['t'] == 'answer' && invite is String) {
@@ -857,8 +946,10 @@ class ContactsService extends ChangeNotifier {
     if (msg['t'] != 'call' || invite is! String) return;
     if (_controller.isLive || _controller.busy) return;
     if (_dismissed.contains(invite) || incoming.value?.invite == invite) return;
-    final auto = updated.id == _autoAcceptId &&
-        DateTime.now().isBefore(_autoAcceptUntil);
+    if (updated.muted) return;
+    final auto = updated.autoAnswer ||
+        updated.id == _autoAcceptId &&
+            DateTime.now().isBefore(_autoAcceptUntil);
     if (auto) _autoAcceptId = null;
     incoming.value = IncomingCall(contact: updated, invite: invite, auto: auto);
     if (!auto &&
@@ -922,6 +1013,9 @@ class ContactsService extends ChangeNotifier {
     _stopCalling();
     _answerTimer?.cancel();
     _roomAnswerTimer?.cancel();
+    _ringTimer?.cancel();
+    incoming.removeListener(_onIncomingChanged);
+    accepted.dispose();
     autoCall.dispose();
     _socket?.close();
     incoming.dispose();
