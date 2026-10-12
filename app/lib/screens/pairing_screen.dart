@@ -456,10 +456,11 @@ class _JoinViewState extends State<_JoinView> {
       _showAnswer = false;
     });
     await _scanner?.stop();
-    // En la misma red se conecta en décimas. Si pasan unos segundos, lo más
-    // probable es que estén en redes distintas: entonces se enseña la
-    // respuesta, no antes, para no pedir un paso que casi nunca hace falta.
-    final reveal = Timer(const Duration(seconds: 3), () {
+    // En la misma red se conecta en décimas, y entre redes la respuesta le
+    // llega sola al anfitrión (red local o buzón) y conecta en unos segundos.
+    // El código para enseñársela a mano es el último recurso: sólo aparece
+    // si ni así se ha conectado.
+    final reveal = Timer(const Duration(seconds: 12), () {
       if (mounted) setState(() => _showAnswer = true);
     });
     final ok = await c.joinFromUri(invite);

@@ -83,10 +83,27 @@ class _FakeMailbox implements Mailbox {
   void dispose() => _in.close();
 }
 
+/// Motor cuyo emparejamiento no termina solo, y que apunta las direcciones
+/// del invitado que le llegan.
+class _WaitingEngine extends DemoSessionEngine {
+  final hints = <String>[];
+  final _never = Completer<void>();
+
+  @override
+  Future<void> acceptAny() => _never.future;
+
+  @override
+  Future<void> connectAny(List<String> candidates, {Duration? wait}) =>
+      _never.future;
+
+  @override
+  Future<void> addPathHints(List<String> addrs) async => hints.addAll(addrs);
+}
+
 class _Device {
-  _Device(this.prefs)
+  _Device(this.prefs, [SessionEngine? engine])
       : controller = SessionController(
-          DemoSessionEngine(),
+          engine ?? DemoSessionEngine(),
           RoomApi(),
           EventLog(),
           SettingsStore(),
@@ -403,5 +420,41 @@ void main() {
     await a.contacts.remove(a.contacts.contacts.single);
     expect(broker.boxes.first.topics.length, before - 1);
     await Future<void>.delayed(const Duration(seconds: 4));
+  });
+
+  test('con un enlace de sala, la respuesta del invitado llega sola', () async {
+    SharedPreferences.setMockInitialValues({});
+    final hostEngine = _WaitingEngine();
+    final a = _Device(await SharedPreferences.getInstance(), hostEngine);
+    SharedPreferences.resetStatic();
+    SharedPreferences.setMockInitialValues({});
+    final b = _Device(await SharedPreferences.getInstance(), _WaitingEngine());
+    final from = InternetAddress('203.0.113.7');
+    a.contacts = ContactsService(a.controller,
+        codec: _FakeCodec(),
+        prefs: a.prefs,
+        transport: (d, _) => b.contacts.handleDatagram(d, from));
+    b.contacts = ContactsService(b.controller,
+        codec: _FakeCodec(),
+        prefs: b.prefs,
+        transport: (d, _) => a.contacts.handleDatagram(d, from));
+    await a.contacts.init();
+    await b.contacts.init();
+
+    unawaited(a.controller.createRoom());
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    final link = a.controller.pairingUri?.toUri();
+    expect(link, isNotNull);
+
+    // Nadie es contacto de nadie: sólo comparten el enlace.
+    unawaited(b.controller.joinFromUri(link!));
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+
+    expect(b.controller.answerUri, isNotNull);
+    expect(hostEngine.hints, isNotEmpty,
+        reason: 'el anfitrión debe recibir las direcciones del invitado');
+
+    a.contacts.dispose();
+    b.contacts.dispose();
   });
 }
