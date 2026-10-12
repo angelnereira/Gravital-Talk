@@ -340,6 +340,22 @@ retardo. Referencia (2026-10-11, misma wifi, Pixel 8 Pro, camino `AudioPump`): 0
 huecos y 170–220 ms del aviso al sonido. El audio nativo de Android dio menos retardo
 (100–170 ms) pero más cortes: por eso sigue apagado.
 
+Dos retardos distintos en la misma grabación: del aviso de inicio al tono (primer frame,
+incluye el arranque del turno) y del aviso de fin a que el tono calla (con la cola ya
+formada: es el que se nota al conversar). Referencia (2026-10-12, portátil en casa →
+Pixel 8 Pro por **LTE**, 20 turnos): inicio p50 265–285 ms, final p50 150–155 ms, 4 % de
+huecos, y el teléfono tira un 5–7 % de los frames (los que llegan en ráfaga).
+
+Compilando con `--dart-define=GT_AUDIO_STATS=true`, `AudioPump` escribe cada segundo en
+`adb logcat -s flutter` cuántos frames llegaron, cuánto tardó el reproductor en aceptarlos
+y cuántos tiró. `adb shell dumpsys media.audio_flinger` dice qué pista abrió Android: la
+de `flutter_sound` tiene 60 ms de búfer, no va por la ruta rápida y declara ~175 ms de
+latencia con el búfer lleno. Ese es el suelo de esta ruta.
+
+Probado y descartado: guardar hasta 60 ms en Dart en vez de tirar las ráfagas (con y sin
+vaciado progresivo). Pierde menos frames (2–4 %) pero el retardo al final del turno sube a
+210–240 ms. Bajar de 150 ms pide la ruta nativa, no más ajustes en `AudioPump`.
+
 Si el audio se corta, mira primero el tráfico (`tcpdump` por el puerto de la sesión): una
 sala sana son ~50 paquetes por segundo y sentido mientras alguien habla, y unos pocos en
 silencio.

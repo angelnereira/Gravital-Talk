@@ -10,6 +10,11 @@ import 'package:record/record.dart';
 
 import 'native_bridge.dart';
 
+/// Con `--dart-define=GT_AUDIO_STATS=true` el audio escribe una línea por
+/// segundo con lo que le pasa a cada frame recibido (sale en `adb logcat`
+/// también en release). Es como se mide dónde se va el retardo.
+const _statsEnabled = bool.fromEnvironment('GT_AUDIO_STATS');
+
 /// Audio de la sesión con plugins de Flutter (móvil).
 ///
 /// En escritorio no se usa: allí la librería nativa trae su propio audio
@@ -108,6 +113,7 @@ class AudioPump {
     if (message is SendPort) {
       _control = message;
     } else if (message is Uint8List) {
+      _speaker.stats?.arrived();
       _rxFrames++;
       _rxLevel = _rxLevel * 0.5 + pcmLevel(message) * 0.5;
       _lastRx = DateTime.now();
@@ -313,12 +319,15 @@ class _SpeakerSink {
   FlutterSoundPlayer? _player;
   bool _enabled = false;
 
-  /// Frames entregados al reproductor que aún no ha aceptado.
-  int _backlog = 0;
+  /// `true` mientras el reproductor tiene un bloque sin aceptar.
+  bool _feeding = false;
 
-  /// Tope de frames en espera. Por encima se descarta: audio que llega tarde
-  /// a una conversación es peor que audio que falta.
-  static const _maxBacklog = 8;
+  /// Si el reproductor no contesta en este tiempo se da el bloque por
+  /// entregado: un futuro que no termina no puede parar el audio.
+  static const _acceptTimeout = Duration(milliseconds: 250);
+
+  /// Medidas de la entrega, sólo si se pidieron al compilar.
+  final _PlayoutStats? stats = _statsEnabled ? _PlayoutStats() : null;
 
   bool get enabled => _enabled;
 
@@ -343,13 +352,37 @@ class _SpeakerSink {
     return sink;
   }
 
+  /// Entrega un bloque al reproductor, o lo tira si aún no aceptó el anterior.
+  ///
+  /// No hay cola a propósito. El reproductor acepta un bloque en unos 4 ms,
+  /// así que sólo se tira lo que llega en ráfaga (tras un parón de la red), y
+  /// eso es justo lo que no conviene reproducir: entra al mismo ritmo que
+  /// sale, y lo que se acumule delante se queda como retardo fijo hasta el
+  /// final del turno. Medido (2026-10-12, portátil → Pixel 8 Pro por LTE):
+  /// guardando hasta 60 ms en vez de tirar, se perdía un 2-4 % de los frames
+  /// en lugar de un 7 %, pero el retardo al final del turno subía de 150 a
+  /// 230 ms.
+  ///
+  /// De uno en uno porque el reproductor lo exige: con dos entregas a la vez
+  /// el futuro de la primera no termina nunca.
   void feed(Uint8List data) {
     final p = _player;
-    if (!_enabled || p == null || _backlog >= _maxBacklog) return;
-    _backlog++;
-    p.feedUint8FromStream(data).then<void>((_) {}, onError: (Object _) {
-      // Reproducción detenida a medias: se ignora.
-    }).whenComplete(() => _backlog--);
+    if (!_enabled || p == null) return;
+    if (_feeding) {
+      stats?.dropped++;
+      return;
+    }
+    _feeding = true;
+    final fedAt = stats?.fed(1);
+    p
+        .feedUint8FromStream(data)
+        .timeout(_acceptTimeout)
+        .then<void>((_) {}, onError: (Object _) {
+      // Reproducción detenida a medias, o sin respuesta: se sigue.
+    }).whenComplete(() {
+      _feeding = false;
+      if (fedAt != null) stats?.accepted(fedAt);
+    });
   }
 
   Future<void> stop() async {
@@ -363,5 +396,74 @@ class _SpeakerSink {
     } catch (_) {
       // ignorar
     }
+  }
+}
+
+/// Lo que le pasa al audio recibido entre que llega al isolate principal y
+/// que el reproductor lo acepta. Se vuelca una vez por segundo.
+class _PlayoutStats {
+  final Stopwatch _clock = Stopwatch()..start();
+  int _windowStart = 0;
+  int _lastArrival = -1;
+
+  int _frames = 0;
+  int _gapSum = 0;
+  int _gapMax = 0;
+  int _backlogSum = 0;
+  int _backlogMax = 0;
+  int _feeds = 0;
+  int _acceptSum = 0;
+  int _acceptMax = 0;
+  int _accepts = 0;
+  int dropped = 0;
+
+  /// Llegó un frame del worker.
+  void arrived() {
+    final now = _clock.elapsedMicroseconds;
+    // Un silencio entre turnos no es un intervalo entre frames.
+    if (_lastArrival >= 0 && now - _lastArrival < 500000) {
+      final gap = now - _lastArrival;
+      _gapSum += gap;
+      if (gap > _gapMax) _gapMax = gap;
+      _frames++;
+    }
+    _lastArrival = now;
+    if (now - _windowStart >= 1000000) _flush(now);
+  }
+
+  /// Se entregó un bloque al reproductor con `backlog` sin aceptar.
+  int fed(int backlog) {
+    _feeds++;
+    _backlogSum += backlog;
+    if (backlog > _backlogMax) _backlogMax = backlog;
+    return _clock.elapsedMicroseconds;
+  }
+
+  /// El reproductor aceptó el bloque entregado en `fedAt`.
+  void accepted(int fedAt) {
+    final took = _clock.elapsedMicroseconds - fedAt;
+    _acceptSum += took;
+    if (took > _acceptMax) _acceptMax = took;
+    _accepts++;
+  }
+
+  void _flush(int now) {
+    if (_feeds > 0 || dropped > 0) {
+      String ms(int us) => (us / 1000).toStringAsFixed(1);
+      // ignore: avoid_print
+      print('GT_AUDIO_STATS frames=$_frames '
+          'gap_avg=${ms(_frames == 0 ? 0 : _gapSum ~/ _frames)} '
+          'gap_max=${ms(_gapMax)} '
+          'backlog_avg=${(_backlogSum / (_feeds == 0 ? 1 : _feeds)).toStringAsFixed(2)} '
+          'backlog_max=$_backlogMax '
+          'accept_avg=${ms(_accepts == 0 ? 0 : _acceptSum ~/ _accepts)} '
+          'accept_max=${ms(_acceptMax)} '
+          'dropped=$dropped');
+    }
+    _windowStart = now;
+    _frames = _gapSum = _gapMax = 0;
+    _backlogSum = _backlogMax = _feeds = 0;
+    _acceptSum = _acceptMax = _accepts = 0;
+    dropped = 0;
   }
 }

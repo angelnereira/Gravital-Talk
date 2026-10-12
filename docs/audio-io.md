@@ -71,7 +71,15 @@ Si el device no soporta el sample rate solicitado, cpal usará el sample rate po
 
 ## Backpressure y jitter buffer
 
-El `JitterBuffer` del transport crate absorbe variaciones de hasta ~100 ms. Si el decoder produce frames más rápido de lo que el altavoz los consume, el `VecDeque` del playback crece (backpressure hacia arriba). No hay mecanismo de drop automático — en producción se recomienda monitorear `pb.queue_len()` (pendiente Track B) y descartar frames obsoletos.
+El `JitterBuffer` del transport crate **no añade retardo fijo**: reordena, y entrega cada frame en cuanto tiene el siguiente número de secuencia. `jitter_buffer_ms` sólo es el plazo para dar por perdido un paquete que falta (`Session::recv_audio`); mientras no se pierde nada, no se espera nada.
+
+Lo que sí decide el retardo es la cola de reproducción, y hay tres distintas:
+
+- `AudioPlayback` (este documento, lo usa el CLI): su `VecDeque` crece sin tope si el decoder va más rápido que el altavoz.
+- `voice::VoicePlayback` (apps de escritorio, `gs_audio_*`): cola acotada, 30 ms de colchón y tope de 120 ms; al pasarse descarta lo más viejo.
+- `AudioPump` (apps móviles, Dart + `flutter_sound`): sin cola. Entrega los bloques de uno en uno y tira el que llega mientras el anterior no se ha aceptado, es decir, las ráfagas. La pista de Android tiene 60 ms de búfer propio y no va por la ruta rápida: unos 110 ms de salida que desde Dart no se pueden recortar.
+
+Audio que entra al mismo ritmo que sale no vacía nunca una cola: lo que se acumule tras una ráfaga se queda como retardo hasta que el turno acaba. Por eso las tres colas de voz prefieren tirar a esperar.
 
 ## CI headless
 

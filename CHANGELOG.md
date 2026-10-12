@@ -4,6 +4,28 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
 
 ## [Unreleased]
 
+### Fixed
+
+**Un solo enlace basta también con los enlaces de sala**
+- Al abrir un enlace o QR de sala (`gravital-talk://pair?…`) desde otra red,
+  el invitado se quedaba en «Enséñale este código» hasta que el anfitrión
+  escaneaba su respuesta. Ahora esa respuesta viaja sola (red local y buzón),
+  sellada con el token de la sala, igual que ya pasaba con «Invitar». Medido:
+  teléfono en LTE y portátil en casa, conectados a los 3 s de abrir el enlace.
+- El código de respuesta sigue existiendo como último recurso: aparece a los
+  12 s si no se ha conectado (antes, a los 3 s).
+
+### Changed
+- Reproducción en móvil (`AudioPump`): los bloques se entregan al reproductor
+  de uno en uno y con plazo. El comportamiento es el mismo que antes, pero
+  antes salía de un contador que se quedaba atascado en su tope. Sin cambio
+  medible en retardo ni en cortes.
+- `--dart-define=GT_AUDIO_STATS=true` hace que la app escriba cada segundo las
+  medidas de la reproducción; ver «Medir audio entrecortado y latencia» en
+  `AGENTS.md`.
+- `docs/audio-io.md`: corregido lo que decía del jitter buffer (no añade
+  retardo fijo) y de las colas de reproducción.
+
 ### Changed
 
 **Llamar a un contacto ya no enseña códigos**
