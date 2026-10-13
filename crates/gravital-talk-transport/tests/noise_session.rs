@@ -139,6 +139,40 @@ async fn noise_handshake_and_audio() {
     assert_eq!(frame.payload.as_ref(), &payload[..]);
 }
 
+/// Mientras el cliente espera la respuesta a su saludo le llegan datagramas
+/// que no lo son: las sondas con las que el anfitrión busca camino entre
+/// redes. No pueden gastar sus reintentos: la respuesta tarda en cruzar una
+/// red real más de lo que tardan en llegar nueve sondas.
+#[tokio::test]
+async fn las_sondas_ajenas_no_agotan_el_handshake_del_cliente() {
+    let (ta, tb) = pair();
+    let stray = ta.peer_tx.clone();
+    let server = session(ta, HandshakeMode::Noise, Some("sala"));
+    let client = session(tb, HandshakeMode::Noise, Some("sala"));
+
+    let hs_client =
+        tokio::spawn(async move { client.handshake(SessionRole::Client, ADDR_A).await });
+    // Treinta sondas en 150 ms, del mismo origen que el anfitrión.
+    for _ in 0..30 {
+        stray.send((b"GTRV-sonda".to_vec(), ADDR_A)).unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    // Y sólo entonces contesta el anfitrión, como tras un viaje por la red.
+    let hs_server =
+        tokio::spawn(async move { server.handshake(SessionRole::Server, ADDR_B).await });
+
+    timeout(Duration::from_secs(5), hs_client)
+        .await
+        .expect("el cliente no terminó")
+        .expect("tarea del cliente")
+        .expect("el handshake debe sobrevivir a las sondas");
+    timeout(Duration::from_secs(5), hs_server)
+        .await
+        .expect("el servidor no terminó")
+        .expect("tarea del servidor")
+        .expect("handshake del servidor");
+}
+
 #[tokio::test]
 async fn room_token_authenticates() {
     let (ta, tb) = pair();
