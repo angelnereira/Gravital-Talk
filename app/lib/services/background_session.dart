@@ -87,7 +87,10 @@ class BackgroundSession {
   static bool _talking = false;
   static bool _paused = false;
   static bool _peerTalking = false;
+  static String _peerName = '';
   static String? _caller;
+  static bool _headset = true;
+  static bool _volume = false;
 
   /// Activa o quita la burbuja flotante (Ajustes). Sale sólo con la app
   /// oculta, con una sala en curso o una llamada entrante, y si el sistema
@@ -118,6 +121,23 @@ class BackgroundSession {
     }
   }
 
+  /// Botón del auricular y botones de volumen (sólo con la app a la vista)
+  /// como botón de hablar.
+  static Future<void> setKeys({required bool headset, required bool volume}) async {
+    if (_headset == headset && _volume == volume) return;
+    _headset = headset;
+    _volume = volume;
+    await _syncBubble();
+  }
+
+  /// Nombre de con quién se habla, para enseñarlo junto a la burbuja
+  /// mientras habla. Vacío si no se conoce.
+  static Future<void> setPeerName(String name) async {
+    if (_peerName == name) return;
+    _peerName = name;
+    await _syncBubble();
+  }
+
   /// El otro toma o suelta la palabra: la burbuja late mientras habla.
   static Future<void> peerTalking(bool on) async {
     if (_peerTalking == on) return;
@@ -144,8 +164,12 @@ class BackgroundSession {
         'talking': _talking,
         'paused': _paused,
         'peerTalking': _peerTalking,
+        'peerName': _peerName,
         'caller': _caller ?? '',
+        'room': _room,
         'enabled': _bubble,
+        'headset': _headset,
+        'volume': _volume,
       };
 
   /// Manda la app al fondo, de vuelta a lo que se estaba haciendo.
@@ -197,6 +221,7 @@ class BackgroundSession {
     _talking = false;
     _paused = false;
     _peerTalking = false;
+    _peerName = '';
     if (!_supported) return;
     unawaited(_syncBubble());
     try {
@@ -219,12 +244,14 @@ class BackgroundSession {
   static void Function()? onBubbleAnswer;
 
   /// Avisa cuando el usuario pulsa "Salir de la sala" en la notificación, el
-  /// botón de hablar de la notificación (`togglePtt`) o mantiene pulsada la
-  /// burbuja (`ptt`, con `true` al pulsar y `false` al soltar).
+  /// botón de hablar de la notificación o del tile (`togglePtt`), mantiene
+  /// pulsada la burbuja o un botón físico (`ptt`, con `true` al pulsar y
+  /// `false` al soltar) o mantiene la burbuja con la sala en pausa (`resume`).
   static void onLeave(
     void Function() leave, {
     void Function()? togglePtt,
     void Function(bool down)? ptt,
+    void Function()? resume,
   }) {
     if (!_supported) return;
     _channel.setMethodCallHandler((call) async {
@@ -237,6 +264,8 @@ class BackgroundSession {
           ptt?.call(true);
         case 'pttUp':
           ptt?.call(false);
+        case 'resume':
+          resume?.call();
         case 'answerCall':
           onCallAction?.call(true);
         case 'answerFromBubble':

@@ -144,8 +144,9 @@ class _SettingsScreenState extends State<SettingsScreen>
 
   String _bubbleSummary(AppSettings s) {
     const what = 'Con una sala abierta o una llamada entrante, al salir de la '
-        'app queda una burbuja encima de todo: mantenla pulsada para hablar, '
-        'tócala para volver y arrástrala a la equis para quitarla.';
+        'app queda una burbuja encima de todo: mantenla pulsada para hablar '
+        '(desliza hacia arriba para bloquear el turno), tócala para volver y '
+        'arrástrala a la equis para quitarla.';
     if (s.pttBubble && !_bubbleAllowed) {
       return '$what Falta el permiso de mostrarse encima de otras apps: toca '
           'para darlo.';
@@ -306,6 +307,40 @@ class _SettingsScreenState extends State<SettingsScreen>
                       onTap: () => _setBubble(
                         c,
                         !s.pttBubble || !_bubbleAllowed,
+                      ),
+                    ),
+                  if (!kIsWeb && Platform.isAndroid)
+                    _Row(
+                      icon: Icons.headset_mic_outlined,
+                      title: 'Botón del auricular para hablar',
+                      subtitle: 'Durante una sala, el botón de un auricular '
+                          'con cable o Bluetooth: mantenlo para hablar, o '
+                          'una pulsación abre el micrófono y otra lo cierra. '
+                          'Funciona con la pantalla apagada.',
+                      trailing: Switch(
+                        value: s.headsetPtt,
+                        onChanged: (on) =>
+                            c.updateSettings(s.copyWith(headsetPtt: on)),
+                      ),
+                      onTap: () => c.updateSettings(
+                        s.copyWith(headsetPtt: !s.headsetPtt),
+                      ),
+                    ),
+                  if (!kIsWeb && Platform.isAndroid)
+                    _Row(
+                      icon: Icons.volume_down_outlined,
+                      title: 'Botones de volumen para hablar',
+                      subtitle: 'Con la sala a la vista, cualquiera de los '
+                          'dos funciona como el botón de hablar. Mientras '
+                          'esté activo, el volumen se cambia desde el panel '
+                          'del sistema.',
+                      trailing: Switch(
+                        value: s.volumePtt,
+                        onChanged: (on) =>
+                            c.updateSettings(s.copyWith(volumePtt: on)),
+                      ),
+                      onTap: () => c.updateSettings(
+                        s.copyWith(volumePtt: !s.volumePtt),
                       ),
                     ),
                 ],

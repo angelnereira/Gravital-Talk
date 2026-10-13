@@ -56,6 +56,8 @@ class PrefKeys {
   static const turnTones = 'audio.turnTones';
   static const nativeAudio = 'audio.native';
   static const pttBubble = 'ui.pttBubble';
+  static const headsetPtt = 'ui.headsetPtt';
+  static const volumePtt = 'ui.volumePtt';
   static const mailboxes = 'net.mailboxes';
 
   const PrefKeys._();

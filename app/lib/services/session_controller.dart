@@ -205,7 +205,7 @@ class SessionController extends ChangeNotifier {
     _server = await _store.loadServerProfile();
     _p2p = await _store.loadP2pProfile();
     _settings = await _store.loadSettings();
-    unawaited(BackgroundSession.setBubbleEnabled(_settings.pttBubble));
+    _applyControls(_settings);
     notifyListeners();
   }
 
@@ -214,9 +214,18 @@ class SessionController extends ChangeNotifier {
     // La calidad y la reducción de ruido se pueden cambiar a media
     // conversación.
     _engine.applyAudioSettings(s);
-    unawaited(BackgroundSession.setBubbleEnabled(s.pttBubble));
+    _applyControls(s);
     _store.saveSettings(s);
     notifyListeners();
+  }
+
+  /// Controles de hablar fuera de la pantalla de la sala (Android).
+  void _applyControls(AppSettings s) {
+    unawaited(BackgroundSession.setBubbleEnabled(s.pttBubble));
+    unawaited(BackgroundSession.setKeys(
+      headset: s.headsetPtt,
+      volume: s.volumePtt,
+    ));
   }
 
   void updateServerProfile(ServerProfile p) {

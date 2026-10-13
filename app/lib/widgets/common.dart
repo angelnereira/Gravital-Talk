@@ -441,15 +441,45 @@ class PttButton extends StatefulWidget {
   State<PttButton> createState() => _PttButtonState();
 }
 
+/// Lo que hay que subir el dedo, hablando, para bloquear el turno.
+const pttLockDistance = 72.0;
+
 class _PttButtonState extends State<PttButton> {
   /// Dedo que mantiene pulsado el botón, o `null` si no lo está.
   int? _pointer;
 
+  /// Altura a la que se pulsó: subir desde ahí bloquea el turno.
+  double _downY = 0;
+
+  /// Turno bloqueado: se sigue hablando sin el dedo encima, hasta otro toque.
+  bool _locked = false;
+
+  /// Este dedo vino a soltar el bloqueo: al levantarlo no pasa nada más.
+  bool _unlocking = false;
+
   void _down(PointerDownEvent event) {
-    if (!widget.enabled || _pointer != null) return;
+    if (_pointer != null) return;
+    if (_locked) {
+      _pointer = event.pointer;
+      _unlocking = true;
+      setState(() => _locked = false);
+      Haptics.pttUp();
+      widget.onUp();
+      return;
+    }
+    if (!widget.enabled) return;
     _pointer = event.pointer;
+    _downY = event.position.dy;
     Haptics.pttDown();
     widget.onDown();
+  }
+
+  void _move(PointerMoveEvent event) {
+    if (event.pointer != _pointer || _unlocking || _locked) return;
+    if (_downY - event.position.dy > pttLockDistance) {
+      Haptics.notice();
+      setState(() => _locked = true);
+    }
   }
 
   /// El turno dura mientras ese dedo siga en la pantalla, esté donde esté:
@@ -457,14 +487,28 @@ class _PttButtonState extends State<PttButton> {
   void _release(PointerEvent event) {
     if (event.pointer != _pointer) return;
     _pointer = null;
+    if (_unlocking) {
+      _unlocking = false;
+      return;
+    }
+    if (_locked) return;
     Haptics.pttUp();
     widget.onUp();
   }
 
   @override
+  void didUpdateWidget(PttButton old) {
+    super.didUpdateWidget(old);
+    // El turno se cortó por otro lado (pausa, burbuja, notificación): el
+    // bloqueo ya no sostiene nada.
+    if (_locked && old.pressed && !widget.pressed) _locked = false;
+  }
+
+  @override
   void dispose() {
-    // Si la pantalla desaparece con el botón pulsado, no se queda abierto.
-    if (_pointer != null) widget.onUp();
+    // Si la pantalla desaparece con el botón pulsado (o bloqueado), no se
+    // queda abierto.
+    if ((_pointer != null && !_unlocking) || _locked) widget.onUp();
     super.dispose();
   }
 
@@ -486,6 +530,7 @@ class _PttButtonState extends State<PttButton> {
     // pantalla mientras se habla.
     final disc = Listener(
       onPointerDown: _down,
+      onPointerMove: _move,
       onPointerUp: _release,
       onPointerCancel: _release,
       child: RawGestureDetector(
@@ -499,9 +544,12 @@ class _PttButtonState extends State<PttButton> {
         child: Semantics(
         button: true,
         enabled: enabled,
-        label: pressed
-            ? 'Transmitiendo. Suelta para dejar de hablar'
-            : 'Mantén pulsado para hablar',
+        label: _locked
+            ? 'Transmitiendo con el turno bloqueado. Toca para dejar de hablar'
+            : pressed
+                ? 'Transmitiendo. Suelta para dejar de hablar, o desliza '
+                    'hacia arriba para bloquear el turno'
+                : 'Mantén pulsado para hablar',
         hint: widget.peerSpeaking
             ? 'El otro participante está transmitiendo'
             : null,
@@ -523,15 +571,21 @@ class _PttButtonState extends State<PttButton> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(
-                      widget.peerSpeaking && !pressed
-                          ? Icons.hearing
-                          : Icons.mic,
+                      _locked
+                          ? Icons.lock
+                          : widget.peerSpeaking && !pressed
+                              ? Icons.hearing
+                              : Icons.mic,
                       color: signalColor,
                       size: 44,
                     ),
                     const SizedBox(height: Spacing.sm),
                     Text(
-                      pressed ? 'HABLANDO' : 'PULSA PARA HABLAR',
+                      _locked
+                          ? 'BLOQUEADO\nTOCA PARA SOLTAR'
+                          : pressed
+                              ? 'HABLANDO\n↑ PARA BLOQUEAR'
+                              : 'PULSA PARA HABLAR',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         color: enabled ? signalColor : scheme.outline,
