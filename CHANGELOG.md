@@ -19,6 +19,30 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
 - Se activa en Ajustes → Voz → «Burbuja para hablar» (encendida por defecto).
   Necesita el permiso de mostrarse encima de otras apps; sin él no aparece y
   la notificación sigue siendo el control.
+- Mientras habla el otro, una etiqueta con su nombre aparece junto a la
+  burbuja (cuando se le conoce: contactos e invitaciones; las salas del relay
+  sólo dan un número por participante).
+- Con la sala en pausa, mantener la burbuja la reanuda sin entrar en la app.
+
+**Bloquear el turno**
+- Hablando, deslizar el dedo hacia arriba deja el micrófono abierto sin
+  tenerlo pulsado; otro toque lo suelta. Vale en el botón de la sala y en la
+  burbuja. Si el turno se corta por otro lado (pausa, fin de la sala), el
+  bloqueo se va con él.
+
+**Hablar con botones físicos (Android)**
+- El botón del auricular, con cable o Bluetooth, es el de hablar mientras hay
+  sala, también con la pantalla apagada: mantenerlo habla mientras dure, y una
+  pulsación corta abre el micrófono y la siguiente lo cierra (muchos
+  auriculares sólo mandan el clic, y Android reserva la pulsación larga del de
+  cable para el asistente). Activo por defecto.
+- Opcional y apagado por defecto: los botones de volumen hacen lo mismo con
+  la sala a la vista. Mientras está activo, el volumen se cambia desde el
+  panel del sistema.
+
+**Botón en Ajustes rápidos (Android)**
+- «Hablar (Gravital Talk)» se añade a la cortina de notificaciones: con una
+  sala, un toque abre el micrófono y otro lo cierra; sin sala, abre la app.
 
 **Invitaciones que se pueden pulsar en cualquier chat, sin ninguna web**
 - Al compartir o copiar una invitación, el enlace va ahora como

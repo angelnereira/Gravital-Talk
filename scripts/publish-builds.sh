@@ -15,6 +15,7 @@
 #   gravital-talk-latest-linux-x64.tar.gz  Linux x64
 #
 # Requisitos: `gh` autenticado con permiso de escritura en el repo.
+# Sin GraphQL disponible: `GH_REPO=dueño/repo scripts/publish-builds.sh`.
 
 set -euo pipefail
 
@@ -26,7 +27,10 @@ BUILD=0
 [ "${1:-}" = "--build" ] && BUILD=1
 
 command -v gh >/dev/null || { echo "falta gh (GitHub CLI)" >&2; exit 2; }
-REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
+# `GH_REPO=dueño/repo` evita `gh repo view`, que va por GraphQL: hay entornos
+# (sesiones en la nube) que sólo dejan pasar la API REST.
+REPO="${GH_REPO:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}"
+export GH_REPO="$REPO"
 SHA="$(git rev-parse --short HEAD)"
 VER="$(grep -m1 '^version:' app/pubspec.yaml | awk '{print $2}' | cut -d+ -f1)"
 

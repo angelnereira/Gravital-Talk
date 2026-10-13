@@ -98,6 +98,8 @@ class AppSettings {
     this.turnTones = true,
     this.nativeAudio = false,
     this.pttBubble = true,
+    this.headsetPtt = true,
+    this.volumePtt = false,
   });
 
   /// Valores que usa la app cuando nadie ha configurado nada.
@@ -136,6 +138,15 @@ class AppSettings {
   /// Android: burbuja flotante para hablar con la app oculta.
   final bool pttBubble;
 
+  /// Android: el botón del auricular (cable o Bluetooth) habla durante la
+  /// sala.
+  final bool headsetPtt;
+
+  /// Android: los botones de volumen hablan con la app a la vista. Apagado
+  /// por defecto: mientras está activo, el volumen se cambia desde el
+  /// sistema.
+  final bool volumePtt;
+
   AppSettings copyWith({
     int? sampleRate,
     int? channels,
@@ -149,6 +160,8 @@ class AppSettings {
     bool? turnTones,
     bool? nativeAudio,
     bool? pttBubble,
+    bool? headsetPtt,
+    bool? volumePtt,
   }) {
     return AppSettings(
       sampleRate: sampleRate ?? this.sampleRate,
@@ -163,6 +176,8 @@ class AppSettings {
       turnTones: turnTones ?? this.turnTones,
       nativeAudio: nativeAudio ?? this.nativeAudio,
       pttBubble: pttBubble ?? this.pttBubble,
+      headsetPtt: headsetPtt ?? this.headsetPtt,
+      volumePtt: volumePtt ?? this.volumePtt,
     );
   }
 

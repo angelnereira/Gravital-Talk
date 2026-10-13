@@ -478,6 +478,17 @@ fondo en cuanto la sala conecta.
   (`enterForeground` cae entonces a sólo reproducción) y la sala seguiría, pero muda. Sin
   comprobar en un teléfono; se evita por diseño. Por eso los cambios de estado van por `SessionService.refresh`
   (`notify` con el mismo id), no rearrancando el servicio.
+- Mantener 150 ms y subir el dedo 64 dp bloquea el turno (`locked`); con la sala en pausa,
+  mantener 600 ms manda `resume`. La etiqueta con el nombre (`NameTag`) sale con
+  `peerName`, que pone `ContactsService` (`talkingWith`): las salas del relay no lo tienen.
+- El mismo estado de `bubble` alimenta `PttKeys` (botón del auricular por una
+  `MediaSession` sólo mientras hay sala; volumen por `dispatchKeyEvent`, sólo con la app a
+  la vista) y el tile `PttTileService`, que lee `PttBubble.mode/talking/paused/room`.
+  En los botones físicos una pulsación corta conmuta y mantener es pulsar-para-hablar: el
+  botón de cable sólo llega como clic (Android se queda la pulsación larga para el
+  asistente).
+- Probar los botones sin auricular: `adb shell input keyevent KEYCODE_HEADSETHOOK` (clic) o
+  `adb shell cmd media_session dispatch play-pause`.
 - Para probarla sin tocar el teléfono: `adb shell appops set dev.gravitaltalk.gravital_talk_app
   SYSTEM_ALERT_WINDOW allow`, entrar en una sala, `input keyevent KEYCODE_HOME` y
   `input swipe X Y X Y 2000` sobre la burbuja (un *swipe* sin moverse es mantener pulsado).

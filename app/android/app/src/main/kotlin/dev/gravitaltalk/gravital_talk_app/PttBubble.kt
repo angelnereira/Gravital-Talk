@@ -1,5 +1,7 @@
 package dev.gravitaltalk.gravital_talk_app
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
 import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.content.Context
@@ -7,6 +9,7 @@ import android.content.Intent
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.RectF
 import android.os.Build
@@ -27,9 +30,11 @@ import kotlin.math.min
  *
  * Aparece encima de las demás apps cuando la app no está a la vista y hay una
  * sala en curso o una llamada entrante. Mantenerla pulsada es el botón de
- * hablar; tocarla abre la app (o contesta la llamada); arrastrarla la mueve, y
- * soltarla sobre la equis de abajo la quita hasta la próxima vez que se salga
- * de la app.
+ * hablar, y deslizar hacia arriba mientras se habla deja el turno bloqueado
+ * (otro toque lo suelta). Tocarla abre la app (o contesta la llamada);
+ * arrastrarla la mueve, y soltarla sobre la equis de abajo la quita hasta la
+ * próxima vez que se salga de la app. Con la sala en pausa, mantenerla la
+ * reanuda.
  *
  * Quien decide hablar sigue siendo Dart: la burbuja sólo avisa de que se
  * pulsó o se soltó ([onPtt]) y pinta el estado que Dart le devuelve. Necesita
@@ -42,11 +47,23 @@ object PttBubble {
     /** Pulsar (`true`) o soltar la burbuja en una sala. */
     var onPtt: ((Boolean) -> Unit)? = null
 
+    /** Mantenida con la sala en pausa: reanudarla. */
+    var onResume: (() -> Unit)? = null
+
     private var context: Context? = null
-    private var mode = Mode.OFF
-    private var talking = false
-    private var paused = false
+
+    // Último estado que mandó Dart. Lo leen también el tile de Ajustes
+    // rápidos y los botones del auricular.
+    var mode = Mode.OFF
+        private set
+    var talking = false
+        private set
+    var paused = false
+        private set
+    var room = ""
+        private set
     private var peerTalking = false
+    private var peerName = ""
     private var caller = ""
     private var enabled = true
     private var appVisible = true
@@ -57,6 +74,7 @@ object PttBubble {
     private var bubble: BubbleView? = null
     private var params: WindowManager.LayoutParams? = null
     private var target: DismissTarget? = null
+    private var tag: NameTag? = null
     private var snap: ValueAnimator? = null
 
     /** Estado que manda Dart cada vez que cambia algo de la sala. */
@@ -66,7 +84,9 @@ object PttBubble {
         talking: Boolean,
         paused: Boolean,
         peerTalking: Boolean,
+        peerName: String,
         caller: String,
+        room: String,
         enabled: Boolean,
     ) {
         this.context = context.applicationContext
@@ -76,7 +96,9 @@ object PttBubble {
         this.talking = talking
         this.paused = paused
         this.peerTalking = peerTalking
+        this.peerName = peerName
         this.caller = caller
+        this.room = room
         this.enabled = enabled
         refresh()
     }
@@ -97,6 +119,7 @@ object PttBubble {
         mode = Mode.OFF
         remove()
         onPtt = null
+        onResume = null
     }
 
     private fun refresh() {
@@ -108,6 +131,7 @@ object PttBubble {
         }
         val view = bubble ?: add(ctx) ?: return
         view.render(mode, talking, paused, peerTalking, caller)
+        syncTag(ctx)
     }
 
     private fun windowType(): Int = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -151,9 +175,11 @@ object PttBubble {
         snap?.cancel()
         snap = null
         hideTarget()
+        hideTag()
         bubble?.let { view ->
-            // Desaparecer con el dedo encima no puede dejar el micrófono abierto.
-            if (view.holding) onPtt?.invoke(false)
+            // Desaparecer con el dedo encima (o con el turno bloqueado) no
+            // puede dejar el micrófono abierto.
+            if (view.holding || view.locked) onPtt?.invoke(false)
             view.stop()
             runCatching { windowManager(ctx).removeView(view) }
         }
@@ -178,6 +204,52 @@ object PttBubble {
         runCatching { windowManager(ctx).updateViewLayout(view, lp) }
         target?.highlight(overTarget(ctx, lp))
     }
+
+    // ── Nombre de quien habla ───────────────────────────────────────────────
+
+    /**
+     * Etiqueta con el nombre del otro mientras habla, al lado de la burbuja
+     * que mira al centro de la pantalla. Sin nombre conocido (salas del
+     * relay, que sólo dan un número por participante) basta el pulso.
+     */
+    private fun syncTag(ctx: Context) {
+        val lp = params
+        val show = lp != null && mode == Mode.SESSION && peerTalking && !talking &&
+            peerName.isNotEmpty() && snap == null && bubble?.dragging != true
+        if (!show) {
+            hideTag()
+            return
+        }
+        val view = tag ?: NameTag(ctx).also { created ->
+            val tagLp = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                windowType(),
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                PixelFormat.TRANSLUCENT,
+            ).apply { gravity = Gravity.TOP or Gravity.START }
+            created.layoutParams = tagLp
+            if (runCatching { windowManager(ctx).addView(created, tagLp) }.isFailure) return
+            tag = created
+        }
+        view.text = peerName
+        val tagLp = view.layoutParams as WindowManager.LayoutParams
+        val metrics = ctx.resources.displayMetrics
+        val size = dp(ctx, BUBBLE_WINDOW_DP)
+        val onRight = lp.x + size / 2 >= metrics.widthPixels / 2
+        val gap = dp(ctx, 10)
+        tagLp.x = if (onRight) lp.x + gap - view.measuredWidthFor() else lp.x + size - gap
+        tagLp.y = lp.y + (size - view.heightPx) / 2
+        runCatching { windowManager(ctx).updateViewLayout(view, tagLp) }
+    }
+
+    private fun hideTag() {
+        val ctx = context ?: return
+        tag?.let { runCatching { windowManager(ctx).removeView(it) } }
+        tag = null
+    }
+
+    // ── Equis para quitarla ────────────────────────────────────────────────
 
     private fun overTarget(ctx: Context, lp: WindowManager.LayoutParams): Boolean {
         val metrics = ctx.resources.displayMetrics
@@ -221,6 +293,7 @@ object PttBubble {
     private fun onDragStart() {
         val ctx = context ?: return
         snap?.cancel()
+        hideTag()
         showTarget(ctx)
     }
 
@@ -243,6 +316,13 @@ object PttBubble {
             duration = 180
             interpolator = DecelerateInterpolator()
             addUpdateListener { moveTo(it.animatedValue as Int, y) }
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    if (snap === animation) snap = null
+                    // Pegada al borde: la etiqueta vuelve a su lado.
+                    context?.let { syncTag(it) }
+                }
+            })
             start()
         }
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
@@ -268,6 +348,8 @@ object PttBubble {
 
     private fun canTalk() = mode == Mode.SESSION && !paused
 
+    private fun canResume() = mode == Mode.SESSION && paused
+
     private fun dp(ctx: Context, value: Int): Int = (value * ctx.resources.displayMetrics.density + 0.5f).toInt()
 
     /** Marca el intent de "Contestar" que viene de la burbuja. */
@@ -289,17 +371,31 @@ object PttBubble {
      */
     private const val HOLD_DELAY_MS = 150L
 
+    /** Reanudar una sala en pausa pide mantener más: no es un gesto de paso. */
+    private const val RESUME_DELAY_MS = 600L
+
+    /** Lo que hay que subir el dedo, hablando, para bloquear el turno. */
+    private const val LOCK_DISTANCE_DP = 64
+
     // Los de la paleta de la app (`GravitalPalette`).
     private const val COLOR_BRAND = 0xFF0D9488.toInt()
     private const val COLOR_TRANSMIT = 0xFFF5A623.toInt()
     private const val COLOR_ONLINE = 0xFF16A34A.toInt()
     private const val COLOR_PAUSED = 0xFF6B7280.toInt()
     private const val COLOR_DANGER = 0xFFDC2626.toInt()
+    private const val COLOR_SURFACE = 0xE61F2937.toInt()
 
     /** El círculo: color por estado, micrófono o teléfono, y pulso. */
     @SuppressLint("ViewConstructor")
     private class BubbleView(context: Context) : View(context) {
         var holding = false
+            private set
+
+        /** Turno bloqueado: sigue hablando sin el dedo encima. */
+        var locked = false
+            private set
+
+        var dragging = false
             private set
 
         private var mode = Mode.SESSION
@@ -308,7 +404,9 @@ object PttBubble {
         private var peerTalking = false
 
         private var pressed = false
-        private var dragging = false
+
+        /** El toque ya hizo algo (soltar el bloqueo, reanudar): no es un tap. */
+        private var consumed = false
         private var downX = 0f
         private var downY = 0f
         private var startX = 0
@@ -321,8 +419,10 @@ object PttBubble {
         private val icon = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE
             strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
         }
         private val rect = RectF()
+        private val path = Path()
         private var phase = 0f
         private var pulse: ValueAnimator? = null
 
@@ -334,6 +434,13 @@ object PttBubble {
             invalidate()
         }
 
+        private val resumeStart = Runnable {
+            if (!canResume() || dragging) return@Runnable
+            consumed = true
+            performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+            onResume?.invoke()
+        }
+
         init {
             // La sombra del círculo sólo se dibuja por software.
             setLayerType(LAYER_TYPE_SOFTWARE, null)
@@ -341,14 +448,19 @@ object PttBubble {
         }
 
         fun render(mode: Mode, talking: Boolean, paused: Boolean, peerTalking: Boolean, caller: String) {
+            // Dart cortó el turno (pausa, fin de la sala, otro control): el
+            // bloqueo ya no tiene nada que mantener.
+            if (this.talking && !talking && !holding) locked = false
             this.mode = mode
             this.talking = talking
             this.paused = paused
             this.peerTalking = peerTalking
+            if (mode != Mode.SESSION || paused) locked = false
             contentDescription = when {
                 mode == Mode.RINGING -> "$caller quiere hablar. Toca para contestar"
-                paused -> "Sala en pausa. Toca para volver a la app"
-                else -> "Mantén pulsado para hablar"
+                paused -> "Sala en pausa. Mantén pulsado para reanudar; toca para volver a la app"
+                locked -> "Hablando con el turno bloqueado. Toca para soltar"
+                else -> "Mantén pulsado para hablar; desliza hacia arriba para bloquear el turno"
             }
             val wantsPulse = mode == Mode.RINGING || (peerTalking && !talking && !paused)
             if (wantsPulse && pulse == null) {
@@ -371,6 +483,7 @@ object PttBubble {
 
         fun stop() {
             removeCallbacks(holdStart)
+            removeCallbacks(resumeStart)
             pulse?.cancel()
             pulse = null
         }
@@ -386,36 +499,62 @@ object PttBubble {
                     startY = lp.y
                     dragging = false
                     holding = false
+                    consumed = false
                     pressed = true
-                    if (canTalk()) postDelayed(holdStart, HOLD_DELAY_MS)
+                    when {
+                        // Con el turno bloqueado, el toque es para soltarlo.
+                        locked -> Unit
+                        canTalk() -> postDelayed(holdStart, HOLD_DELAY_MS)
+                        canResume() -> postDelayed(resumeStart, RESUME_DELAY_MS)
+                    }
                     invalidate()
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    // Hablando, el dedo puede bailar: no se mueve ni se corta.
-                    if (holding) return true
                     val dx = event.rawX - downX
                     val dy = event.rawY - downY
+                    if (holding) {
+                        // Hablando, el dedo puede bailar sin cortar; subirlo
+                        // lo bastante deja el turno bloqueado.
+                        if (!locked && -dy > LOCK_DISTANCE_DP * density) {
+                            locked = true
+                            performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                            invalidate()
+                        }
+                        return true
+                    }
                     if (!dragging && hypot(dx, dy) > slop) {
                         dragging = true
                         removeCallbacks(holdStart)
+                        removeCallbacks(resumeStart)
                         onDragStart()
                     }
                     if (dragging) moveTo(startX + dx.toInt(), startY + dy.toInt())
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     removeCallbacks(holdStart)
+                    removeCallbacks(resumeStart)
                     pressed = false
                     val cancelled = event.actionMasked == MotionEvent.ACTION_CANCEL
                     when {
                         holding -> {
                             holding = false
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-                                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY_RELEASE)
+                            // Bloqueado, el dedo se va pero el turno sigue.
+                            if (!locked) {
+                                releaseFeedback()
+                                onPtt?.invoke(false)
                             }
+                        }
+                        dragging -> {
+                            dragging = false
+                            onDragEnd()
+                        }
+                        consumed || cancelled -> Unit
+                        locked -> {
+                            locked = false
+                            releaseFeedback()
                             onPtt?.invoke(false)
                         }
-                        dragging -> onDragEnd()
-                        !cancelled -> {
+                        else -> {
                             performClick()
                             onTap()
                         }
@@ -425,6 +564,12 @@ object PttBubble {
                 }
             }
             return true
+        }
+
+        private fun releaseFeedback() {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY_RELEASE)
+            }
         }
 
         override fun performClick(): Boolean {
@@ -449,7 +594,7 @@ object PttBubble {
             fill.color = when {
                 mode == Mode.RINGING -> COLOR_ONLINE
                 paused -> COLOR_PAUSED
-                talking || holding -> COLOR_TRANSMIT
+                talking || holding || locked -> COLOR_TRANSMIT
                 else -> COLOR_BRAND
             }
             fill.alpha = if (paused) 210 else 245
@@ -459,17 +604,26 @@ object PttBubble {
 
             // Mientras se habla, un aro blanco: se ve aunque el color de la
             // app de debajo se parezca al ámbar.
-            if (talking) {
+            if (talking || locked) {
                 ring.color = Color.WHITE
                 ring.alpha = 230
                 ring.strokeWidth = 2.5f * density
                 canvas.drawCircle(cx, cy, r - 4 * density, ring)
             }
 
-            if (mode == Mode.RINGING) drawPhone(canvas, cx, cy, r) else drawMic(canvas, cx, cy, r)
+            when {
+                mode == Mode.RINGING -> drawPhone(canvas, cx, cy, r)
+                locked -> drawLock(canvas, cx, cy, r)
+                else -> drawMic(canvas, cx, cy, r)
+            }
+
+            // Hablando con el dedo encima: la flecha de arriba dice que se
+            // puede bloquear.
+            if (holding && !locked) drawChevron(canvas, cx, cy - r - 6 * density)
         }
 
         private fun drawMic(canvas: Canvas, cx: Float, cy: Float, r: Float) {
+            icon.color = Color.WHITE
             val w = r * 0.36f
             val h = r * 0.62f
             val top = cy - r * 0.48f
@@ -490,12 +644,84 @@ object PttBubble {
             }
         }
 
+        /** Candado cerrado: el turno está bloqueado. */
+        private fun drawLock(canvas: Canvas, cx: Float, cy: Float, r: Float) {
+            icon.color = Color.WHITE
+            val w = r * 0.62f
+            val h = r * 0.46f
+            val top = cy - r * 0.02f
+            icon.style = Paint.Style.FILL
+            rect.set(cx - w / 2, top, cx + w / 2, top + h)
+            canvas.drawRoundRect(rect, r * 0.08f, r * 0.08f, icon)
+            icon.style = Paint.Style.STROKE
+            icon.strokeWidth = r * 0.1f
+            val shackle = w * 0.32f
+            rect.set(cx - shackle, top - shackle * 1.9f, cx + shackle, top + shackle * 0.1f)
+            canvas.drawArc(rect, 180f, 180f, false, icon)
+            canvas.drawLine(cx - shackle, top - shackle * 0.85f, cx - shackle, top, icon)
+            canvas.drawLine(cx + shackle, top - shackle * 0.85f, cx + shackle, top, icon)
+        }
+
+        private fun drawChevron(canvas: Canvas, cx: Float, y: Float) {
+            icon.color = COLOR_TRANSMIT
+            icon.style = Paint.Style.STROKE
+            icon.strokeWidth = 3 * density
+            val arm = 6 * density
+            path.reset()
+            path.moveTo(cx - arm, y + arm / 2)
+            path.lineTo(cx, y - arm / 2)
+            path.lineTo(cx + arm, y + arm / 2)
+            canvas.drawPath(path, icon)
+        }
+
         private fun drawPhone(canvas: Canvas, cx: Float, cy: Float, r: Float) {
             val drawable = context.getDrawable(android.R.drawable.stat_sys_phone_call)?.mutate() ?: return
             drawable.setTint(Color.WHITE)
             val half = (r * 0.55f).toInt()
             drawable.setBounds(cx.toInt() - half, cy.toInt() - half, cx.toInt() + half, cy.toInt() + half)
             drawable.draw(canvas)
+        }
+    }
+
+    /** Píldora con el nombre de quien habla. */
+    @SuppressLint("ViewConstructor")
+    private class NameTag(context: Context) : View(context) {
+        private val density = context.resources.displayMetrics.density
+        private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = COLOR_SURFACE }
+        private val dot = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = COLOR_ONLINE }
+        private val label = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textSize = 14 * density
+            isFakeBoldText = true
+        }
+        private val rect = RectF()
+        private val padH = 12 * density
+        private val dotR = 4 * density
+        val heightPx = (32 * density).toInt()
+
+        var text = ""
+            set(value) {
+                // Un nombre muy largo taparía media pantalla.
+                val clean = if (value.length > 18) value.take(17) + "…" else value
+                if (clean == field) return
+                field = clean
+                requestLayout()
+                invalidate()
+            }
+
+        fun measuredWidthFor(): Int = (padH * 2 + dotR * 2 + 8 * density + label.measureText(text)).toInt()
+
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            setMeasuredDimension(measuredWidthFor(), heightPx)
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            rect.set(0f, 0f, width.toFloat(), height.toFloat())
+            canvas.drawRoundRect(rect, height / 2f, height / 2f, fill)
+            val cy = height / 2f
+            canvas.drawCircle(padH + dotR, cy, dotR, dot)
+            val baseline = cy - (label.descent() + label.ascent()) / 2
+            canvas.drawText(text, padH + dotR * 2 + 8 * density, baseline, label)
         }
     }
 

@@ -32,4 +32,20 @@ void main() {
     await BackgroundSession.setBubbleEnabled(true);
     expect(BackgroundSession.bubbleState()['enabled'], isTrue);
   });
+
+  test('la burbuja sabe con quién se habla y qué botones usar', () async {
+    await BackgroundSession.start('WXYZ');
+    await BackgroundSession.setPeerName('Ana');
+    await BackgroundSession.setKeys(headset: false, volume: true);
+    final state = BackgroundSession.bubbleState();
+    expect(state['peerName'], 'Ana');
+    expect(state['room'], 'WXYZ');
+    expect(state['headset'], isFalse);
+    expect(state['volume'], isTrue);
+
+    // Al salir de la sala el nombre ya no vale para la siguiente.
+    await BackgroundSession.stop();
+    expect(BackgroundSession.bubbleState()['peerName'], '');
+    await BackgroundSession.setKeys(headset: true, volume: false);
+  });
 }

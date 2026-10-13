@@ -200,6 +200,7 @@ class _GravitalTalkAppState extends State<GravitalTalkApp> {
         final c = widget.controller;
         down ? c.pttDown() : c.pttUp();
       },
+      resume: () => widget.controller.setPaused(false),
     );
     final link = widget.initialLink;
     if (link != null) {

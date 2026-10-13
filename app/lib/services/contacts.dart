@@ -498,8 +498,14 @@ class ContactsService extends ChangeNotifier {
             (contact.device.isEmpty || c.device != contact.device))
           c,
     ];
+    _syncPeerName();
     await _save();
   }
+
+  /// La burbuja enseña el nombre de quien habla; se renueva si el contacto
+  /// se presenta o se renombra a mitad de conversación.
+  void _syncPeerName() =>
+      unawaited(BackgroundSession.setPeerName(talkingWith?.name ?? ''));
 
   Future<void> _save() async {
     await prefs?.setString(
@@ -568,6 +574,7 @@ class ContactsService extends ChangeNotifier {
     if (_wasLive && !live && _invitingId != null) stopInviting();
     if (_wasLive && !live && _talkingId != null) {
       _talkingId = null;
+      _syncPeerName();
       notifyListeners();
     }
     _wasLive = live;

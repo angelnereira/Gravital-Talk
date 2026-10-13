@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.view.KeyEvent
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -77,9 +78,12 @@ class MainActivity : FlutterActivity() {
         SessionService.onCallAction = { accept ->
             runOnUiThread { background.invokeMethod(if (accept) "answerCall" else "declineCall", null) }
         }
-        PttBubble.onPtt = { down ->
+        val ptt: (Boolean) -> Unit = { down ->
             runOnUiThread { background.invokeMethod(if (down) "pttDown" else "pttUp", null) }
         }
+        PttBubble.onPtt = ptt
+        PttKeys.onPtt = ptt
+        PttBubble.onResume = { runOnUiThread { background.invokeMethod("resume", null) } }
         background.setMethodCallHandler { call, result ->
             val service = Intent(this, SessionService::class.java)
             when (call.method) {
@@ -131,15 +135,28 @@ class MainActivity : FlutterActivity() {
                         "ringing" -> PttBubble.Mode.RINGING
                         else -> PttBubble.Mode.OFF
                     }
+                    val talking = call.argument<Boolean>("talking") == true
+                    val paused = call.argument<Boolean>("paused") == true
                     PttBubble.update(
                         this,
                         mode,
-                        talking = call.argument<Boolean>("talking") == true,
-                        paused = call.argument<Boolean>("paused") == true,
+                        talking = talking,
+                        paused = paused,
                         peerTalking = call.argument<Boolean>("peerTalking") == true,
+                        peerName = call.argument<String>("peerName").orEmpty(),
                         caller = call.argument<String>("caller").orEmpty(),
+                        room = call.argument<String>("room").orEmpty(),
                         enabled = call.argument<Boolean>("enabled") != false,
                     )
+                    PttKeys.update(
+                        this,
+                        inSession = mode == PttBubble.Mode.SESSION,
+                        talking = talking,
+                        paused = paused,
+                        headset = call.argument<Boolean>("headset") != false,
+                        volume = call.argument<Boolean>("volume") == true,
+                    )
+                    PttTileService.refresh(this)
                     result.success(true)
                 }
                 "moveToBack" -> result.success(moveTaskToBack(true))
@@ -156,6 +173,10 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    /** Con la app a la vista, los botones de volumen pueden ser el de hablar. */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean =
+        PttKeys.onVolumeKey(event) || super.dispatchKeyEvent(event)
+
     override fun onStart() {
         super.onStart()
         PttBubble.setAppVisible(this, true)
@@ -170,6 +191,8 @@ class MainActivity : FlutterActivity() {
     override fun onDestroy() {
         // Sin actividad no hay Dart que mantenga la sesión.
         PttBubble.release()
+        PttKeys.release()
+        PttTileService.refresh(this)
         SessionService.onLeave = null
         SessionService.onTogglePtt = null
         SessionService.onCallAction = null
