@@ -30,6 +30,48 @@ enum AudioCodec {
   final String label;
 }
 
+/// Cómo se trata y se comprime la voz: cada perfil es un equilibrio distinto
+/// entre naturalidad, limpieza y datos. Los ajustes de cada uno viven en la
+/// librería nativa (`VoiceProfile` del códec); aquí sólo se elige.
+enum VoiceProfile {
+  clear(
+    1,
+    'Clara',
+    32000,
+    'La voz más natural. Unos 0,55 MB por minuto hablado.',
+  ),
+  call(
+    2,
+    'Llamada',
+    16000,
+    'Limpia y estable, con menos datos. Unos 0,45 MB por minuto.',
+  ),
+  noisy(
+    3,
+    'Ruido',
+    24000,
+    'Para la calle o un sitio ruidoso: quita más fondo, a costa de algo de '
+        'naturalidad. Unos 0,5 MB por minuto.',
+  ),
+  light(
+    4,
+    'Ligero',
+    12000,
+    'El mínimo de datos, para coberturas malas. No transmite los silencios. '
+        'Unos 0,4 MB por minuto.',
+  );
+
+  const VoiceProfile(this.code, this.label, this.bitrateCap, this.description);
+
+  /// Código que entiende la librería nativa (`GS_VOICE_*`).
+  final int code;
+  final String label;
+
+  /// Tope de la tasa de bits del perfil.
+  final int bitrateCap;
+  final String description;
+}
+
 /// Modo de tema de la interfaz.
 enum AppThemeMode {
   system('Sistema'),
@@ -49,17 +91,13 @@ class AppSettings {
     this.frameDurationMs = 20,
     this.jitterBufferMs = 60,
     this.mtu = 1200,
-    this.maxBitrate = 128000,
     this.codec = AudioCodec.opus,
     this.themeMode = AppThemeMode.system,
     this.rendezvous = '',
-    this.noiseSuppression = true,
+    this.voiceProfile = VoiceProfile.clear,
     this.turnTones = true,
     this.nativeAudio = false,
   });
-
-  /// Tasas de audio que se pueden elegir, de más calidad a más ligera.
-  static const bitrateOptions = <int>[128000, 64000, 32000, 16000];
 
   /// Valores que usa la app cuando nadie ha configurado nada.
   ///
@@ -73,7 +111,6 @@ class AppSettings {
   final int frameDurationMs;
   final int jitterBufferMs;
   final int mtu;
-  final int maxBitrate;
   final AudioCodec codec;
   final AppThemeMode themeMode;
 
@@ -85,8 +122,8 @@ class AppSettings {
   /// fuera).
   final String rendezvous;
 
-  /// Quitar el ruido de fondo del micrófono antes de enviar.
-  final bool noiseSuppression;
+  /// Tratamiento y compresión de la voz.
+  final VoiceProfile voiceProfile;
 
   /// Tonos cortos al empezar y terminar un turno de palabra.
   final bool turnTones;
@@ -101,11 +138,10 @@ class AppSettings {
     int? frameDurationMs,
     int? jitterBufferMs,
     int? mtu,
-    int? maxBitrate,
     AudioCodec? codec,
     AppThemeMode? themeMode,
     String? rendezvous,
-    bool? noiseSuppression,
+    VoiceProfile? voiceProfile,
     bool? turnTones,
     bool? nativeAudio,
   }) {
@@ -115,11 +151,10 @@ class AppSettings {
       frameDurationMs: frameDurationMs ?? this.frameDurationMs,
       jitterBufferMs: jitterBufferMs ?? this.jitterBufferMs,
       mtu: mtu ?? this.mtu,
-      maxBitrate: maxBitrate ?? this.maxBitrate,
       codec: codec ?? this.codec,
       themeMode: themeMode ?? this.themeMode,
       rendezvous: rendezvous ?? this.rendezvous,
-      noiseSuppression: noiseSuppression ?? this.noiseSuppression,
+      voiceProfile: voiceProfile ?? this.voiceProfile,
       turnTones: turnTones ?? this.turnTones,
       nativeAudio: nativeAudio ?? this.nativeAudio,
     );

@@ -184,8 +184,11 @@ class AudioPump {
         encoder: AudioEncoder.pcm16bits,
         sampleRate: sampleRate,
         numChannels: channels,
-        noiseSuppress: true,
-        autoGain: true,
+        // El ruido y el nivel los trata la librería nativa (perfil de voz),
+        // igual en todos los teléfonos. Con los efectos del sistema además,
+        // la voz pasaba dos veces por lo mismo y salía artificial.
+        noiseSuppress: false,
+        autoGain: false,
         // Entregar de frame en frame: un buffer mayor es latencia añadida.
         streamBufferSize: _frameBytes,
       ));

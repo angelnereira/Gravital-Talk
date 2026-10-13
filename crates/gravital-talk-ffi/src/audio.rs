@@ -273,9 +273,9 @@ mod imp {
             .and_then(|v| v.parse::<f64>().ok())
             .filter(|hz| *hz > 0.0);
         // Un tono puro es, para el reductor de ruido, ruido: lo eliminaría y
-        // la prueba mediría silencio.
+        // la prueba mediría silencio. Y el nivelador le cambiaría el volumen.
         if tone_hz.is_some() {
-            pipeline.set_noise_suppression(false);
+            pipeline.set_voice_profile(gravital_talk_codec::VoiceProfile::Raw);
         }
         let open_mic = || match VoiceCapture::start(sample_rate, frame_samples) {
             Ok((capture, frames)) => Source::Mic {

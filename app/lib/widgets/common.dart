@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:percent_indicator/linear_percent_indicator.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -441,6 +442,32 @@ class PttButton extends StatefulWidget {
 }
 
 class _PttButtonState extends State<PttButton> {
+  /// Dedo que mantiene pulsado el botón, o `null` si no lo está.
+  int? _pointer;
+
+  void _down(PointerDownEvent event) {
+    if (!widget.enabled || _pointer != null) return;
+    _pointer = event.pointer;
+    Haptics.pttDown();
+    widget.onDown();
+  }
+
+  /// El turno dura mientras ese dedo siga en la pantalla, esté donde esté:
+  /// salirse del círculo sin querer no corta a quien habla.
+  void _release(PointerEvent event) {
+    if (event.pointer != _pointer) return;
+    _pointer = null;
+    Haptics.pttUp();
+    widget.onUp();
+  }
+
+  @override
+  void dispose() {
+    // Si la pantalla desaparece con el botón pulsado, no se queda abierto.
+    if (_pointer != null) widget.onUp();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -453,21 +480,23 @@ class _PttButtonState extends State<PttButton> {
         ? GlassAccent.transmit
         : (widget.peerSpeaking ? scheme.tertiary : scheme.primary);
 
-    final disc = GestureDetector(
-      onTapDown: enabled
-          ? (_) {
-              Haptics.pttDown();
-              widget.onDown();
-            }
-          : null,
-      onTapUp: enabled
-          ? (_) {
-              Haptics.pttUp();
-              widget.onUp();
-            }
-          : null,
-      onTapCancel: enabled ? widget.onUp : null,
-      child: Semantics(
+    // `Listener` y no un detector de toques: un toque se cancela en cuanto
+    // el dedo se mueve unos píxeles o sale del botón. El reconocedor que lo
+    // acompaña se queda el gesto, para que arrastrar el dedo no desplace la
+    // pantalla mientras se habla.
+    final disc = Listener(
+      onPointerDown: _down,
+      onPointerUp: _release,
+      onPointerCancel: _release,
+      child: RawGestureDetector(
+        gestures: {
+          EagerGestureRecognizer:
+              GestureRecognizerFactoryWithHandlers<EagerGestureRecognizer>(
+            EagerGestureRecognizer.new,
+            (_) {},
+          ),
+        },
+        child: Semantics(
         button: true,
         enabled: enabled,
         label: pressed
@@ -498,7 +527,7 @@ class _PttButtonState extends State<PttButton> {
                           ? Icons.hearing
                           : Icons.mic,
                       color: signalColor,
-                      size: 34,
+                      size: 44,
                     ),
                     const SizedBox(height: Spacing.sm),
                     Text(
@@ -507,7 +536,7 @@ class _PttButtonState extends State<PttButton> {
                       style: TextStyle(
                         color: enabled ? signalColor : scheme.outline,
                         fontWeight: FontWeight.w800,
-                        fontSize: 10,
+                        fontSize: 12,
                         letterSpacing: 0.8,
                       ),
                     ),
@@ -517,6 +546,7 @@ class _PttButtonState extends State<PttButton> {
             ),
           ),
         ),
+      ),
       ),
     );
 

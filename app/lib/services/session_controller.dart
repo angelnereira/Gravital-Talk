@@ -893,9 +893,8 @@ class SessionController extends ChangeNotifier {
         e.status == GsStatus.handshake ||
         e.message.contains('timeout')) {
       return _role == ConnectionRole.join
-          ? 'No se pudo llegar a la sala. Comprueba que sigue abierta. Si '
-              'estáis en redes distintas, el anfitrión tiene que escanear el '
-              'código de respuesta que aparece al unirte.'
+          ? 'No se pudo llegar a la sala. Comprueba que sigue abierta y '
+              'vuelve a abrir la invitación.'
           : 'Nadie llegó a conectarse. Vuelve a crear la sala.';
     }
     return 'No se pudo conectar: ${e.message}';

@@ -285,7 +285,7 @@ class FfiSessionEngine implements SessionEngine, KnockCodec {
       sampleRate: settings.sampleRate,
       channels: settings.channels,
       frameDurationMs: _frameMs,
-      maxBitrate: settings.maxBitrate,
+      maxBitrate: settings.voiceProfile.bitrateCap,
       // Voz comprimida: la librería codifica y decodifica por dentro, y la
       // app sigue viendo PCM. Si el otro extremo no la admite, se negocia PCM.
       codecPreferred: AudioCodec.opus.code,
@@ -293,7 +293,7 @@ class FfiSessionEngine implements SessionEngine, KnockCodec {
       mtu: settings.mtu,
       bindPort: bindPort,
     );
-    _session!.setNoiseSuppression(settings.noiseSuppression);
+    _session!.setVoiceProfile(settings.voiceProfile.code);
   }
 
   /// Arranca el audio de la sesión recién conectada.
@@ -408,8 +408,7 @@ class FfiSessionEngine implements SessionEngine, KnockCodec {
     final session = _session;
     if (session == null) return;
     try {
-      session.setNoiseSuppression(settings.noiseSuppression);
-      session.setBitrate(settings.maxBitrate);
+      session.setVoiceProfile(settings.voiceProfile.code);
     } on NativeException {
       // Sesión ya cerrada: los ajustes se aplicarán a la siguiente.
     }

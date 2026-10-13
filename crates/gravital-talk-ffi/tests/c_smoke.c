@@ -33,6 +33,13 @@ int main(void) {
     }
     printf("Audio nativo: %s\n", gs_audio_supported() ? "si" : "no");
 
+    /* Un perfil de voz se puede elegir antes de conectar; uno que no existe se rechaza. */
+    if (gs_session_set_voice_profile(session, GS_VOICE_CLEAR) != GS_OK ||
+        gs_session_set_voice_profile(session, 200) != GS_ERR_INVALID_ARGUMENT) {
+        fprintf(stderr, "gs_session_set_voice_profile no se comporta como dice\n");
+        return 1;
+    }
+
     /* Sin servidor de encuentro: quitarlo es valido y no toca la red. */
     st = gs_session_set_rendezvous(session, NULL, 0);
     if (st != GS_OK) {

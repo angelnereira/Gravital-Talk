@@ -7,6 +7,7 @@ import 'core/theme.dart';
 import 'models/connection.dart';
 import 'screens/home_screen.dart';
 import 'core/routes.dart';
+import 'core/states.dart';
 import 'screens/invite_screen.dart';
 import 'screens/onboarding_screen.dart';
 import 'screens/pairing_screen.dart';
@@ -119,13 +120,11 @@ class _GravitalTalkAppState extends State<GravitalTalkApp> {
         title: Text('${call.contact.name} quiere hablar'),
         content: const Text('Si aceptas, entras directamente en su sala.'),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialog, false),
-            child: const Text('Ahora no'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialog, true),
-            child: const Text('Aceptar'),
+          DialogActions(
+            cancelLabel: 'Ahora no',
+            onCancel: () => Navigator.pop(dialog, false),
+            confirmLabel: 'Aceptar',
+            onConfirm: () => Navigator.pop(dialog, true),
           ),
         ],
       ),
@@ -261,9 +260,8 @@ class _GravitalTalkAppState extends State<GravitalTalkApp> {
       return;
     }
     if (_showOnboarding) _finishOnboarding();
-    // Se entra por la misma pantalla que al escanear: muestra el progreso y,
-    // si hace falta, el código de respuesta. Ella misma pasa a la de hablar
-    // al conectar y enseña el error si falla.
+    // Se entra por la misma pantalla que al escanear: muestra el progreso,
+    // pasa a la de hablar al conectar y enseña el error si falla.
     final nav = _navigator.currentState;
     if (nav == null) return;
     nav.popUntil((route) => route.isFirst);

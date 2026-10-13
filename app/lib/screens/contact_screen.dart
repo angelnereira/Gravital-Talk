@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../core/glass.dart';
 import '../core/routes.dart';
+import '../core/states.dart';
 import '../core/tokens.dart';
 import '../services/contacts.dart';
 import '../services/session_controller.dart';
@@ -60,13 +61,12 @@ class _ContactScreenState extends State<ContactScreen> {
           'compartir una invitación nueva.',
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialog, false),
-            child: const Text('Cancelar'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialog, true),
-            child: const Text('Eliminar'),
+          DialogActions(
+            cancelLabel: 'Cancelar',
+            onCancel: () => Navigator.pop(dialog, false),
+            confirmLabel: 'Eliminar',
+            onConfirm: () => Navigator.pop(dialog, true),
+            destructive: true,
           ),
         ],
       ),

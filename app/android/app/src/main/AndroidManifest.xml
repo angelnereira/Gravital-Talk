@@ -53,6 +53,19 @@
                 <data android:scheme="gravital-talk" android:host="contact"/>
                 <data android:scheme="gravital-talk" android:host="i"/>
             </intent-filter>
+            <!-- La misma invitación en su forma web, que es la que las apps de
+                 mensajería hacen pulsable. Apunta al propio teléfono: no hay
+                 ninguna web detrás. Va en un filtro aparte para que el
+                 esquema propio no herede host ni puerto. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="http"/>
+                <data android:host="localhost" android:port="47801"/>
+                <data android:host="127.0.0.1" android:port="47801"/>
+                <data android:pathPrefix="/gravital-talk/"/>
+            </intent-filter>
             <!-- Compartir un mensaje con una invitación desde cualquier chat:
                  evita copiar y pegar donde el enlace no es pulsable. -->
             <intent-filter>

@@ -31,15 +31,18 @@ use nnnoiseless::DenoiseState;
 use unsafe_libopus::{
     opus_decode, opus_decoder_create, opus_decoder_destroy, opus_encode, opus_encoder_create,
     opus_encoder_ctl, opus_encoder_destroy, OpusDecoder, OpusEncoder, OPUS_APPLICATION_VOIP,
-    OPUS_SET_BITRATE_REQUEST, OPUS_SET_COMPLEXITY_REQUEST, OPUS_SET_INBAND_FEC_REQUEST,
-    OPUS_SET_PACKET_LOSS_PERC_REQUEST, OPUS_SET_SIGNAL_REQUEST, OPUS_SIGNAL_VOICE,
+    OPUS_SET_BITRATE_REQUEST, OPUS_SET_COMPLEXITY_REQUEST, OPUS_SET_DTX_REQUEST,
+    OPUS_SET_INBAND_FEC_REQUEST, OPUS_SET_PACKET_LOSS_PERC_REQUEST, OPUS_SET_SIGNAL_REQUEST,
+    OPUS_SIGNAL_VOICE,
 };
 
 use crate::error::CodecError;
+use crate::voice_dsp::{Biquad, Leveler, VoiceTuning};
 use crate::Result;
 
-/// Tasa mínima a la que se deja bajar el codificador.
-pub const MIN_BITRATE: u32 = 16_000;
+/// Tasa mínima a la que se deja bajar el codificador. Por debajo Opus sigue
+/// funcionando, pero la voz deja de entenderse con comodidad.
+pub const MIN_BITRATE: u32 = 8_000;
 
 /// Tasa máxima admitida.
 pub const MAX_BITRATE: u32 = 128_000;
@@ -54,23 +57,24 @@ pub const MAX_PACKET: usize = 600;
 /// codifica sin esfuerzo y la calidad ya está cerca del máximo.
 const COMPLEXITY: i32 = 5;
 
-/// Probabilidad de voz a partir de la cual un bloque se da por hablado.
-const VOICE_THRESHOLD: f32 = 0.5;
-
-/// Bloques de 10 ms que la puerta sigue abierta tras la última voz, para no
-/// recortar finales de palabra ni las pausas entre sílabas.
-const GATE_HANGOVER: u32 = 30;
-
-/// Ganancia con la puerta cerrada. No es cero a propósito: un silencio digital
-/// absoluto entre frases suena a línea cortada.
-const GATE_FLOOR: f32 = 0.12;
-
 /// Cuánto se acerca la ganancia a su objetivo en cada bloque al cerrar. Abrir
 /// es inmediato: retrasarlo se comería el arranque de cada palabra.
 const GATE_RELEASE: f32 = 0.25;
 
 /// Tamaño de frame de RNNoise: 10 ms a 48 kHz.
 const DENOISE_FRAME: usize = DenoiseState::FRAME_SIZE;
+
+/// Corte del pasa-altos de entrada. Por debajo no hay voz: hay retumbe,
+/// viento y golpes en el micrófono.
+const HIGH_PASS_HZ: f32 = 90.0;
+
+/// RMS a partir del cual un bloque cuenta como voz cuando no hay RNNoise que
+/// lo diga (−40 dBFS).
+const ENERGY_VOICED: f32 = 330.0;
+
+/// Un paquete de este tamaño o menor es el aviso de Opus de que el frame es
+/// silencio y no hace falta transmitirlo.
+pub const DTX_PACKET: usize = 2;
 
 const fn valid_rate(sample_rate: u32) -> bool {
     matches!(sample_rate, 8_000 | 12_000 | 16_000 | 24_000 | 48_000)
@@ -93,6 +97,13 @@ pub struct VoiceEncoder {
     gate_hold: u32,
     scratch_in: [f32; DENOISE_FRAME],
     scratch_out: [f32; DENOISE_FRAME],
+    /// Entrada del bloque anterior. RNNoise entrega cada bloque con 10 ms de
+    /// retraso; para mezclar su salida con la señal original hay que
+    /// retrasar ésta lo mismo, o las dos se cancelarían a trozos.
+    dry: [f32; DENOISE_FRAME],
+    tuning: VoiceTuning,
+    high_pass: Biquad,
+    leveler: Leveler,
 }
 
 // SAFETY: el estado de Opus es memoria propia de este objeto, sin referencias
@@ -140,9 +151,13 @@ impl VoiceEncoder {
             denoise,
             denoise_enabled: true,
             gate_gain: 1.0,
-            gate_hold: GATE_HANGOVER,
+            gate_hold: VoiceTuning::LEGACY.gate_hangover,
             scratch_in: [0.0; DENOISE_FRAME],
             scratch_out: [0.0; DENOISE_FRAME],
+            dry: [0.0; DENOISE_FRAME],
+            tuning: VoiceTuning::LEGACY,
+            high_pass: Biquad::high_pass(sample_rate, HIGH_PASS_HZ),
+            leveler: Leveler::new(),
         };
         encoder.ctl(OPUS_SET_SIGNAL_REQUEST, OPUS_SIGNAL_VOICE)?;
         encoder.ctl(OPUS_SET_COMPLEXITY_REQUEST, COMPLEXITY)?;
@@ -188,6 +203,24 @@ impl VoiceEncoder {
         )
     }
 
+    /// Aplica los ajustes de un perfil de voz.
+    ///
+    /// No toca la tasa de bits: `tuning.bitrate` es un tope, y quien lleva la
+    /// tasa real (que baja y sube con la red) es quien llama.
+    pub fn set_tuning(&mut self, tuning: &VoiceTuning) -> Result<()> {
+        self.tuning = *tuning;
+        self.gate_hold = self.gate_hold.min(tuning.gate_hangover);
+        self.ctl(OPUS_SET_DTX_REQUEST, i32::from(tuning.dtx))?;
+        // Sin pérdida esperada, Opus no gasta bits en la copia de respaldo.
+        self.set_expected_loss(if tuning.fec_always { 10 } else { 0 })
+    }
+
+    /// Los ajustes en vigor.
+    #[must_use]
+    pub const fn tuning(&self) -> &VoiceTuning {
+        &self.tuning
+    }
+
     /// Activa o desactiva la reducción de ruido. No hace nada si el formato
     /// no la admite.
     pub const fn set_noise_suppression(&mut self, enabled: bool) {
@@ -197,7 +230,7 @@ impl VoiceEncoder {
     /// `true` si la reducción de ruido está disponible y activa.
     #[must_use]
     pub const fn noise_suppression(&self) -> bool {
-        self.denoise_enabled && self.denoise.is_some()
+        self.denoise_enabled && self.denoise.is_some() && self.tuning.denoise_mix > 0.0
     }
 
     /// Codifica un frame. `pcm` se modifica: queda con el ruido reducido.
@@ -210,8 +243,14 @@ impl VoiceEncoder {
                 got: pcm.len(),
             });
         }
-        if self.denoise_enabled {
-            if let Some(denoise) = self.denoise.as_mut() {
+        let tuning = self.tuning;
+        if tuning.high_pass {
+            self.high_pass.process(pcm);
+        }
+        let denoising = self.denoise_enabled && tuning.denoise_mix > 0.0;
+        match self.denoise.as_mut().filter(|_| denoising) {
+            Some(denoise) => {
+                let wet = tuning.denoise_mix.min(1.0);
                 for block in pcm.as_chunks_mut::<DENOISE_FRAME>().0 {
                     // RNNoise trabaja en `f32` con la escala de `i16`.
                     for (dst, src) in self.scratch_in.iter_mut().zip(block.iter()) {
@@ -222,21 +261,45 @@ impl VoiceEncoder {
                     // ruido que acompaña a la voz, pero con sólo ruido deja
                     // pasar bastante; su propia estimación de "aquí hay voz"
                     // sirve para bajar el resto.
-                    if voice >= VOICE_THRESHOLD {
-                        self.gate_hold = GATE_HANGOVER;
+                    let voiced = voice >= tuning.gate_threshold;
+                    if voiced {
+                        self.gate_hold = tuning.gate_hangover;
                         self.gate_gain = 1.0;
                     } else if self.gate_hold > 0 {
                         self.gate_hold -= 1;
                     } else {
-                        self.gate_gain =
-                            (GATE_FLOOR - self.gate_gain).mul_add(GATE_RELEASE, self.gate_gain);
+                        self.gate_gain = (tuning.gate_floor - self.gate_gain)
+                            .mul_add(GATE_RELEASE, self.gate_gain);
                     }
                     let gain = self.gate_gain;
+                    for (out, dry) in self.scratch_out.iter_mut().zip(self.dry.iter()) {
+                        *out = (*out - dry).mul_add(wet, *dry) * gain;
+                    }
+                    self.dry = self.scratch_in;
+                    if tuning.leveler {
+                        self.leveler.process(&mut self.scratch_out, voiced);
+                    }
                     for (dst, src) in block.iter_mut().zip(self.scratch_out.iter()) {
-                        *dst = (src * gain).clamp(-32768.0, 32767.0) as i16;
+                        *dst = src.clamp(-32768.0, 32767.0) as i16;
                     }
                 }
             }
+            // Sin RNNoise nadie dice dónde hay voz: lo decide la energía.
+            None if tuning.leveler => {
+                for block in pcm.chunks_mut(DENOISE_FRAME) {
+                    let buf = &mut self.scratch_out[..block.len()];
+                    for (dst, src) in buf.iter_mut().zip(block.iter()) {
+                        *dst = f32::from(*src);
+                    }
+                    let energy: f32 = buf.iter().map(|s| s * s).sum();
+                    let voiced = (energy / buf.len() as f32).sqrt() > ENERGY_VOICED;
+                    self.leveler.process(buf, voiced);
+                    for (dst, src) in block.iter_mut().zip(buf.iter()) {
+                        *dst = src.clamp(-32768.0, 32767.0) as i16;
+                    }
+                }
+            }
+            None => {}
         }
         // SAFETY: `self.raw` es un codificador vivo; `pcm` tiene exactamente
         // `frame_samples` muestras mono y `out` tiene `out.len()` bytes
@@ -587,5 +650,108 @@ mod tests {
         let (mut enc, _) = pair(64_000);
         let mut short = [0i16; 100];
         assert!(enc.encode(&mut short, &mut [0u8; MAX_PACKET]).is_err());
+    }
+
+    #[test]
+    fn con_dtx_el_silencio_dentro_de_un_turno_no_se_transmite() {
+        use crate::voice_dsp::VoiceProfile;
+        let tuning = VoiceProfile::Light.tuning();
+        let mut enc = VoiceEncoder::new(RATE, 20, tuning.bitrate).unwrap();
+        enc.set_tuning(&tuning).unwrap();
+        let mut out = [0u8; MAX_PACKET];
+        let mut skipped = 0;
+        for _ in 0..150 {
+            let mut silence = vec![0i16; FRAME];
+            if enc.encode(&mut silence, &mut out).unwrap() <= DTX_PACKET {
+                skipped += 1;
+            }
+        }
+        // Opus tarda unos frames en darlo por silencio y manda uno de vez en
+        // cuando para mantener el ruido de fondo del receptor.
+        assert!(skipped > 100, "sólo {skipped} de 150 sin transmitir");
+
+        // Sin DTX se transmite todo, también el silencio.
+        let mut enc = VoiceEncoder::new(RATE, 20, 16_000).unwrap();
+        let mut sent = 0;
+        for _ in 0..50 {
+            let mut silence = vec![0i16; FRAME];
+            if enc.encode(&mut silence, &mut out).unwrap() > DTX_PACKET {
+                sent += 1;
+            }
+        }
+        assert_eq!(sent, 50);
+    }
+
+    #[test]
+    fn la_copia_de_respaldo_no_cambia_el_tamano_sino_el_reparto() {
+        use crate::voice_dsp::{VoiceProfile, VoiceTuning};
+        let bytes = |tuning: VoiceTuning| {
+            let mut enc = VoiceEncoder::new(RATE, 20, 24_000).unwrap();
+            enc.set_tuning(&tuning).unwrap();
+            enc.set_noise_suppression(false);
+            let mut out = [0u8; MAX_PACKET];
+            let mut phase = 0.0;
+            (0..100)
+                .map(|_| enc.encode(&mut tone(440.0, &mut phase), &mut out).unwrap())
+                .sum::<usize>() as f64
+        };
+        // Opus respeta la tasa pedida con o sin copia: quitarla no ahorra
+        // datos, deja esos bits para la voz. Por eso sólo se activa cuando la
+        // red pierde paquetes.
+        let always = VoiceProfile::Raw.tuning();
+        let on_demand = VoiceTuning {
+            fec_always: false,
+            ..always
+        };
+        let ratio = bytes(on_demand) / bytes(always);
+        assert!((0.9..1.1).contains(&ratio), "relación {ratio}");
+    }
+
+    #[test]
+    fn el_nivelador_sube_una_entrada_baja_antes_de_codificar() {
+        use crate::voice_dsp::{VoiceProfile, VoiceTuning};
+        let mut enc = VoiceEncoder::new(RATE, 20, 32_000).unwrap();
+        enc.set_tuning(&VoiceTuning {
+            leveler: true,
+            ..VoiceProfile::Raw.tuning()
+        })
+        .unwrap();
+        let mut out = [0u8; MAX_PACKET];
+        let mut phase = 0.0f32;
+        let mut last = 0.0;
+        let mut first = 0.0;
+        for i in 0..150 {
+            let mut pcm: Vec<i16> = (0..FRAME)
+                .map(|_| {
+                    let s = (phase.sin() * 900.0) as i16;
+                    phase += core::f32::consts::TAU * 300.0 / RATE as f32;
+                    s
+                })
+                .collect();
+            if i == 0 {
+                first = rms(&pcm);
+            }
+            enc.encode(&mut pcm, &mut out).unwrap();
+            last = rms(&pcm);
+        }
+        assert!(last > first * 3.0, "de {first} a {last}");
+        assert!(last < 6000.0, "se pasó: {last}");
+    }
+
+    #[test]
+    fn a_12_kbps_el_audio_sigue_ahi() {
+        let (mut enc, mut dec) = pair(12_000);
+        let mut out = [0u8; MAX_PACKET];
+        let mut pcm = vec![0i16; FRAME];
+        let mut phase = 0.0;
+        let (mut bytes, mut energy) = (0usize, 0.0);
+        for _ in 0..100 {
+            let n = enc.encode(&mut tone(440.0, &mut phase), &mut out).unwrap();
+            bytes += n;
+            dec.decode(&out[..n], &mut pcm).unwrap();
+            energy = rms(&pcm);
+        }
+        assert!(bytes / 100 <= 45, "{} B por frame", bytes / 100);
+        assert!(energy > 2000.0, "rms {energy}");
     }
 }

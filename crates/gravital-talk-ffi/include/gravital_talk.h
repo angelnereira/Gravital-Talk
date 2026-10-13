@@ -26,6 +26,31 @@
 #define GS_TONE_TURN_END 1
 
 /*
+ Perfil sin tratamiento de voz: para tonos de prueba y medidas.
+ */
+#define GS_VOICE_RAW 0
+
+/*
+ La voz más natural: poco filtrado, hasta 32 kbps.
+ */
+#define GS_VOICE_CLEAR 1
+
+/*
+ Como una buena llamada: limpia, hasta 16 kbps.
+ */
+#define GS_VOICE_CALL 2
+
+/*
+ Para sitios ruidosos: se prioriza que se entienda. Hasta 24 kbps.
+ */
+#define GS_VOICE_NOISY 3
+
+/*
+ El mínimo de datos: hasta 12 kbps, y no transmite los silencios.
+ */
+#define GS_VOICE_LIGHT 4
+
+/*
  Estado dinámico de una sesión para consumidores C.
  */
 enum GsSessionState
@@ -610,13 +635,30 @@ GsStatus gs_session_set_noise_suppression(GsSessionHandle *handle, int on);
 /*
  Fija el tope de la tasa de bits del audio, en bits por segundo.
 
- Se acota a 16 000–128 000. La tasa real baja por debajo del tope si la red
+ Se acota a 8 000–128 000. La tasa real baja por debajo del tope si la red
  pierde paquetes y vuelve a subir cuando se recupera.
 
  # Safety
  `handle` debe ser un handle válido de `gs_session_create`.
  */
 GsStatus gs_session_set_bitrate(GsSessionHandle *handle, uint32_t bitrate);
+
+/*
+ Elige el perfil de voz (`GS_VOICE_*`).
+
+ Un perfil fija a la vez la reducción de ruido, la nivelación de la voz, el
+ tope de la tasa de bits y si se transmiten los silencios; al escuchar,
+ también el realce de presencia. Sin llamar a esta función el códec se
+ comporta como antes de que existieran los perfiles. Lo que se ajuste
+ después con `gs_session_set_noise_suppression` o `gs_session_set_bitrate`
+ manda sobre el perfil.
+
+ Devuelve `GS_ERR_INVALID_ARGUMENT` si el perfil no existe.
+
+ # Safety
+ `handle` debe ser un handle válido de `gs_session_create`.
+ */
+GsStatus gs_session_set_voice_profile(GsSessionHandle *handle, uint8_t profile);
 
 /*
  Tasa de bits a la que se está enviando el audio ahora mismo, o `0` si

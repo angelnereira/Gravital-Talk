@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 
 import '../core/constants.dart';
 import '../core/glass.dart';
+import '../core/states.dart';
 import '../core/tokens.dart';
 import '../models/connection.dart';
 import '../services/contacts.dart';
@@ -195,75 +196,41 @@ class _SettingsScreenState extends State<SettingsScreen>
                       ],
               ),
               _Section(
-                title: 'Audio',
-                subtitle: 'Menos calidad es un audio más ligero: aguanta '
-                    'mejor una red floja y gasta menos datos.',
+                title: 'Voz',
+                subtitle: 'Cómo suena tu voz al otro lado y cuántos datos '
+                    'gasta. Se nivela sola y se le quita el ruido de fondo; '
+                    'el perfil decide cuánto.',
                 children: [
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: Spacing.md),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          'Calidad (kbps)',
-                          style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                                fontWeight: FontWeight.w600,
-                                color: GlassTextTheme.of(context).primary,
-                              ),
-                        ),
-                        const SizedBox(height: Spacing.sm),
                         SizedBox(
                           width: double.infinity,
-                          child: SegmentedButton<int>(
+                          child: SegmentedButton<VoiceProfile>(
                             showSelectedIcon: false,
                             segments: [
-                              for (final rate in AppSettings.bitrateOptions)
+                              for (final profile in VoiceProfile.values)
                                 ButtonSegment(
-                                  value: rate,
-                                  label: Text('${rate ~/ 1000}'),
+                                  value: profile,
+                                  label: Text(profile.label),
                                 ),
                             ],
-                            selected: {
-                              AppSettings.bitrateOptions.contains(s.maxBitrate)
-                                  ? s.maxBitrate
-                                  : AppSettings.bitrateOptions.first,
-                            },
+                            selected: {s.voiceProfile},
                             onSelectionChanged: (sel) => c.updateSettings(
-                              s.copyWith(maxBitrate: sel.first),
+                              s.copyWith(voiceProfile: sel.first),
                             ),
                           ),
                         ),
-                        const SizedBox(height: Spacing.xs),
+                        const SizedBox(height: Spacing.sm),
                         Text(
-                          switch (s.maxBitrate) {
-                            >= 128000 => 'Máxima calidad. Unos 1 MB por minuto '
-                                'hablado.',
-                            >= 64000 => 'Equilibrada. Unos 0,5 MB por minuto.',
-                            >= 32000 => 'Ligera y estable. Unos 0,25 MB por '
-                                'minuto.',
-                            _ => 'Mínimo de datos, para coberturas malas. La '
-                                'voz se entiende, con menos matices.',
-                          },
+                          s.voiceProfile.description,
                           style: Theme.of(context).textTheme.bodySmall?.copyWith(
                                 color: GlassTextTheme.of(context).secondary,
                               ),
                         ),
                       ],
-                    ),
-                  ),
-                  _Row(
-                    icon: Icons.noise_control_off,
-                    title: 'Reducción de ruido',
-                    subtitle: 'Quita el ruido de fondo para que sólo se oiga '
-                        'tu voz.',
-                    trailing: Switch(
-                      value: s.noiseSuppression,
-                      onChanged: (on) => c.updateSettings(
-                        s.copyWith(noiseSuppression: on),
-                      ),
-                    ),
-                    onTap: () => c.updateSettings(
-                      s.copyWith(noiseSuppression: !s.noiseSuppression),
                     ),
                   ),
                   if (_hasRuntimePermissions && experimentalFeatures)
@@ -424,13 +391,11 @@ class _SettingsScreenState extends State<SettingsScreen>
           onSubmitted: (v) => Navigator.pop(dialog, v),
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialog),
-            child: const Text('Cancelar'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialog, ctl.text),
-            child: const Text('Guardar'),
+          DialogActions(
+            cancelLabel: 'Cancelar',
+            onCancel: () => Navigator.pop(dialog),
+            confirmLabel: 'Guardar',
+            onConfirm: () => Navigator.pop(dialog, ctl.text),
           ),
         ],
       ),
@@ -489,12 +454,11 @@ class _SettingsScreenState extends State<SettingsScreen>
             ],
           ),
           actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogCtx),
-              child: const Text('Cancelar'),
-            ),
-            FilledButton(
-              onPressed: () {
+            DialogActions(
+              cancelLabel: 'Cancelar',
+              onCancel: () => Navigator.pop(dialogCtx),
+              confirmLabel: 'Guardar',
+              onConfirm: () {
                 final text = ctl.text.trim();
                 if (text.isNotEmpty && splitHostPort(text) == null) {
                   setDialog(() => error = 'Usa la forma host:puerto');
@@ -502,7 +466,6 @@ class _SettingsScreenState extends State<SettingsScreen>
                 }
                 Navigator.pop(dialogCtx, text);
               },
-              child: const Text('Guardar'),
             ),
           ],
         ),

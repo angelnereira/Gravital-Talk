@@ -15,7 +15,6 @@ class SettingsStore {
       frameDurationMs: p.getInt(PrefKeys.frameDurationMs) ?? 20,
       jitterBufferMs: p.getInt(PrefKeys.jitterBufferMs) ?? 60,
       mtu: p.getInt(PrefKeys.mtu) ?? 1200,
-      maxBitrate: p.getInt(PrefKeys.bitrate) ?? 128000,
       codec: AudioCodec.values.firstWhere(
         (c) => c.name == p.getString(PrefKeys.codec),
         orElse: () => AudioCodec.opus,
@@ -25,7 +24,10 @@ class SettingsStore {
         orElse: () => AppThemeMode.system,
       ),
       rendezvous: p.getString(PrefKeys.rendezvous) ?? '',
-      noiseSuppression: p.getBool(PrefKeys.noiseSuppression) ?? true,
+      voiceProfile: VoiceProfile.values.firstWhere(
+        (v) => v.name == p.getString(PrefKeys.voiceProfile),
+        orElse: () => VoiceProfile.clear,
+      ),
       turnTones: p.getBool(PrefKeys.turnTones) ?? true,
       nativeAudio: p.getBool(PrefKeys.nativeAudio) ?? false,
     );
@@ -38,8 +40,7 @@ class SettingsStore {
     await p.setInt(PrefKeys.frameDurationMs, s.frameDurationMs);
     await p.setInt(PrefKeys.jitterBufferMs, s.jitterBufferMs);
     await p.setInt(PrefKeys.mtu, s.mtu);
-    await p.setInt(PrefKeys.bitrate, s.maxBitrate);
-    await p.setBool(PrefKeys.noiseSuppression, s.noiseSuppression);
+    await p.setString(PrefKeys.voiceProfile, s.voiceProfile.name);
     await p.setBool(PrefKeys.turnTones, s.turnTones);
     await p.setBool(PrefKeys.nativeAudio, s.nativeAudio);
     await p.setString(PrefKeys.codec, s.codec.name);

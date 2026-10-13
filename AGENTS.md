@@ -172,6 +172,16 @@ app/build/linux/x64/release/bundle/gravital_talk_app [--host] [--auto-talk=N] [g
   defaults: `cargo test -p gravital-talk-codec --no-default-features --features voice`.
 - Con tonos puros hay que apagar la reducción de ruido (`GS_AUDIO_TEST_TONE` y
   los tests lo hacen): RNNoise trata un tono como ruido y lo elimina.
+- La voz se trata en Rust (`voice_dsp.rs`: pasa-altos, nivelador, limitador, y realce
+  de presencia al recibir) y se elige por **perfil** (`gs_session_set_voice_profile`,
+  `GS_VOICE_*`). La app ya no pide reducción de ruido ni ganancia automática al sistema:
+  sería tratar la voz dos veces. Para tonos y medidas, perfil `GS_VOICE_RAW`: el
+  nivelador también cambia el volumen de un tono.
+- Para juzgar un cambio en la voz hay que **oírlo**: `voice_lab` (ejemplo del códec) deja
+  un WAV por perfil a partir de una grabación. Las cifras de datos y lo que se probó y
+  descartó están en `docs/codecs.md`.
+- Sin llamar a `gs_session_set_voice_profile` el códec se comporta como antes de los
+  perfiles (`VoiceTuning::LEGACY`): es lo que ven el CLI y cualquier embebedor antiguo.
 
 ## Conexión entre redes (perforación de NAT)
 
@@ -190,6 +200,13 @@ cargo test -p gravital-talk-transport --test nat_punch   # red simulada, sin pri
   su puerto no es el de la sala.
 - Si cambias cómo se sondan o eligen los caminos, corre las dos pruebas: la red
   simulada no reproduce el estado de conntrack, y el NAT del kernel sí.
+- Mientras un extremo espera una respuesta del handshake le siguen llegando sondas del
+  otro. No pueden contar como intentos ni provocar reenvíos (`Session::recv_reply`): así
+  se agotaban los reintentos en milisegundos y la conexión entre redes fallaba una de cada
+  tres veces. El test es `las_sondas_ajenas_no_agotan_el_handshake_del_cliente`.
+- La app ya no enseña el «código de respuesta»: las direcciones del invitado le llegan
+  solas al anfitrión (red local y buzón, selladas con el token de la sala). Los enlaces
+  `answer` antiguos se siguen aceptando, pero ninguna pantalla los pide.
 - Sin servidor, lo que conecta dos redes distintas es el intercambio
   invitación ↔ respuesta (`PairingAnswer`, `Session::add_path_hints`) más el
   barrido de puertos. Para reproducirlo con el CLI: `gs peer --bind 0.0.0.0
@@ -367,6 +384,24 @@ quedarse con el recorte anterior: los iconos nuevos salen como un rombo o en bla
 `make app-linux` compila con `--no-tree-shake-icons`; si lanzas `flutter build linux` a
 mano, pásalo también. Otra causa de «icono que no se ve»: mismo color que su fondo (pasó
 en el onboarding con el primario sobre un vidrio con resplandor primario).
+
+## Enlaces de invitación: dos formas
+
+- La propia, `gravital-talk://…`, es la que llevan los QR y la que entiende el resto del
+  código. La que se **comparte o copia** es `http://localhost:47801/gravital-talk/…`
+  (`LaunchLinks.shareable`): las apps de mensajería no hacen pulsable un esquema propio.
+- Todo lo que entra (intent, argumento, portapapeles, texto pegado o compartido) pasa por
+  `LaunchLinks.extract`, que devuelve siempre la forma propia. No compares prefijos a mano.
+- Dos caminos para que el enlace web llegue a la app, ninguno con una web de por medio:
+  el filtro `http`/`localhost:47801` del manifiesto (abre la app aunque esté cerrada; la
+  primera vez Android pregunta) y `LaunchLinks.serveLocal`, que contesta en ese puerto
+  mientras la app vive (en Android con un 302 al esquema propio, que es lo que la trae al
+  frente; en escritorio atiende el enlace él mismo).
+- Probado en un Pixel con Android 17. La documentación de Android dice que desde la 12 un
+  enlace web sin dominio verificado va al navegador; con `localhost` no ocurrió, pero no
+  está comprobado en otros fabricantes. Para verlo: `cmd package query-activities` con el
+  enlace, y `toybox nc 127.0.0.1 47801` contra la app abierta.
+- iOS no tiene equivalente (exige un dominio verificado): allí se comparte el esquema.
 
 ## Buzón de señalización
 

@@ -82,6 +82,10 @@ app-linux: ## Compila la app de escritorio Linux con su motor de audio nativo
 	# queda con los iconos de una compilación anterior y los nuevos salen en blanco.
 	cd app && flutter build linux --release --no-tree-shake-icons
 
+.PHONY: install-linux
+install-linux: app-linux ## Compila la app de escritorio y la instala en este equipo
+	./scripts/install-linux.sh
+
 .PHONY: publish-builds
 publish-builds: ## Compila Android y Linux y sube los instalables al release `builds`
 	scripts/publish-builds.sh --build

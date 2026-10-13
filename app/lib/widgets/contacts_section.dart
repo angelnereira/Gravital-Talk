@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../core/glass.dart';
 import '../core/routes.dart';
+import '../core/states.dart';
 import '../core/tokens.dart';
 import '../screens/contact_screen.dart';
 import '../screens/invite_screen.dart';
@@ -111,13 +112,11 @@ class _ContactRow extends StatelessWidget {
           onSubmitted: (v) => Navigator.pop(dialog, v),
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialog),
-            child: const Text('Cancelar'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialog, ctl.text),
-            child: const Text('Guardar'),
+          DialogActions(
+            cancelLabel: 'Cancelar',
+            onCancel: () => Navigator.pop(dialog),
+            confirmLabel: 'Guardar',
+            onConfirm: () => Navigator.pop(dialog, ctl.text),
           ),
         ],
       ),
