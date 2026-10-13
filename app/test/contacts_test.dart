@@ -4,12 +4,15 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:gravital_talk_app/app.dart';
+import 'package:gravital_talk_app/services/background_session.dart';
 import 'package:gravital_talk_app/services/contacts.dart';
 import 'package:gravital_talk_app/services/engine.dart';
 import 'package:gravital_talk_app/services/event_log.dart';
 import 'package:gravital_talk_app/services/knock_codec.dart';
 import 'package:gravital_talk_app/services/mailbox.dart';
 import 'package:gravital_talk_app/services/room_api.dart';
+import 'package:gravital_talk_app/services/room_events.dart';
 import 'package:gravital_talk_app/services/session_controller.dart';
 import 'package:gravital_talk_app/services/settings_store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -495,5 +498,34 @@ void main() {
     await room;
     a.contacts.cancelCall();
     await a.controller.reset();
+  });
+
+  // Con la app oculta Flutter no dibuja: el diálogo de la llamada se pide,
+  // pero no existe hasta el siguiente frame. La respuesta que llega desde la
+  // burbuja o la notificación en ese hueco no puede perderse.
+  testWidgets('la respuesta que llega antes de dibujarse el diálogo cuenta',
+      (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final d = _Device(await SharedPreferences.getInstance());
+    d.contacts = ContactsService(d.controller,
+        codec: _FakeCodec(), prefs: d.prefs, transport: (_, _) {});
+    await tester.pumpWidget(GravitalTalkApp(
+      controller: d.controller,
+      log: EventLog(),
+      roomEvents: RoomEvents(),
+      contacts: d.contacts,
+    ));
+    await tester.pumpAndSettle();
+
+    d.contacts.incoming.value = const IncomingCall(
+      contact: Contact(id: 'abc', secret: 'secreto', name: 'Ana'),
+      invite: 'gravital-talk://pair?x=1',
+    );
+    // Sin `pump` de por medio: el diálogo aún no se ha construido.
+    BackgroundSession.onCallAction!(false);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Ana quiere hablar'), findsNothing);
+    expect(d.contacts.incoming.value, isNull);
   });
 }

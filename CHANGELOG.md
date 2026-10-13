@@ -59,6 +59,13 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
 
 ### Fixed
 
+**Contestar desde la burbuja o la notificación no contestaba**
+- Con la app oculta, tocar la burbuja de una llamada (o «Contestar» en la
+  notificación) abría la app pero dejaba el aviso «quiere hablar» esperando: la
+  respuesta llegaba antes de que el aviso existiera en pantalla y se perdía.
+  Había que aceptar otra vez, y la app ya no volvía sola al fondo al conectar.
+  Ahora la respuesta se guarda y se aplica en cuanto el aviso se dibuja.
+
 **Entrar en una sala desde otra red fallaba una de cada tres veces**
 - Mientras el invitado esperaba la respuesta a su saludo, cada sonda que le
   llegaba del anfitrión contaba como un intento fallido: los intentos se
