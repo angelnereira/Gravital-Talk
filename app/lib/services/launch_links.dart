@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -22,10 +23,86 @@ class LaunchLinks {
 
   static void Function(String link)? _onLink;
 
-  /// Primer enlace `gravital-talk://…` que haya en `text`, o `null`. Sirve
-  /// para lo copiado o compartido, que suele venir envuelto en un mensaje.
-  static String? extract(String text) =>
-      RegExp('$pairingScheme://\\S+').firstMatch(text)?.group(0);
+  /// Puerto de la forma web de los enlaces (`http://localhost:47801/…`).
+  static const localPort = 47801;
+
+  static const _localPath = '/$pairingScheme/';
+
+  static final _linkPattern = RegExp(
+    '(?:$pairingScheme://|https?://(?:localhost|127\\.0\\.0\\.1)(?::\\d+)?'
+    '$_localPath)\\S+',
+  );
+
+  /// Forma de `uri` (`gravital-talk://…`) para enviar por mensaje.
+  ///
+  /// Las apps de mensajería no hacen pulsable un esquema propio, pero sí un
+  /// `http://`. Apunta al propio dispositivo de quien lo abre: Android se lo
+  /// entrega a la app (que declara esos enlaces como suyos), y donde el
+  /// sistema lo mande al navegador contesta [serveLocal]. No hay ninguna web
+  /// de por medio. En iOS no hay equivalente: allí se envía el esquema.
+  static String shareable(String uri) {
+    const prefix = '$pairingScheme://';
+    if (!uri.startsWith(prefix) || (!kIsWeb && Platform.isIOS)) return uri;
+    return 'http://localhost:$localPort$_localPath'
+        '${uri.substring(prefix.length)}';
+  }
+
+  /// Primer enlace de Gravital Talk que haya en `text`, en su forma
+  /// `gravital-talk://…`, o `null`. Sirve para lo abierto, copiado o
+  /// compartido, que puede venir envuelto en un mensaje y en cualquiera de
+  /// las dos formas.
+  static String? extract(String text) {
+    final found = _linkPattern.firstMatch(text)?.group(0);
+    if (found == null || found.startsWith('$pairingScheme://')) return found;
+    final at = found.indexOf(_localPath);
+    return '$pairingScheme://${found.substring(at + _localPath.length)}';
+  }
+
+  static HttpServer? _local;
+
+  /// Contesta en este dispositivo a los enlaces `http://localhost:…` que el
+  /// sistema haya mandado al navegador en vez de a la app.
+  ///
+  /// En Android redirige al esquema propio, que es lo que trae la app al
+  /// frente. En escritorio el enlace se atiende aquí mismo. Sólo funciona
+  /// con la app en marcha; si el puerto está ocupado se sigue sin ello.
+  static Future<void> serveLocal() async {
+    if (kIsWeb || _local != null) return;
+    if (!Platform.isAndroid && !Platform.isLinux) return;
+    try {
+      final server =
+          await HttpServer.bind(InternetAddress.loopbackIPv4, localPort);
+      _local = server;
+      server.listen(_answerLocal, onError: (Object _) {});
+    } on Object {
+      // Otra copia de la app, u otro programa, tiene el puerto.
+    }
+  }
+
+  static Future<void> _answerLocal(HttpRequest request) async {
+    final response = request.response;
+    try {
+      final link = request.uri.path.startsWith(_localPath)
+          ? extract('http://localhost${request.uri}')
+          : null;
+      if (link == null) {
+        response.statusCode = HttpStatus.notFound;
+      } else if (Platform.isAndroid) {
+        response.statusCode = HttpStatus.found;
+        response.headers.set(HttpHeaders.locationHeader, link);
+      } else {
+        _onLink?.call(link);
+        response.headers.contentType = ContentType.html;
+        response.write(
+          '<!doctype html><meta charset="utf-8"><title>Gravital Talk</title>'
+          '<p style="font:16px sans-serif;margin:3em">Abierto en Gravital '
+          'Talk. Puedes cerrar esta pestaña.</p>',
+        );
+      }
+    } finally {
+      await response.close();
+    }
+  }
 
   /// Escritorio: deja que el sistema abra los enlaces con esta app y que una
   /// segunda apertura le pase el enlace a la que ya está en marcha.
@@ -34,7 +111,7 @@ class LaunchLinks {
   /// no tiene nada que hacer y debe cerrarse.
   static Future<bool> desktopHandoff(List<String> args) async {
     if (kIsWeb || !Platform.isLinux) return false;
-    final link = args.where((a) => a.startsWith('$pairingScheme://')).firstOrNull;
+    final link = args.map(extract).nonNulls.firstOrNull;
     final env = Platform.environment;
     // Ligado a los datos del usuario: dos copias con datos distintos (las
     // pruebas) no se pisan.
@@ -100,12 +177,12 @@ class LaunchLinks {
 
   /// Enlace con el que se abrió la app, o `null`.
   static Future<String?> initial(List<String> args) async {
-    for (final arg in args) {
-      if (arg.startsWith('$pairingScheme://')) return arg;
-    }
+    final fromArgs = args.map(extract).nonNulls.firstOrNull;
+    if (fromArgs != null) return fromArgs;
     if (kIsWeb || !Platform.isAndroid) return null;
     try {
-      return await _channel.invokeMethod<String>('getInitialLink');
+      final raw = await _channel.invokeMethod<String>('getInitialLink');
+      return raw == null ? null : extract(raw);
     } on PlatformException {
       return null;
     } on MissingPluginException {
@@ -119,7 +196,9 @@ class LaunchLinks {
     if (kIsWeb || !Platform.isAndroid) return;
     _channel.setMethodCallHandler((call) async {
       final link = call.arguments;
-      if (call.method == 'onLink' && link is String) onLink(link);
+      if (call.method != 'onLink' || link is! String) return;
+      final found = extract(link);
+      if (found != null) onLink(found);
     });
   }
 }

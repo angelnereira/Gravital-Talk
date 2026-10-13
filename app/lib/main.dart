@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -79,6 +80,7 @@ Future<void> main(List<String> args) async {
   // Invitación con la que se abrió la app (enlace o argumento): si la hay, se
   // entra directo a esa sala.
   final initialLink = await LaunchLinks.initial(args);
+  unawaited(LaunchLinks.serveLocal());
 
   // Opciones de prueba para escritorio, donde no siempre se puede automatizar
   // la interfaz: `--host` abre directamente una sala y `--auto-talk=N` habla y

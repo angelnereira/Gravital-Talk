@@ -1792,24 +1792,12 @@ impl Session {
             .await?;
 
             let backoff = Duration::from_millis(HANDSHAKE_RETRY_BASE_MS << attempt.min(4));
-            let res = timeout(backoff, self.transport.recv(&mut buf)).await;
+            let res = self
+                .recv_reply(&mut buf, peer, MessageType::HandshakeServerHello, backoff)
+                .await?;
 
-            if let Ok(Ok((n, from))) = res {
-                if from != peer {
-                    attempt = attempt.saturating_add(1);
-                    continue;
-                }
-                let view = match PacketView::decode(&buf[..n]) {
-                    Ok(v) => v,
-                    Err(_) => {
-                        attempt = attempt.saturating_add(1);
-                        continue;
-                    }
-                };
-                if view.header().msg_type != MessageType::HandshakeServerHello.code() {
-                    attempt = attempt.saturating_add(1);
-                    continue;
-                }
+            if let Some(n) = res {
+                let view = PacketView::decode(&buf[..n]).map_err(TransportError::Protocol)?;
 
                 // 2. Decodificar ServerHello.
                 let server_hello =
@@ -2207,6 +2195,44 @@ impl Session {
         }
     }
 
+    /// Espera hasta `wait` la respuesta `expected` de `peer` a un mensaje del
+    /// handshake. Devuelve su tamaño (queda en `buf`), o `None` si vence el
+    /// plazo y toca reenviar.
+    ///
+    /// Lo que llegue mientras tanto y no sea esa respuesta se descarta **sin
+    /// gastar el plazo ni provocar un reenvío**. Antes cada datagrama ajeno
+    /// contaba como un intento fallido, y cuando el otro extremo está
+    /// sondando caminos llegan decenas por segundo: los intentos se agotaban
+    /// en milisegundos, antes de que la respuesta tuviera tiempo de cruzar la
+    /// red, y la conexión entre redes fallaba una de cada tres veces.
+    async fn recv_reply(
+        &self,
+        buf: &mut [u8],
+        peer: SocketAddr,
+        expected: MessageType,
+        wait: Duration,
+    ) -> Result<Option<usize>, TransportError> {
+        let until = tokio::time::Instant::now() + wait;
+        loop {
+            let left = until.saturating_duration_since(tokio::time::Instant::now());
+            if left.is_zero() {
+                return Ok(None);
+            }
+            match timeout(left, self.transport.recv(buf)).await {
+                Ok(Ok((n, from))) => {
+                    let is_reply = from == peer
+                        && PacketView::decode(&buf[..n])
+                            .is_ok_and(|view| view.header().msg_type == expected.code());
+                    if is_reply {
+                        return Ok(Some(n));
+                    }
+                }
+                Ok(Err(e)) => return Err(e),
+                Err(_) => return Ok(None),
+            }
+        }
+    }
+
     /// Handshake Noise como cliente (feature `noise`).
     #[cfg(feature = "noise")]
     async fn handshake_noise_client(&self, peer: SocketAddr) -> Result<(), TransportError> {
@@ -2244,24 +2270,21 @@ impl Session {
             self.send_control(MessageType::HandshakeNoiseHello1, preset_sid, &msg1, peer)
                 .await?;
             let backoff = Duration::from_millis(HANDSHAKE_RETRY_BASE_MS << attempt.min(4));
-            match timeout(backoff, self.transport.recv(&mut buf)).await {
-                Ok(Ok((n, from))) if from == peer => {
-                    if let Ok(view) = PacketView::decode(&buf[..n]) {
-                        if view.header().msg_type == MessageType::HandshakeNoiseHello2.code() {
-                            let payload = hs
-                                .read(view.payload())
-                                .map_err(|_| TransportError::Handshake("noise msg2 invalid"))?;
-                            if let Ok(h) = NoiseHello2::decode(&payload) {
-                                break h;
-                            }
-                        }
-                    }
-                    attempt += 1;
-                }
-                Ok(Ok(_)) => attempt += 1,
-                Ok(Err(e)) => return Err(e),
-                Err(_) => attempt += 1,
+            let n = self
+                .recv_reply(&mut buf, peer, MessageType::HandshakeNoiseHello2, backoff)
+                .await?;
+            let Some(n) = n else {
+                attempt += 1;
+                continue;
+            };
+            let view = PacketView::decode(&buf[..n]).map_err(TransportError::Protocol)?;
+            let payload = hs
+                .read(view.payload())
+                .map_err(|_| TransportError::Handshake("noise msg2 invalid"))?;
+            if let Ok(h) = NoiseHello2::decode(&payload) {
+                break h;
             }
+            attempt += 1;
         };
 
         if hello2.protocol_version < PROTOCOL_VERSION_MIN {

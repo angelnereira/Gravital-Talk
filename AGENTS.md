@@ -172,6 +172,16 @@ app/build/linux/x64/release/bundle/gravital_talk_app [--host] [--auto-talk=N] [g
   defaults: `cargo test -p gravital-talk-codec --no-default-features --features voice`.
 - Con tonos puros hay que apagar la reducción de ruido (`GS_AUDIO_TEST_TONE` y
   los tests lo hacen): RNNoise trata un tono como ruido y lo elimina.
+- La voz se trata en Rust (`voice_dsp.rs`: pasa-altos, nivelador, limitador, y realce
+  de presencia al recibir) y se elige por **perfil** (`gs_session_set_voice_profile`,
+  `GS_VOICE_*`). La app ya no pide reducción de ruido ni ganancia automática al sistema:
+  sería tratar la voz dos veces. Para tonos y medidas, perfil `GS_VOICE_RAW`: el
+  nivelador también cambia el volumen de un tono.
+- Para juzgar un cambio en la voz hay que **oírlo**: `voice_lab` (ejemplo del códec) deja
+  un WAV por perfil a partir de una grabación. Las cifras de datos y lo que se probó y
+  descartó están en `docs/codecs.md`.
+- Sin llamar a `gs_session_set_voice_profile` el códec se comporta como antes de los
+  perfiles (`VoiceTuning::LEGACY`): es lo que ven el CLI y cualquier embebedor antiguo.
 
 ## Conexión entre redes (perforación de NAT)
 
@@ -190,6 +200,13 @@ cargo test -p gravital-talk-transport --test nat_punch   # red simulada, sin pri
   su puerto no es el de la sala.
 - Si cambias cómo se sondan o eligen los caminos, corre las dos pruebas: la red
   simulada no reproduce el estado de conntrack, y el NAT del kernel sí.
+- Mientras un extremo espera una respuesta del handshake le siguen llegando sondas del
+  otro. No pueden contar como intentos ni provocar reenvíos (`Session::recv_reply`): así
+  se agotaban los reintentos en milisegundos y la conexión entre redes fallaba una de cada
+  tres veces. El test es `las_sondas_ajenas_no_agotan_el_handshake_del_cliente`.
+- La app ya no enseña el «código de respuesta»: las direcciones del invitado le llegan
+  solas al anfitrión (red local y buzón, selladas con el token de la sala). Los enlaces
+  `answer` antiguos se siguen aceptando, pero ninguna pantalla los pide.
 - Sin servidor, lo que conecta dos redes distintas es el intercambio
   invitación ↔ respuesta (`PairingAnswer`, `Session::add_path_hints`) más el
   barrido de puertos. Para reproducirlo con el CLI: `gs peer --bind 0.0.0.0
@@ -340,6 +357,22 @@ retardo. Referencia (2026-10-11, misma wifi, Pixel 8 Pro, camino `AudioPump`): 0
 huecos y 170–220 ms del aviso al sonido. El audio nativo de Android dio menos retardo
 (100–170 ms) pero más cortes: por eso sigue apagado.
 
+Dos retardos distintos en la misma grabación: del aviso de inicio al tono (primer frame,
+incluye el arranque del turno) y del aviso de fin a que el tono calla (con la cola ya
+formada: es el que se nota al conversar). Referencia (2026-10-12, portátil en casa →
+Pixel 8 Pro por **LTE**, 20 turnos): inicio p50 265–285 ms, final p50 150–155 ms, 4 % de
+huecos, y el teléfono tira un 5–7 % de los frames (los que llegan en ráfaga).
+
+Compilando con `--dart-define=GT_AUDIO_STATS=true`, `AudioPump` escribe cada segundo en
+`adb logcat -s flutter` cuántos frames llegaron, cuánto tardó el reproductor en aceptarlos
+y cuántos tiró. `adb shell dumpsys media.audio_flinger` dice qué pista abrió Android: la
+de `flutter_sound` tiene 60 ms de búfer, no va por la ruta rápida y declara ~175 ms de
+latencia con el búfer lleno. Ese es el suelo de esta ruta.
+
+Probado y descartado: guardar hasta 60 ms en Dart en vez de tirar las ráfagas (con y sin
+vaciado progresivo). Pierde menos frames (2–4 %) pero el retardo al final del turno sube a
+210–240 ms. Bajar de 150 ms pide la ruta nativa, no más ajustes en `AudioPump`.
+
 Si el audio se corta, mira primero el tráfico (`tcpdump` por el puerto de la sesión): una
 sala sana son ~50 paquetes por segundo y sentido mientras alguien habla, y unos pocos en
 silencio.
@@ -351,6 +384,24 @@ quedarse con el recorte anterior: los iconos nuevos salen como un rombo o en bla
 `make app-linux` compila con `--no-tree-shake-icons`; si lanzas `flutter build linux` a
 mano, pásalo también. Otra causa de «icono que no se ve»: mismo color que su fondo (pasó
 en el onboarding con el primario sobre un vidrio con resplandor primario).
+
+## Enlaces de invitación: dos formas
+
+- La propia, `gravital-talk://…`, es la que llevan los QR y la que entiende el resto del
+  código. La que se **comparte o copia** es `http://localhost:47801/gravital-talk/…`
+  (`LaunchLinks.shareable`): las apps de mensajería no hacen pulsable un esquema propio.
+- Todo lo que entra (intent, argumento, portapapeles, texto pegado o compartido) pasa por
+  `LaunchLinks.extract`, que devuelve siempre la forma propia. No compares prefijos a mano.
+- Dos caminos para que el enlace web llegue a la app, ninguno con una web de por medio:
+  el filtro `http`/`localhost:47801` del manifiesto (abre la app aunque esté cerrada; la
+  primera vez Android pregunta) y `LaunchLinks.serveLocal`, que contesta en ese puerto
+  mientras la app vive (en Android con un 302 al esquema propio, que es lo que la trae al
+  frente; en escritorio atiende el enlace él mismo).
+- Probado en un Pixel con Android 17. La documentación de Android dice que desde la 12 un
+  enlace web sin dominio verificado va al navegador; con `localhost` no ocurrió, pero no
+  está comprobado en otros fabricantes. Para verlo: `cmd package query-activities` con el
+  enlace, y `toybox nc 127.0.0.1 47801` contra la app abierta.
+- iOS no tiene equivalente (exige un dominio verificado): allí se comparte el esquema.
 
 ## Buzón de señalización
 
@@ -387,6 +438,28 @@ mandes por la sesión: el códec y RNNoise se los comen.
   `--auto-accept` en una y `--call-first` en la otra.
 - Los botones del tema ocupan todo el ancho (`Size.fromHeight`): dentro de un `Row` hay que
   darles `minimumSize: Size(0, …)` o aplastan al resto.
+
+## Llamadas con la app oculta, timbre y vibración
+
+- Una llamada sólo llega si el proceso está vivo: lo mantiene `SessionService` en modo
+  espera («Recibir llamadas en segundo plano», activo por defecto). Sigue sin haber push de
+  terceros: con la app cerrada desde recientes, o con el teléfono en reposo profundo
+  (Doze), no llega nada. No prometas otra cosa.
+- El tono y la vibración de llamada los pone `Ringer.kt`, no el canal de notificación: así
+  son los mismos con la app a la vista y se paran al contestar. Respeta el modo del
+  teléfono (silencio / sólo vibración) y se calla solo a los 30 s.
+- El tono es `res/raw/gt_ring.wav`, generado por `scripts/make-ringtone.py`. Para cambiarlo
+  se edita el script y se regenera; no se edita el WAV a mano.
+- Un canal de notificaciones no cambia de sonido una vez creado en el teléfono: si hay que
+  cambiar su configuración, se le da otro id (`calls.silent` sustituyó a `calls`).
+- La notificación de llamada trae «Contestar» y «Ahora no»; llegan a Dart por
+  `BackgroundSession.onCallAction` y cierran el mismo diálogo que se ve dentro de la app.
+- Para probarlo sin tocar el teléfono: app abierta y `adb shell input keyevent KEYCODE_HOME`,
+  una instancia de escritorio que ya lo tenga de contacto con `--call-first`, y mirar
+  `dumpsys notification --noredact`, `dumpsys vibrator_manager` y `dumpsys audio`
+  (un `MediaPlayer` con `USAGE_NOTIFICATION_RINGTONE`).
+- Las vibraciones cortas (botón de hablar, código leído, avisos) son `Haptics`
+  (`app/lib/services/haptics.dart`); no necesitan permiso.
 
 ## Sala en segundo plano (Android)
 

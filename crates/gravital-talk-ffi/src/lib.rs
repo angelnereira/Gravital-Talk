@@ -1627,7 +1627,7 @@ pub unsafe extern "C" fn gs_session_set_noise_suppression(
 
 /// Fija el tope de la tasa de bits del audio, en bits por segundo.
 ///
-/// Se acota a 16 000–128 000. La tasa real baja por debajo del tope si la red
+/// Se acota a 8 000–128 000. La tasa real baja por debajo del tope si la red
 /// pierde paquetes y vuelve a subir cuando se recupera.
 ///
 /// # Safety
@@ -1643,6 +1643,47 @@ pub unsafe extern "C" fn gs_session_set_bitrate(
     // SAFETY: `handle` no es nulo y viene de `gs_session_create` (contrato).
     let inner = unsafe { &*(handle as *mut SessionInner) };
     inner.pipeline.set_bitrate_cap(bitrate);
+    GsStatus::GS_OK
+}
+
+/// Perfil sin tratamiento de voz: para tonos de prueba y medidas.
+pub const GS_VOICE_RAW: u8 = 0;
+/// La voz más natural: poco filtrado, hasta 32 kbps.
+pub const GS_VOICE_CLEAR: u8 = 1;
+/// Como una buena llamada: limpia, hasta 16 kbps.
+pub const GS_VOICE_CALL: u8 = 2;
+/// Para sitios ruidosos: se prioriza que se entienda. Hasta 24 kbps.
+pub const GS_VOICE_NOISY: u8 = 3;
+/// El mínimo de datos: hasta 12 kbps, y no transmite los silencios.
+pub const GS_VOICE_LIGHT: u8 = 4;
+
+/// Elige el perfil de voz (`GS_VOICE_*`).
+///
+/// Un perfil fija a la vez la reducción de ruido, la nivelación de la voz, el
+/// tope de la tasa de bits y si se transmiten los silencios; al escuchar,
+/// también el realce de presencia. Sin llamar a esta función el códec se
+/// comporta como antes de que existieran los perfiles. Lo que se ajuste
+/// después con `gs_session_set_noise_suppression` o `gs_session_set_bitrate`
+/// manda sobre el perfil.
+///
+/// Devuelve `GS_ERR_INVALID_ARGUMENT` si el perfil no existe.
+///
+/// # Safety
+/// `handle` debe ser un handle válido de `gs_session_create`.
+#[no_mangle]
+pub unsafe extern "C" fn gs_session_set_voice_profile(
+    handle: *mut GsSessionHandle,
+    profile: u8,
+) -> GsStatus {
+    if handle.is_null() {
+        return GsStatus::GS_ERR_NULL_POINTER;
+    }
+    let Some(profile) = gravital_talk_codec::VoiceProfile::from_code(profile) else {
+        return GsStatus::GS_ERR_INVALID_ARGUMENT;
+    };
+    // SAFETY: `handle` no es nulo y viene de `gs_session_create` (contrato).
+    let inner = unsafe { &*(handle as *mut SessionInner) };
+    inner.pipeline.set_voice_profile(profile);
     GsStatus::GS_OK
 }
 
@@ -2226,6 +2267,72 @@ mod tests {
         };
         assert!(sent < 20_000, "bytes enviados por 40 frames: {sent}");
         assert!(unsafe { gs_session_bitrate(guest) } <= 64_000);
+
+        unsafe {
+            gs_session_destroy(host);
+            gs_session_destroy(guest);
+        }
+    }
+
+    #[test]
+    fn el_silencio_de_un_turno_no_viaja_ni_se_confunde_con_una_perdida() {
+        let cfg = voice_config(2);
+        let (host, guest) = connected_pair(&cfg);
+        assert_eq!(
+            unsafe { gs_session_set_voice_profile(guest, 9) },
+            GsStatus::GS_ERR_INVALID_ARGUMENT
+        );
+        assert_eq!(
+            unsafe { gs_session_set_voice_profile(guest, GS_VOICE_LIGHT) },
+            GsStatus::GS_OK
+        );
+        // El tope de tasa es el del perfil.
+        let sent = |handle| unsafe {
+            let mut m = GsMetrics::default();
+            gs_session_metrics(handle, &mut m);
+            m.bytes_sent
+        };
+        let before = sent(guest);
+        let silence = vec![0u8; 1920];
+        for _ in 0..150 {
+            assert_eq!(
+                unsafe { gs_session_send_audio(guest, silence.as_ptr(), silence.len()) },
+                GsStatus::GS_OK
+            );
+        }
+        // Tres segundos de silencio a 12 kbps serían unos 6 000 B de voz más
+        // cabeceras; sin transmitirlos queda una fracción.
+        let quiet = sent(guest) - before;
+        assert!(quiet < 4_000, "bytes en silencio: {quiet}");
+
+        // Lo poco que sí se mandó se lee, para empezar limpio.
+        let mut buf = vec![0u8; 8192];
+        loop {
+            let mut len = buf.len();
+            let st =
+                unsafe { gs_session_recv_audio_timeout(host, buf.as_mut_ptr(), &mut len, 150) };
+            if st != GsStatus::GS_OK {
+                break;
+            }
+        }
+
+        // Tras el silencio llega voz: cada frame sale solo, sin los frames
+        // inventados con los que se tapa una pérdida.
+        unsafe { gs_session_set_voice_profile(guest, GS_VOICE_RAW) };
+        let mut phase = 0.0;
+        for i in 0..10 {
+            let frame = tone_frame(&mut phase);
+            assert_eq!(
+                unsafe { gs_session_send_audio(guest, frame.as_ptr(), frame.len()) },
+                GsStatus::GS_OK
+            );
+            let mut len = buf.len();
+            let st =
+                unsafe { gs_session_recv_audio_timeout(host, buf.as_mut_ptr(), &mut len, 1000) };
+            assert_eq!(st, GsStatus::GS_OK, "frame {i}");
+            assert_eq!(len, 1920, "frame {i}");
+        }
+        assert!(unsafe { gs_session_bitrate(guest) } <= 16_000);
 
         unsafe {
             gs_session_destroy(host);

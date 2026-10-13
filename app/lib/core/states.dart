@@ -304,24 +304,68 @@ class ConfirmDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return AlertDialog(
       title: Text(title),
       content: Text(message),
       actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context, false),
-          child: Text(cancelLabel),
+        DialogActions(
+          cancelLabel: cancelLabel,
+          onCancel: () => Navigator.pop(context, false),
+          confirmLabel: confirmLabel,
+          onConfirm: () => Navigator.pop(context, true),
+          destructive: destructive,
         ),
-        FilledButton(
-          style: destructive
-              ? FilledButton.styleFrom(
-                  backgroundColor: theme.colorScheme.error,
-                  foregroundColor: theme.colorScheme.onError,
-                )
-              : null,
-          onPressed: () => Navigator.pop(context, true),
-          child: Text(confirmLabel),
+      ],
+    );
+  }
+}
+
+/// Los dos botones de un diálogo: el que descarta y el que confirma, igual
+/// de anchos y los dos con forma de botón. El de descartar no es un texto
+/// suelto: se tiene que ver que se puede pulsar.
+class DialogActions extends StatelessWidget {
+  const DialogActions({
+    super.key,
+    required this.cancelLabel,
+    required this.onCancel,
+    required this.confirmLabel,
+    required this.onConfirm,
+    this.destructive = false,
+  });
+
+  final String cancelLabel;
+  final VoidCallback onCancel;
+  final String confirmLabel;
+  final VoidCallback onConfirm;
+
+  /// `true` si confirmar borra o corta algo: el botón va en color de error.
+  final bool destructive;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    // Los botones del tema ocupan todo el ancho; aquí comparten una fila.
+    const size = Size(0, HitSizes.minTouch);
+    return Row(
+      children: [
+        Expanded(
+          child: OutlinedButton(
+            style: OutlinedButton.styleFrom(minimumSize: size),
+            onPressed: onCancel,
+            child: Text(cancelLabel, maxLines: 1, overflow: TextOverflow.ellipsis),
+          ),
+        ),
+        const SizedBox(width: Spacing.md),
+        Expanded(
+          child: FilledButton(
+            style: FilledButton.styleFrom(
+              minimumSize: size,
+              backgroundColor: destructive ? scheme.error : null,
+              foregroundColor: destructive ? scheme.onError : null,
+            ),
+            onPressed: onConfirm,
+            child: Text(confirmLabel, maxLines: 1, overflow: TextOverflow.ellipsis),
+          ),
         ),
       ],
     );

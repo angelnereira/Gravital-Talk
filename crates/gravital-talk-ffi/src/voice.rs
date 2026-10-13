@@ -10,21 +10,34 @@
 //! captura con plugins de Flutter) y escritorio (que captura en Rust) usan
 //! exactamente el mismo códec, y ninguno tiene que saber que existe.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
 use gravital_talk::constants::MAX_PAYLOAD_SIZE;
 use gravital_talk::{Session, TransportError};
 use gravital_talk_codec::voice::{
-    VoiceDecoder, VoiceEncoder, MAX_BITRATE, MAX_PACKET, MIN_BITRATE,
+    VoiceDecoder, VoiceEncoder, DTX_PACKET, MAX_BITRATE, MAX_PACKET, MIN_BITRATE,
 };
+use gravital_talk_codec::voice_dsp::Biquad;
 use gravital_talk_codec::CodecId;
+use gravital_talk_codec::{VoiceProfile, VoiceTuning};
 
 /// Bytes que la sesión añade a cada frame: secuencia de audio + tag AEAD.
 const FRAME_OVERHEAD: usize = 4 + 16;
 
-/// Frames entre dos ajustes de la tasa de bits (2 s con frames de 20 ms).
-const ADAPT_EVERY: u32 = 100;
+/// Frames entre dos ajustes del códec a la red (1 s con frames de 20 ms). No
+/// más espaciado: mientras no se ajusta, una red que empieza a perder
+/// paquetes no tiene copia de respaldo.
+const ADAPT_EVERY: u32 = 50;
+
+/// Valor de `profile` cuando nadie ha elegido perfil: el códec se queda como
+/// arranca ([`VoiceTuning::LEGACY`]).
+const NO_PROFILE: u8 = u8::MAX;
+
+/// Centro y anchura del realce de presencia: la zona de las consonantes,
+/// con una campana ancha para que no suene nasal.
+const PRESENCE_HZ: f32 = 3_000.0;
+const PRESENCE_Q: f32 = 0.9;
 
 /// Frames perdidos seguidos que se tapan como mucho. Más allá, sintetizar
 /// audio que nadie dijo es peor que un hueco, y además desborda el buffer de
@@ -48,6 +61,9 @@ struct Rx {
     /// Secuencia del último frame entregado, para saber cuántos faltan.
     last: Option<u32>,
     samples: Vec<i16>,
+    /// Realce de presencia y los dB para los que se calculó.
+    presence: Biquad,
+    presence_db: f32,
 }
 
 /// Camino de audio de una sesión.
@@ -61,6 +77,8 @@ pub struct Pipeline {
     /// Tope de tasa elegido por el usuario.
     bitrate_cap: AtomicU32,
     noise_suppression: AtomicBool,
+    /// Código del perfil de voz, o [`NO_PROFILE`].
+    profile: AtomicU8,
     tx: Mutex<Option<Tx>>,
     rx: Mutex<Option<Rx>>,
 }
@@ -100,6 +118,7 @@ impl Pipeline {
                 && VoiceEncoder::new(sample_rate, frame_ms, MAX_BITRATE).is_ok(),
             bitrate_cap: AtomicU32::new(max_bitrate.clamp(MIN_BITRATE, MAX_BITRATE)),
             noise_suppression: AtomicBool::new(true),
+            profile: AtomicU8::new(NO_PROFILE),
             tx: Mutex::new(None),
             rx: Mutex::new(None),
         }
@@ -111,6 +130,29 @@ impl Pipeline {
     /// uno que el códec admita (mono; estéreo se queda en PCM).
     pub fn compressed(&self) -> bool {
         self.format_ok && CodecId::from_code(self.session.negotiated_codec()) == CodecId::Opus
+    }
+
+    /// Ajustes de voz en vigor: los del perfil elegido, o los de siempre.
+    fn tuning(&self) -> VoiceTuning {
+        VoiceProfile::from_code(self.profile.load(Ordering::Acquire))
+            .map_or(VoiceTuning::LEGACY, VoiceProfile::tuning)
+    }
+
+    /// Elige el perfil de voz. Fija de una vez el tratamiento, el tope de
+    /// tasa y la redundancia; lo que se ajuste después por separado
+    /// (reducción de ruido, tope de tasa) manda sobre el perfil.
+    pub fn set_voice_profile(&self, profile: VoiceProfile) {
+        self.profile.store(profile as u8, Ordering::Release);
+        let tuning = profile.tuning();
+        let cap = tuning.bitrate.clamp(MIN_BITRATE, MAX_BITRATE);
+        self.bitrate_cap.store(cap, Ordering::Release);
+        self.noise_suppression.store(true, Ordering::Release);
+        if let Some(tx) = lock(&self.tx).as_mut() {
+            let _ = tx.encoder.set_tuning(&tuning);
+            tx.encoder.set_noise_suppression(true);
+            tx.bitrate = tx.bitrate.min(cap);
+            let _ = tx.encoder.set_bitrate(tx.bitrate);
+        }
     }
 
     pub fn set_noise_suppression(&self, enabled: bool) {
@@ -156,6 +198,9 @@ impl Pipeline {
                 let cap = self.bitrate_cap.load(Ordering::Acquire);
                 let mut encoder = VoiceEncoder::new(self.sample_rate, self.frame_ms, cap)
                     .map_err(|_| TransportError::InvalidState("voice encoder"))?;
+                encoder
+                    .set_tuning(&self.tuning())
+                    .map_err(|_| TransportError::InvalidState("voice tuning"))?;
                 encoder.set_noise_suppression(self.noise_suppression.load(Ordering::Acquire));
                 *slot = Some(Tx {
                     samples: Vec::with_capacity(encoder.frame_samples()),
@@ -188,6 +233,12 @@ impl Pipeline {
             let n = encoder
                 .encode(samples, packet)
                 .map_err(|_| TransportError::InvalidState("voice frame size"))?;
+            // Silencio dentro del turno: Opus avisa con un paquete mínimo de
+            // que no hay nada que mandar. Como la secuencia de audio sólo
+            // avanza al enviar, el receptor no lo ve como una pérdida.
+            if n <= DTX_PACKET && encoder.tuning().dtx {
+                return Ok(());
+            }
             let encoded = packet[..n].to_vec();
             drop(slot);
             encoded
@@ -217,7 +268,14 @@ impl Pipeline {
         };
         tx.bitrate = target.clamp(FLOOR_BITRATE.min(cap), cap);
         let _ = tx.encoder.set_bitrate(tx.bitrate);
-        let expected = (loss * 1.5).clamp(5.0, 40.0) as u8;
+        // La copia de respaldo no añade bytes: se los quita a la voz. En una
+        // red que no pierde nada es calidad tirada, salvo que el perfil la
+        // pida siempre.
+        let expected = if loss < 1.0 && !tx.encoder.tuning().fec_always {
+            0
+        } else {
+            (loss * 1.5).clamp(5.0, 40.0) as u8
+        };
         let _ = tx.encoder.set_expected_loss(expected);
     }
 
@@ -254,6 +312,8 @@ impl Pipeline {
                 samples: vec![0i16; decoder.frame_samples()],
                 decoder,
                 last: None,
+                presence: Biquad::peaking(self.sample_rate, PRESENCE_HZ, PRESENCE_Q, 0.0),
+                presence_db: 0.0,
             });
         }
         let Some(rx) = slot.as_mut() else {
@@ -271,31 +331,51 @@ impl Pipeline {
             missing.min(MAX_CONCEALED)
         };
 
-        let mut out = Vec::with_capacity((missing as usize + 1) * rx.samples.len() * 2);
-        let append = |samples: &[i16], out: &mut Vec<u8>| {
-            for s in samples {
+        // El realce es cosa de quien escucha: sale de su perfil, no del de
+        // quien habla, y no cuesta nada en la red.
+        let presence_db = self.tuning().presence_db;
+        if (presence_db - rx.presence_db).abs() > f32::EPSILON {
+            rx.presence = Biquad::peaking(self.sample_rate, PRESENCE_HZ, PRESENCE_Q, presence_db);
+            rx.presence_db = presence_db;
+        }
+        let Rx {
+            decoder,
+            samples: scratch,
+            presence,
+            ..
+        } = rx;
+        let boost = presence_db != 0.0;
+
+        let mut out = Vec::with_capacity((missing as usize + 1) * scratch.len() * 2);
+        let mut append = |samples: &[i16], out: &mut Vec<u8>| {
+            for &s in samples {
+                let s = if boost {
+                    presence.step(f32::from(s)).clamp(-32_768.0, 32_767.0) as i16
+                } else {
+                    s
+                };
                 out.extend_from_slice(&s.to_le_bytes());
             }
         };
         // De los que faltan, el último se reconstruye con la copia que trae
         // este paquete; los anteriores sólo se pueden disimular.
         for _ in 1..missing {
-            if let Ok(n) = rx.decoder.conceal(&mut rx.samples) {
-                append(&rx.samples[..n], &mut out);
+            if let Ok(n) = decoder.conceal(scratch) {
+                append(&scratch[..n], &mut out);
             }
         }
         if missing >= 1 {
-            if let Ok(n) = rx.decoder.recover_previous(&frame.payload, &mut rx.samples) {
-                append(&rx.samples[..n], &mut out);
+            if let Ok(n) = decoder.recover_previous(&frame.payload, scratch) {
+                append(&scratch[..n], &mut out);
             }
         }
-        match rx.decoder.decode(&frame.payload, &mut rx.samples) {
-            Ok(n) => append(&rx.samples[..n], &mut out),
+        match decoder.decode(&frame.payload, scratch) {
+            Ok(n) => append(&scratch[..n], &mut out),
             // Un paquete que no decodifica se trata como perdido: mejor una
             // ocultación que cortar la sesión por un frame.
             Err(_) => {
-                if let Ok(n) = rx.decoder.conceal(&mut rx.samples) {
-                    append(&rx.samples[..n], &mut out);
+                if let Ok(n) = decoder.conceal(scratch) {
+                    append(&scratch[..n], &mut out);
                 }
             }
         }

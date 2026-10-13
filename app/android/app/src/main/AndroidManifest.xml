@@ -13,6 +13,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <uses-permission android:name="android.permission.VIBRATE"/>
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
     <uses-feature android:name="android.hardware.microphone" android:required="true"/>
@@ -52,6 +53,19 @@
                 <data android:scheme="gravital-talk" android:host="contact"/>
                 <data android:scheme="gravital-talk" android:host="i"/>
             </intent-filter>
+            <!-- La misma invitación en su forma web, que es la que las apps de
+                 mensajería hacen pulsable. Apunta al propio teléfono: no hay
+                 ninguna web detrás. Va en un filtro aparte para que el
+                 esquema propio no herede host ni puerto. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="http"/>
+                <data android:host="localhost" android:port="47801"/>
+                <data android:host="127.0.0.1" android:port="47801"/>
+                <data android:pathPrefix="/gravital-talk/"/>
+            </intent-filter>
             <!-- Compartir un mensaje con una invitación desde cualquier chat:
                  evita copiar y pegar donde el enlace no es pulsable. -->
             <intent-filter>
@@ -65,6 +79,9 @@
             android:name=".SessionService"
             android:exported="false"
             android:foregroundServiceType="microphone|mediaPlayback"/>
+        <receiver
+            android:name=".CallActionReceiver"
+            android:exported="false"/>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

@@ -4,6 +4,107 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
 
 ## [Unreleased]
 
+### Added
+
+**Invitaciones que se pueden pulsar en cualquier chat, sin ninguna web**
+- Al compartir o copiar una invitación, el enlace va ahora como
+  `http://localhost:47801/gravital-talk/…`. Apunta al propio dispositivo de
+  quien lo abre: Android se lo entrega a la app (la primera vez pregunta con
+  qué abrirlo), y si el sistema lo manda al navegador, la app —si está en
+  marcha— le contesta y se pone al frente. No hay servidor ni página externa.
+- Los enlaces `gravital-talk://…` siguen valiendo en todas partes, y son los
+  que llevan los códigos QR. En iOS se sigue compartiendo esa forma.
+- Límite: sin la app instalada, el enlace acaba en una página de error del
+  navegador. Las versiones anteriores de la app no entienden la forma nueva.
+- `make install-linux` (`scripts/install-linux.sh`) instala la app de
+  escritorio en `~/.local/opt/gravital-talk` con su entrada en el menú.
+
+### Fixed
+
+**Entrar en una sala desde otra red fallaba una de cada tres veces**
+- Mientras el invitado esperaba la respuesta a su saludo, cada sonda que le
+  llegaba del anfitrión contaba como un intento fallido: los intentos se
+  agotaban en milisegundos y no se reintentaba hasta medio minuto después.
+  Era el motivo por el que aparecía el código de respuesta. Medido teléfono
+  en LTE contra portátil en casa: de 4 de 6 a 8 de 8, en 4–5 s.
+
+### Changed
+- **Ya no existe el paso del código de respuesta.** Abrir el enlace o leer el
+  código una vez es todo: quien entra sólo ve «Conectando…» y, si tarda,
+  «Buscando camino entre vuestras redes…». El anfitrión ya no tiene «Escanear
+  su respuesta» ni «Pegar su respuesta».
+- **Botón de hablar más grande**, y el turno dura mientras el dedo siga en la
+  pantalla aunque se salga del círculo. Arrastrar sobre el botón ya no
+  desplaza la pantalla.
+- Diálogos: «Cancelar» / «Ahora no» son botones con borde, del mismo tamaño
+  que el de confirmar, en vez de un texto suelto.
+
+### Added
+
+**Voz más clara y perfiles de voz**
+- La voz se **nivela sola**: quien habla bajo sube y quien habla alto baja, sin
+  saturar. También en escritorio, que antes no tenía ningún control de nivel.
+- Se quita el retumbe por debajo de la voz antes de codificar y, al escuchar,
+  se realza un poco la zona de las consonantes.
+- **Ajustes → Voz** tiene ahora cuatro perfiles (Clara, Llamada, Ruido, Ligero)
+  en lugar de «Calidad (kbps)» y el interruptor de reducción de ruido. Cada uno
+  fija a la vez cuánto ruido se quita y cuántos datos se gastan.
+- `gs_session_set_voice_profile` y las constantes `GS_VOICE_*` en la ABI C. Sin
+  llamarla, el códec se comporta como hasta ahora.
+- `voice_lab`: ejemplo que pasa una grabación por cada perfil para oírlos.
+
+### Changed
+- **Menos datos**: el perfil por defecto (Clara) va a 32 kbps en vez de 128.
+  Medido en una conversación real, de ~1,5 a 0,55 MB por minuto hablado. Quien
+  tuviera elegida otra calidad pasa a este perfil.
+- La copia de respaldo de cada paquete sólo se activa cuando la red pierde
+  paquetes; en una red limpia esos bits van a la voz.
+- En móvil ya no se pide reducción de ruido ni ganancia automática al sistema:
+  la voz pasaba dos veces por lo mismo.
+- Mínimo de tasa de 16 a 8 kbps (lo usa el perfil Ligero, a 12).
+- Builds anteriores y nuevos se entienden: no cambia nada en la red.
+
+### Added
+
+**Llamadas que se notan: timbre, vibración y avisos**
+- Una llamada entrante **suena y vibra**, también con la app en segundo plano.
+  El tono es propio (cuatro notas suaves de campana, no un timbre de
+  teléfono), respeta el modo silencio y el de vibración, y se calla solo a los
+  30 s. La notificación trae **Contestar** y **Ahora no**.
+- **Recibir llamadas en segundo plano** viene activado (Ajustes lo apaga):
+  deja una notificación fija. Sin servidor de por medio sigue habiendo un
+  límite: con la app cerrada del todo, o el teléfono en reposo profundo, la
+  llamada no llega.
+- **Aviso cuando aceptan tu invitación**: notificación si la app está oculta,
+  mensaje y vibración si está a la vista.
+- **Vibración corta** al pulsar y soltar el botón de hablar y al leer un
+  código.
+- **Ficha de contacto** (tocar el contacto): nombre, nota, «Contestar sin
+  preguntar» (entra solo a escuchar, como un walkie-talkie), «Silenciar sus
+  llamadas», última vez, direcciones conocidas y código de seguridad.
+
+### Fixed
+
+**Un solo enlace basta también con los enlaces de sala**
+- Al abrir un enlace o QR de sala (`gravital-talk://pair?…`) desde otra red,
+  el invitado se quedaba en «Enséñale este código» hasta que el anfitrión
+  escaneaba su respuesta. Ahora esa respuesta viaja sola (red local y buzón),
+  sellada con el token de la sala, igual que ya pasaba con «Invitar». Medido:
+  teléfono en LTE y portátil en casa, conectados a los 3 s de abrir el enlace.
+- El código de respuesta sigue existiendo como último recurso: aparece a los
+  12 s si no se ha conectado (antes, a los 3 s).
+
+### Changed
+- Reproducción en móvil (`AudioPump`): los bloques se entregan al reproductor
+  de uno en uno y con plazo. El comportamiento es el mismo que antes, pero
+  antes salía de un contador que se quedaba atascado en su tope. Sin cambio
+  medible en retardo ni en cortes.
+- `--dart-define=GT_AUDIO_STATS=true` hace que la app escriba cada segundo las
+  medidas de la reproducción; ver «Medir audio entrecortado y latencia» en
+  `AGENTS.md`.
+- `docs/audio-io.md`: corregido lo que decía del jitter buffer (no añade
+  retardo fijo) y de las colas de reproducción.
+
 ### Changed
 
 **Llamar a un contacto ya no enseña códigos**

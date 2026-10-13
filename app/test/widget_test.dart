@@ -146,11 +146,18 @@ void main() {
     expect(controller.isLive, isTrue);
     // El anfitrión puede seguir invitando desde la conversación.
     expect(controller.canInvite, isTrue);
-    await tester.scrollUntilVisible(
-      find.text('Invitar a alguien más'),
-      200,
-      scrollable: find.byType(Scrollable).first,
-    );
+    // Se arrastra desde el borde: en el centro está el botón de hablar, que
+    // se queda con el gesto a propósito (arrastrar sobre él no desplaza).
+    for (var i = 0;
+        i < 10 && find.text('Invitar a alguien más').evaluate().isEmpty;
+        i++) {
+      final area = tester.getRect(find.byType(Scrollable).first);
+      await tester.dragFrom(
+        area.bottomLeft + const Offset(8, -8),
+        const Offset(0, -200),
+      );
+      await tester.pump();
+    }
     expect(find.text('Invitar a alguien más'), findsOneWidget);
 
     await controller.setPaused(true);

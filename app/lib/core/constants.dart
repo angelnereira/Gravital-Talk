@@ -52,14 +52,10 @@ class PrefKeys {
   static const themeMode = 'ui.themeMode';
   static const nativeLibPath = 'advanced.nativeLibPath';
   static const rendezvous = 'net.rendezvous';
-  static const noiseSuppression = 'audio.noiseSuppression';
+  static const voiceProfile = 'audio.voiceProfile';
   static const turnTones = 'audio.turnTones';
   static const nativeAudio = 'audio.native';
   static const mailboxes = 'net.mailboxes';
-  // Clave nueva a propósito: la antigua (`audio.maxBitrate`) guardaba 64000
-  // como valor por defecto sin que nadie lo hubiera elegido, y arrastrarla
-  // dejaría a quien actualiza por debajo de la calidad prevista.
-  static const bitrate = 'audio.bitrate';
 
   const PrefKeys._();
 }

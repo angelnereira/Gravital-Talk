@@ -189,8 +189,8 @@ typedef _RxIdleC = Int64 Function(Pointer<Void>);
 typedef _RxIdleD = int Function(Pointer<Void>);
 typedef _ConnectAnyTimeoutC = Int32 Function(Pointer<Void>, Pointer<Utf8>, Uint32);
 typedef _ConnectAnyTimeoutD = int Function(Pointer<Void>, Pointer<Utf8>, int);
-typedef _SetBitrateC = Int32 Function(Pointer<Void>, Uint32);
-typedef _SetBitrateD = int Function(Pointer<Void>, int);
+typedef _SetProfileC = Int32 Function(Pointer<Void>, Uint8);
+typedef _SetProfileD = int Function(Pointer<Void>, int);
 typedef _GetBitrateC = Uint32 Function(Pointer<Void>);
 typedef _GetBitrateD = int Function(Pointer<Void>);
 typedef _AudioSetPttC = Int32 Function(Pointer<Void>, Int32);
@@ -283,10 +283,8 @@ class NativeBridge {
         _connectAnyTimeout =
             lib.lookupFunction<_ConnectAnyTimeoutC, _ConnectAnyTimeoutD>(
                 'gs_session_connect_any_timeout'),
-        _setNoiseSuppression = lib.lookupFunction<_AudioSetPttC, _AudioSetPttD>(
-            'gs_session_set_noise_suppression'),
-        _setBitrate = lib.lookupFunction<_SetBitrateC, _SetBitrateD>(
-            'gs_session_set_bitrate'),
+        _setVoiceProfile = lib.lookupFunction<_SetProfileC, _SetProfileD>(
+            'gs_session_set_voice_profile'),
         _bitrate =
             lib.lookupFunction<_GetBitrateC, _GetBitrateD>('gs_session_bitrate'),
         _codec = lib.lookupFunction<_HandleC, _HandleD>('gs_session_codec'),
@@ -349,8 +347,7 @@ class NativeBridge {
   final _KnockD _knockOpen;
   final _HandleD _peerCount;
   final _ConnectAnyTimeoutD _connectAnyTimeout;
-  final _AudioSetPttD _setNoiseSuppression;
-  final _SetBitrateD _setBitrate;
+  final _SetProfileD _setVoiceProfile;
   final _GetBitrateD _bitrate;
   final _HandleD _codec;
   final _IntD _audioSupported;
@@ -831,16 +828,11 @@ class NativeSession {
   /// Dispositivos conectados a esta sesión, sin contar este.
   int peerCount() => _destroyed ? 0 : _bridge._peerCount(_handle);
 
-  /// Activa o desactiva la reducción de ruido del micrófono.
-  void setNoiseSuppression(bool on) {
+  /// Elige el perfil de voz (`GS_VOICE_*`): reducción de ruido, nivelación,
+  /// tope de tasa y realce al escuchar, todo de una vez.
+  void setVoiceProfile(int code) {
     _ensureAlive();
-    _bridge._check(_bridge._setNoiseSuppression(_handle, on ? 1 : 0));
-  }
-
-  /// Tope de la tasa de bits del audio, en bits por segundo.
-  void setBitrate(int bitsPerSecond) {
-    _ensureAlive();
-    _bridge._check(_bridge._setBitrate(_handle, bitsPerSecond));
+    _bridge._check(_bridge._setVoiceProfile(_handle, code));
   }
 
   /// Tasa a la que se está enviando ahora, o 0 si aún no se envía o va en PCM.

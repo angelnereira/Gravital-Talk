@@ -72,7 +72,7 @@ class HitSizes {
   static const double minTouch = 48;
 
   /// Alto del botón PTT de la pantalla de sesión.
-  static const double pttButton = 132;
+  static const double pttButton = 168;
 
   const HitSizes._();
 }

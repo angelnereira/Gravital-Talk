@@ -126,8 +126,7 @@ class NativeSession {
   int? rxIdleMs() => null;
   bool isRelayed() => false;
   int peerCount() => 0;
-  void setNoiseSuppression(bool on) => _unavailable();
-  void setBitrate(int bitsPerSecond) => _unavailable();
+  void setVoiceProfile(int code) => _unavailable();
   int bitrate() => 0;
   bool get compressed => false;
   bool audioStart() => false;

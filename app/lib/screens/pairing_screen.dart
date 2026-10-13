@@ -14,6 +14,8 @@ import '../core/states.dart';
 import '../core/tokens.dart';
 import '../models/session.dart';
 import '../services/contacts.dart';
+import '../services/haptics.dart';
+import '../services/launch_links.dart';
 import '../services/session_controller.dart';
 import '../services/share.dart';
 import 'session_screen.dart';
@@ -59,7 +61,7 @@ class PairingScreen extends StatelessWidget {
 
   /// Invitación con la que entrar nada más abrir (modo unirse): la que llegó
   /// por un enlace. Así quien abre un enlace ve lo mismo que quien escanea,
-  /// incluido el código de respuesta si están en redes distintas.
+  /// sin pedir nada más.
   final String? invite;
 
   @override
@@ -128,67 +130,10 @@ class _HostViewState extends State<_HostView> {
     super.dispose();
   }
 
-  /// Sólo el móvil tiene cámara con la que escanear.
-  static bool get _canScan =>
-      !kIsWeb && (Platform.isAndroid || Platform.isIOS);
-
-  Future<void> _useAnswer(String raw) async {
-    final ok = await _controller.acceptAnswer(raw);
-    if (!mounted || !ok) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Respuesta recibida: conectando…')),
-    );
-  }
-
-  Future<void> _pasteAnswer() async {
-    final data = await Clipboard.getData(Clipboard.kTextPlain);
-    final text = data?.text?.trim() ?? '';
-    if (text.isEmpty) {
-      _controller.reportError('No hay ninguna respuesta copiada.');
-      return;
-    }
-    await _useAnswer(text);
-  }
-
-  Future<void> _scanAnswer() async {
-    final raw = await showModalBottomSheet<String>(
-      context: context,
-      isScrollControlled: true,
-      builder: (sheetCtx) => SizedBox(
-        height: 440,
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.all(Spacing.lg),
-              child: Text(
-                'Escanea el código de respuesta',
-                style: Theme.of(sheetCtx).textTheme.titleMedium,
-              ),
-            ),
-            Expanded(
-              child: MobileScanner(
-                controller: MobileScannerController(
-                  formats: const [BarcodeFormat.qrCode],
-                ),
-                onDetect: (capture) {
-                  final value = capture.barcodes.isEmpty
-                      ? null
-                      : capture.barcodes.first.rawValue;
-                  if (value != null && value.trim().isNotEmpty) {
-                    Navigator.of(sheetCtx).pop(value.trim());
-                  }
-                },
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (raw != null) await _useAnswer(raw);
-  }
-
   Future<void> _copyInvite(String invite) async {
-    await Clipboard.setData(ClipboardData(text: invite));
+    await Clipboard.setData(
+      ClipboardData(text: LaunchLinks.shareable(invite)),
+    );
     if (!mounted) return;
     setState(() => _copied = true);
     await Future<void>.delayed(const Duration(seconds: 2));
@@ -316,7 +261,9 @@ class _HostViewState extends State<_HostView> {
                     FilledButton.tonalIcon(
                       onPressed: () async {
                         final shared = await shareText(
-                            'Únete a mi sala de Gravital Talk:\n$invite');
+                          'Únete a mi sala de Gravital Talk:\n'
+                          '${LaunchLinks.shareable(invite)}',
+                        );
                         if (!shared && mounted) setState(() => _copied = true);
                       },
                       icon: const Icon(Icons.ios_share),
@@ -329,38 +276,6 @@ class _HostViewState extends State<_HostView> {
                       label: Text(
                         _copied ? 'Invitación copiada' : 'Copiar invitación',
                       ),
-                    ),
-                    const SizedBox(height: Spacing.xl),
-                    // Para cuando los dos están en redes distintas: el
-                    // invitado enseña un código con su dirección y aquí se lee.
-                    Text(
-                      c.reachableFromOtherNetworks
-                          ? '¿No conecta desde otra red?'
-                          : '¿Está en otra red (datos móviles, otra wifi)?',
-                      textAlign: TextAlign.center,
-                      style: theme.textTheme.titleSmall
-                          ?.copyWith(color: glass.primary),
-                    ),
-                    const SizedBox(height: Spacing.xs),
-                    Text(
-                      'Al unirse le aparece un código de respuesta. Léelo '
-                      'aquí y os conectáis directo.',
-                      textAlign: TextAlign.center,
-                      style: theme.textTheme.bodySmall
-                          ?.copyWith(color: glass.secondary),
-                    ),
-                    const SizedBox(height: Spacing.md),
-                    if (_canScan)
-                      FilledButton.tonalIcon(
-                        onPressed: _scanAnswer,
-                        icon: const Icon(Icons.qr_code_scanner),
-                        label: const Text('Escanear su respuesta'),
-                      ),
-                    if (_canScan) const SizedBox(height: Spacing.sm),
-                    OutlinedButton.icon(
-                      onPressed: _pasteAnswer,
-                      icon: const Icon(Icons.content_paste),
-                      label: const Text('Pegar su respuesta'),
                     ),
                   ],
                 ],
@@ -389,7 +304,7 @@ class _JoinViewState extends State<_JoinView> {
   final _inviteCtl = TextEditingController();
   MobileScannerController? _scanner;
   bool _joining = false;
-  bool _showAnswer = false;
+  bool _slow = false;
 
   /// `true` cuando ya se conectó y se pasa a la pantalla de hablar.
   bool _handedOff = false;
@@ -430,7 +345,8 @@ class _JoinViewState extends State<_JoinView> {
 
   Future<void> _join(String raw) async {
     if (_joining) return;
-    final invite = raw.trim();
+    // Lo pegado puede ser el enlace en su forma web, o venir en un mensaje.
+    final invite = LaunchLinks.extract(raw) ?? raw.trim();
     final c = context.read<SessionController>();
     if (invite.isEmpty) {
       c.reportError('Pega la invitación que te han pasado.');
@@ -453,14 +369,14 @@ class _JoinViewState extends State<_JoinView> {
     }
     setState(() {
       _joining = true;
-      _showAnswer = false;
+      _slow = false;
     });
     await _scanner?.stop();
-    // En la misma red se conecta en décimas. Si pasan unos segundos, lo más
-    // probable es que estén en redes distintas: entonces se enseña la
-    // respuesta, no antes, para no pedir un paso que casi nunca hace falta.
-    final reveal = Timer(const Duration(seconds: 3), () {
-      if (mounted) setState(() => _showAnswer = true);
+    // En la misma red se conecta en décimas. Entre redes las direcciones de
+    // este dispositivo le llegan solas al anfitrión y tarda unos segundos:
+    // sólo se avisa de que va más despacio, sin pedir nada.
+    final reveal = Timer(const Duration(seconds: 6), () {
+      if (mounted) setState(() => _slow = true);
     });
     final ok = await c.joinFromUri(invite);
     reveal.cancel();
@@ -526,9 +442,7 @@ class _JoinViewState extends State<_JoinView> {
                     const SizedBox(height: Spacing.lg),
                   ],
                   if (_joining)
-                    _JoiningPanel(
-                      answer: _showAnswer ? c.answerUri : null,
-                    )
+                    _JoiningPanel(slow: _slow)
                   else ...[
                     if (_scanner != null) ...[
                       Text(
@@ -551,6 +465,7 @@ class _JoinViewState extends State<_JoinView> {
                                   ? null
                                   : capture.barcodes.first.rawValue;
                               if (value != null && value.trim().isNotEmpty) {
+                                if (!_joining) Haptics.scanned();
                                 _join(value);
                               }
                             },
@@ -611,110 +526,23 @@ class _JoinViewState extends State<_JoinView> {
 
 /// Lo que ve el invitado mientras conecta.
 ///
-/// Empieza siendo sólo "Conectando…". Si la conexión tarda, aparece el código
-/// de respuesta: la dirección de este dispositivo, para que el anfitrión la
-/// lea y abra su red hacia aquí.
-class _JoiningPanel extends StatefulWidget {
-  const _JoiningPanel({required this.answer});
+/// Progreso mientras se entra en una sala. No pide nada: abrir el enlace o
+/// leer el código una vez es todo lo que hay que hacer.
+class _JoiningPanel extends StatelessWidget {
+  const _JoiningPanel({required this.slow});
 
-  /// Respuesta a enseñar, o `null` si aún no toca.
-  final String? answer;
-
-  @override
-  State<_JoiningPanel> createState() => _JoiningPanelState();
-}
-
-class _JoiningPanelState extends State<_JoiningPanel> {
-  bool _copied = false;
-
-  Future<void> _copy(String answer) async {
-    await Clipboard.setData(ClipboardData(text: answer));
-    if (!mounted) return;
-    setState(() => _copied = true);
-    await Future<void>.delayed(const Duration(seconds: 2));
-    if (mounted) setState(() => _copied = false);
-  }
+  /// `true` si ya lleva unos segundos: lo normal entre redes distintas.
+  final bool slow;
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final glass = GlassTextTheme.of(context);
-    final answer = widget.answer;
-
-    if (answer == null) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 80),
-        child: LoadingStates.centered(message: 'Conectando…'),
-      );
-    }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        GlassSurface(
-          padding: const EdgeInsets.all(Spacing.xxl),
-          child: Column(
-            children: [
-              Text(
-                'Enséñale este código',
-                textAlign: TextAlign.center,
-                style: theme.textTheme.titleLarge?.copyWith(
-                  fontWeight: FontWeight.w800,
-                  color: glass.primary,
-                ),
-              ),
-              const SizedBox(height: Spacing.xs),
-              Text(
-                'Estáis en redes distintas. Quien creó la sala tiene que '
-                'leerlo con "Escanear su respuesta".',
-                textAlign: TextAlign.center,
-                style: theme.textTheme.bodyMedium
-                    ?.copyWith(color: glass.secondary),
-              ),
-              const SizedBox(height: Spacing.xl),
-              Semantics(
-                label: 'Código QR de respuesta para el anfitrión',
-                child: Container(
-                  padding: const EdgeInsets.all(Spacing.md),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(Radii.glass),
-                  ),
-                  child: QrImageView(
-                    data: answer,
-                    size: 220,
-                    backgroundColor: Colors.white,
-                  ),
-                ),
-              ),
-              const SizedBox(height: Spacing.lg),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                  const SizedBox(width: Spacing.md),
-                  Flexible(
-                    child: Text(
-                      'Sigo intentando conectar…',
-                      style: theme.textTheme.bodyMedium
-                          ?.copyWith(color: glass.secondary),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: Spacing.lg),
-        OutlinedButton.icon(
-          onPressed: () => _copy(answer),
-          icon: Icon(_copied ? Icons.check : Icons.link),
-          label: Text(_copied ? 'Respuesta copiada' : 'Copiar respuesta'),
-        ),
-      ],
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 80),
+      child: LoadingStates.centered(
+        message: slow
+            ? 'Buscando camino entre vuestras redes…'
+            : 'Conectando…',
+      ),
     );
   }
 }

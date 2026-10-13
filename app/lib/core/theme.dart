@@ -161,6 +161,12 @@ class GravitalTheme {
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(Radii.glass),
         ),
+        actionsPadding: const EdgeInsets.fromLTRB(
+          Spacing.xl,
+          0,
+          Spacing.xl,
+          Spacing.xl,
+        ),
       ),
 
       // Resplandor al pulsar: muy contenido. Por defecto Material lo hace

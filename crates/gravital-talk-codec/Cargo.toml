@@ -31,5 +31,9 @@ nnnoiseless         = { version = "0.5", optional = true, default-features = fal
 proptest = { workspace = true }
 hound    = { workspace = true }
 
+[[example]]
+name = "voice_lab"
+required-features = ["voice"]
+
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

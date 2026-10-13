@@ -7,6 +7,7 @@ import 'core/theme.dart';
 import 'models/connection.dart';
 import 'screens/home_screen.dart';
 import 'core/routes.dart';
+import 'core/states.dart';
 import 'screens/invite_screen.dart';
 import 'screens/onboarding_screen.dart';
 import 'screens/pairing_screen.dart';
@@ -15,6 +16,7 @@ import 'services/contacts.dart';
 import 'services/launch_links.dart';
 import 'services/pairing_uri.dart';
 import 'services/event_log.dart';
+import 'services/haptics.dart';
 import 'services/room_events.dart';
 import 'services/session_controller.dart';
 
@@ -79,6 +81,28 @@ class _GravitalTalkAppState extends State<GravitalTalkApp> {
       widget.contacts ?? ContactsService(widget.controller);
   bool _askingCall = false;
 
+  /// Diálogo de la llamada entrante, mientras está abierto: lo cierra también
+  /// la notificación ("Contestar" / "Ahora no").
+  BuildContext? _callDialog;
+
+  void _onCallAction(bool accept) {
+    final dialog = _callDialog;
+    if (dialog != null && dialog.mounted) Navigator.pop(dialog, accept);
+  }
+
+  /// Alguien abrió una invitación de este dispositivo.
+  void _onAccepted() {
+    final contact = _contacts.accepted.value;
+    if (contact == null) return;
+    Haptics.notice();
+    toastification.show(
+      type: ToastificationType.success,
+      title: Text('${contact.name} aceptó tu invitación'),
+      description: const Text('Ya está en tus contactos.'),
+      autoCloseDuration: const Duration(seconds: 4),
+    );
+  }
+
   /// Enseña la solicitud de un contacto y, si se acepta, entra en su sala.
   Future<void> _onIncomingCall() async {
     final call = _contacts.incoming.value;
@@ -89,21 +113,23 @@ class _GravitalTalkAppState extends State<GravitalTalkApp> {
       context: context,
       barrierDismissible: false,
       builder: (dialog) => AlertDialog(
-        icon: const Icon(Icons.record_voice_over_outlined),
+        icon: Builder(builder: (inside) {
+          _callDialog = inside;
+          return const Icon(Icons.record_voice_over_outlined);
+        }),
         title: Text('${call.contact.name} quiere hablar'),
         content: const Text('Si aceptas, entras directamente en su sala.'),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialog, false),
-            child: const Text('Ahora no'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialog, true),
-            child: const Text('Aceptar'),
+          DialogActions(
+            cancelLabel: 'Ahora no',
+            onCancel: () => Navigator.pop(dialog, false),
+            confirmLabel: 'Aceptar',
+            onConfirm: () => Navigator.pop(dialog, true),
           ),
         ],
       ),
     ) == true;
+    _callDialog = null;
     _askingCall = false;
     if (!accepted) {
       _contacts.reject();
@@ -128,6 +154,8 @@ class _GravitalTalkAppState extends State<GravitalTalkApp> {
     super.initState();
     LaunchLinks.listen(_openInvite);
     _contacts.incoming.addListener(_onIncomingCall);
+    _contacts.accepted.addListener(_onAccepted);
+    BackgroundSession.onCallAction = _onCallAction;
     BackgroundSession.onLeave(
       () => widget.controller.reset(),
       // Desde la notificación no se puede mantener pulsado: un toque abre
@@ -185,6 +213,8 @@ class _GravitalTalkAppState extends State<GravitalTalkApp> {
   void dispose() {
     widget.controller.removeListener(_autoTalk);
     _contacts.incoming.removeListener(_onIncomingCall);
+    _contacts.accepted.removeListener(_onAccepted);
+    BackgroundSession.onCallAction = null;
     super.dispose();
   }
 
@@ -230,9 +260,8 @@ class _GravitalTalkAppState extends State<GravitalTalkApp> {
       return;
     }
     if (_showOnboarding) _finishOnboarding();
-    // Se entra por la misma pantalla que al escanear: muestra el progreso y,
-    // si hace falta, el código de respuesta. Ella misma pasa a la de hablar
-    // al conectar y enseña el error si falla.
+    // Se entra por la misma pantalla que al escanear: muestra el progreso,
+    // pasa a la de hablar al conectar y enseña el error si falla.
     final nav = _navigator.currentState;
     if (nav == null) return;
     nav.popUntil((route) => route.isFirst);

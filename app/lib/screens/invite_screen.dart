@@ -7,6 +7,7 @@ import '../core/glass.dart';
 import '../core/routes.dart';
 import '../core/tokens.dart';
 import '../services/contacts.dart';
+import '../services/launch_links.dart';
 import '../services/share.dart';
 import 'pairing_screen.dart';
 
@@ -62,7 +63,8 @@ class _InviteScreenState extends State<InviteScreen> {
   }
 
   String _message(String link) =>
-      'Hablemos por Gravital Talk. Abre este enlace con la app:\n$link';
+      'Hablemos por Gravital Talk. Abre este enlace con la app:\n'
+      '${LaunchLinks.shareable(link)}';
 
   @override
   Widget build(BuildContext context) {
@@ -161,7 +163,9 @@ class _InviteScreenState extends State<InviteScreen> {
                     const SizedBox(height: Spacing.md),
                     OutlinedButton.icon(
                       onPressed: () async {
-                        await Clipboard.setData(ClipboardData(text: link));
+                        await Clipboard.setData(
+                          ClipboardData(text: LaunchLinks.shareable(link)),
+                        );
                         if (mounted) setState(() => _copied = true);
                       },
                       icon: Icon(_copied ? Icons.check : Icons.link),
