@@ -97,6 +97,7 @@ class AppSettings {
     this.voiceProfile = VoiceProfile.clear,
     this.turnTones = true,
     this.nativeAudio = false,
+    this.pttBubble = true,
   });
 
   /// Valores que usa la app cuando nadie ha configurado nada.
@@ -132,6 +133,9 @@ class AppSettings {
   /// los plugins. Menos latencia; experimental hasta probarlo en más equipos.
   final bool nativeAudio;
 
+  /// Android: burbuja flotante para hablar con la app oculta.
+  final bool pttBubble;
+
   AppSettings copyWith({
     int? sampleRate,
     int? channels,
@@ -144,6 +148,7 @@ class AppSettings {
     VoiceProfile? voiceProfile,
     bool? turnTones,
     bool? nativeAudio,
+    bool? pttBubble,
   }) {
     return AppSettings(
       sampleRate: sampleRate ?? this.sampleRate,
@@ -157,6 +162,7 @@ class AppSettings {
       voiceProfile: voiceProfile ?? this.voiceProfile,
       turnTones: turnTones ?? this.turnTones,
       nativeAudio: nativeAudio ?? this.nativeAudio,
+      pttBubble: pttBubble ?? this.pttBubble,
     );
   }
 

@@ -6,6 +6,20 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
 
 ### Added
 
+**Burbuja para hablar con la app oculta (Android)**
+- Al salir de la app con una sala abierta queda una burbuja flotante encima de
+  las demás apps: mantenerla pulsada es el botón de hablar, tocarla vuelve a
+  la sala y arrastrarla a la equis de abajo la quita hasta la próxima vez que
+  se salga de la app. Se pega al borde más cercano y recuerda dónde se dejó.
+- Cambia de color con el estado (escuchando, hablando, en pausa) y late
+  mientras habla el otro.
+- Si llama un contacto con la app oculta, la burbuja también avisa. Tocarla
+  contesta, y en cuanto la sala conecta la app vuelve al fondo: se sigue
+  hablando desde la burbuja sin perder lo que se estaba haciendo.
+- Se activa en Ajustes → Voz → «Burbuja para hablar» (encendida por defecto).
+  Necesita el permiso de mostrarse encima de otras apps; sin él no aparece y
+  la notificación sigue siendo el control.
+
 **Invitaciones que se pueden pulsar en cualquier chat, sin ninguna web**
 - Al compartir o copiar una invitación, el enlace va ahora como
   `http://localhost:47801/gravital-talk/…`. Apunta al propio dispositivo de
@@ -29,6 +43,9 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
   en LTE contra portátil en casa: de 4 de 6 a 8 de 8, en 4–5 s.
 
 ### Changed
+- Cambiar «Hablar»/«Soltar» en la notificación de la sala ya no rearranca el
+  servicio en segundo plano: sólo repinta la notificación. Rearrancarlo con la
+  app oculta podía quitarle al servicio el permiso de micrófono.
 - **Ya no existe el paso del código de respuesta.** Abrir el enlace o leer el
   código una vez es todo: quien entra sólo ve «Conectando…» y, si tarda,
   «Buscando camino entre vuestras redes…». El anfitrión ya no tiene «Escanear

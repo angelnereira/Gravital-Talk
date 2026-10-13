@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:toastification/toastification.dart';
@@ -90,6 +92,33 @@ class _GravitalTalkAppState extends State<GravitalTalkApp> {
     if (dialog != null && dialog.mounted) Navigator.pop(dialog, accept);
   }
 
+  /// Contestada desde la burbuja: en cuanto la sala conecte, la app vuelve al
+  /// fondo y se habla desde la burbuja, sin perder lo que se estaba haciendo.
+  bool _backWhenLive = false;
+  bool _sawBusy = false;
+
+  void _onBubbleAnswer() {
+    final dialog = _callDialog;
+    if (dialog == null || !dialog.mounted) return;
+    _backWhenLive = true;
+    _sawBusy = false;
+    _onCallAction(true);
+  }
+
+  void _returnWhenLive() {
+    if (!_backWhenLive) return;
+    final c = widget.controller;
+    if (c.isLive) {
+      _backWhenLive = false;
+      unawaited(BackgroundSession.moveToBack());
+    } else if (c.busy) {
+      _sawBusy = true;
+    } else if (_sawBusy) {
+      // No conectó: se queda a la vista, que es donde se ve el error.
+      _backWhenLive = false;
+    }
+  }
+
   /// Alguien abrió una invitación de este dispositivo.
   void _onAccepted() {
     final contact = _contacts.accepted.value;
@@ -156,6 +185,8 @@ class _GravitalTalkAppState extends State<GravitalTalkApp> {
     _contacts.incoming.addListener(_onIncomingCall);
     _contacts.accepted.addListener(_onAccepted);
     BackgroundSession.onCallAction = _onCallAction;
+    BackgroundSession.onBubbleAnswer = _onBubbleAnswer;
+    widget.controller.addListener(_returnWhenLive);
     BackgroundSession.onLeave(
       () => widget.controller.reset(),
       // Desde la notificación no se puede mantener pulsado: un toque abre
@@ -163,6 +194,11 @@ class _GravitalTalkAppState extends State<GravitalTalkApp> {
       togglePtt: () {
         final c = widget.controller;
         c.pttActive ? c.pttUp() : c.pttDown();
+      },
+      // La burbuja sí: mientras se mantiene pulsada, se habla.
+      ptt: (down) {
+        final c = widget.controller;
+        down ? c.pttDown() : c.pttUp();
       },
     );
     final link = widget.initialLink;
@@ -212,6 +248,8 @@ class _GravitalTalkAppState extends State<GravitalTalkApp> {
   @override
   void dispose() {
     widget.controller.removeListener(_autoTalk);
+    widget.controller.removeListener(_returnWhenLive);
+    BackgroundSession.onBubbleAnswer = null;
     _contacts.incoming.removeListener(_onIncomingCall);
     _contacts.accepted.removeListener(_onAccepted);
     BackgroundSession.onCallAction = null;

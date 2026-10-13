@@ -54,6 +54,8 @@ class SessionService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
+        inSession = !standby
+        current = this
         if (standby) {
             // A la espera de llamadas no se retiene la CPU: sólo el proceso.
             wakeLock?.takeIf { it.isHeld }?.release()
@@ -68,6 +70,25 @@ class SessionService : Service() {
         }
         // Si el sistema mata el proceso no hay sesión que retomar.
         return START_NOT_STICKY
+    }
+
+    /** `true` con una sala en curso (no en la espera de llamadas). */
+    var inSession = false
+        private set
+
+    /**
+     * Cambia sólo el texto y las acciones de la notificación de la sala.
+     *
+     * No vuelve a pasar por `startForeground`: hacerlo con la app oculta (al
+     * hablar desde la burbuja) obliga al sistema a revisar otra vez el tipo
+     * micrófono, y fuera de las excepciones (tocar la notificación) lo rebaja
+     * y el micrófono deja de captar. Devuelve `false` si no pudo.
+     */
+    fun refresh(room: String, status: String): Boolean {
+        if (!inSession) return false
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val candidates = listOfNotNull(callNotification(room, status), notification(room, false, status))
+        return candidates.any { runCatching { manager.notify(NOTIFICATION_ID, it) }.isSuccess }
     }
 
     /**
@@ -227,6 +248,8 @@ class SessionService : Service() {
     }
 
     override fun onDestroy() {
+        if (current === this) current = null
+        inSession = false
         wakeLock?.takeIf { it.isHeld }?.release()
         wakeLock = null
         releaseWifi()
@@ -343,6 +366,11 @@ class SessionService : Service() {
             (context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
                 .cancel(CALL_NOTIFICATION_ID)
         }
+
+        /** El servicio en marcha, si lo hay: para repintar sin rearrancarlo. */
+        @Volatile
+        var current: SessionService? = null
+            private set
 
         /** Lo fija la actividad: salir desde la notificación lo decide Dart. */
         var onLeave: (() -> Unit)? = null

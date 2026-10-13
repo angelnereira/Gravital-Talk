@@ -30,6 +30,7 @@ class SettingsStore {
       ),
       turnTones: p.getBool(PrefKeys.turnTones) ?? true,
       nativeAudio: p.getBool(PrefKeys.nativeAudio) ?? false,
+      pttBubble: p.getBool(PrefKeys.pttBubble) ?? true,
     );
   }
 
@@ -43,6 +44,7 @@ class SettingsStore {
     await p.setString(PrefKeys.voiceProfile, s.voiceProfile.name);
     await p.setBool(PrefKeys.turnTones, s.turnTones);
     await p.setBool(PrefKeys.nativeAudio, s.nativeAudio);
+    await p.setBool(PrefKeys.pttBubble, s.pttBubble);
     await p.setString(PrefKeys.codec, s.codec.name);
     await p.setString(PrefKeys.themeMode, s.themeMode.name);
     await p.setString(PrefKeys.rendezvous, s.rendezvous);
