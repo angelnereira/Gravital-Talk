@@ -87,9 +87,20 @@ class _GravitalTalkAppState extends State<GravitalTalkApp> {
   /// la notificación ("Contestar" / "Ahora no").
   BuildContext? _callDialog;
 
+  /// Respuesta que llegó antes de que el diálogo existiera. Con la app oculta
+  /// Flutter no dibuja: el diálogo se pide al llegar la llamada, pero no se
+  /// construye hasta que la actividad vuelve, y el "contestar" de la burbuja o
+  /// de la notificación llega justo antes. Sin guardarla se perdía y había que
+  /// aceptar otra vez dentro de la app.
+  bool? _earlyAnswer;
+
   void _onCallAction(bool accept) {
     final dialog = _callDialog;
-    if (dialog != null && dialog.mounted) Navigator.pop(dialog, accept);
+    if (dialog != null && dialog.mounted) {
+      Navigator.pop(dialog, accept);
+    } else if (_askingCall) {
+      _earlyAnswer = accept;
+    }
   }
 
   /// Contestada desde la burbuja: en cuanto la sala conecte, la app vuelve al
@@ -98,8 +109,7 @@ class _GravitalTalkAppState extends State<GravitalTalkApp> {
   bool _sawBusy = false;
 
   void _onBubbleAnswer() {
-    final dialog = _callDialog;
-    if (dialog == null || !dialog.mounted) return;
+    if (!_askingCall) return;
     _backWhenLive = true;
     _sawBusy = false;
     _onCallAction(true);
@@ -144,6 +154,13 @@ class _GravitalTalkAppState extends State<GravitalTalkApp> {
       builder: (dialog) => AlertDialog(
         icon: Builder(builder: (inside) {
           _callDialog = inside;
+          final early = _earlyAnswer;
+          if (early != null) {
+            _earlyAnswer = null;
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (inside.mounted) Navigator.pop(inside, early);
+            });
+          }
           return const Icon(Icons.record_voice_over_outlined);
         }),
         title: Text('${call.contact.name} quiere hablar'),
@@ -159,6 +176,7 @@ class _GravitalTalkAppState extends State<GravitalTalkApp> {
       ),
     ) == true;
     _callDialog = null;
+    _earlyAnswer = null;
     _askingCall = false;
     if (!accepted) {
       _contacts.reject();
