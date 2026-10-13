@@ -11,6 +11,7 @@ import '../core/glass.dart';
 import '../core/states.dart';
 import '../core/tokens.dart';
 import '../models/connection.dart';
+import '../services/background_session.dart';
 import '../services/contacts.dart';
 import '../services/crash_report.dart';
 import '../services/engine.dart';
@@ -83,6 +84,9 @@ class _SettingsScreenState extends State<SettingsScreen>
       !kIsWeb && (Platform.isAndroid || Platform.isIOS);
 
   final Map<Permission, PermissionStatus> _status = {};
+
+  /// Android deja dibujar la burbuja para hablar encima de otras apps.
+  bool _bubbleAllowed = false;
   String? _publicIp;
   List<String> _localIps = const [];
   bool _checkingNetwork = false;
@@ -116,7 +120,37 @@ class _SettingsScreenState extends State<SettingsScreen>
         // Plataforma sin ese permiso: se deja sin estado y la fila no sale.
       }
     }
-    if (mounted) setState(() => _status..clear()..addAll(fresh));
+    final bubble = await BackgroundSession.bubbleAllowed();
+    if (mounted) {
+      setState(() {
+        _status
+          ..clear()
+          ..addAll(fresh);
+        _bubbleAllowed = bubble;
+      });
+    }
+  }
+
+  /// La burbuja sin permiso no aparece: al encenderla se pide. El permiso se
+  /// da en una pantalla del sistema; al volver se relee
+  /// (`didChangeAppLifecycleState`).
+  Future<void> _setBubble(SessionController c, bool on) async {
+    c.updateSettings(c.settings.copyWith(pttBubble: on));
+    if (on && !_bubbleAllowed) {
+      final granted = await BackgroundSession.requestBubble();
+      if (mounted) setState(() => _bubbleAllowed = granted);
+    }
+  }
+
+  String _bubbleSummary(AppSettings s) {
+    const what = 'Con una sala abierta o una llamada entrante, al salir de la '
+        'app queda una burbuja encima de todo: mantenla pulsada para hablar, '
+        'tócala para volver y arrástrala a la equis para quitarla.';
+    if (s.pttBubble && !_bubbleAllowed) {
+      return '$what Falta el permiso de mostrarse encima de otras apps: toca '
+          'para darlo.';
+    }
+    return what;
   }
 
   /// Pide el permiso; si el sistema ya no deja preguntar, abre sus ajustes.
@@ -260,6 +294,20 @@ class _SettingsScreenState extends State<SettingsScreen>
                       s.copyWith(turnTones: !s.turnTones),
                     ),
                   ),
+                  if (!kIsWeb && Platform.isAndroid)
+                    _Row(
+                      icon: Icons.bubble_chart_outlined,
+                      title: 'Burbuja para hablar',
+                      subtitle: _bubbleSummary(s),
+                      trailing: Switch(
+                        value: s.pttBubble,
+                        onChanged: (on) => _setBubble(c, on),
+                      ),
+                      onTap: () => _setBubble(
+                        c,
+                        !s.pttBubble || !_bubbleAllowed,
+                      ),
+                    ),
                 ],
               ),
               _Section(

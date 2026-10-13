@@ -461,6 +461,27 @@ mandes por la sesión: el códec y RNNoise se los comen.
 - Las vibraciones cortas (botón de hablar, código leído, avisos) son `Haptics`
   (`app/lib/services/haptics.dart`); no necesitan permiso.
 
+## Burbuja para hablar (Android)
+
+`PttBubble.kt` dibuja una ventana `TYPE_APPLICATION_OVERLAY` cuando la actividad está
+parada (`onStop`) y Dart dice que hay sala (`session`) o llamada entrante (`ringing`), por
+`BackgroundSession` (método `bubble`). Mantener pulsado 150 ms es hablar (`pttDown`/`pttUp`
+hacia Dart); moverse antes es arrastrar. Tocarla con una llamada abre la actividad con
+`EXTRA_ANSWER` + `EXTRA_FROM_BUBBLE`, y Dart (`app.dart`, `_returnWhenLive`) manda la app al
+fondo en cuanto la sala conecta.
+
+- Sin `SYSTEM_ALERT_WINDOW` concedido (`Settings.canDrawOverlays`) no aparece. Ese mismo
+  permiso es el que deja abrir la actividad y llamar a `startForegroundService` desde
+  segundo plano.
+- Hablar desde la burbuja no debe pasar por `startForeground` otra vez: con la app oculta
+  y fuera de las excepciones (tocar la notificación) Android puede negar el tipo micrófono
+  (`enterForeground` cae entonces a sólo reproducción) y la sala seguiría, pero muda. Sin
+  comprobar en un teléfono; se evita por diseño. Por eso los cambios de estado van por `SessionService.refresh`
+  (`notify` con el mismo id), no rearrancando el servicio.
+- Para probarla sin tocar el teléfono: `adb shell appops set dev.gravitaltalk.gravital_talk_app
+  SYSTEM_ALERT_WINDOW allow`, entrar en una sala, `input keyevent KEYCODE_HOME` y
+  `input swipe X Y X Y 2000` sobre la burbuja (un *swipe* sin moverse es mantener pulsado).
+
 ## Sala en segundo plano (Android)
 
 `SessionService` es un servicio en primer plano (`microphone|mediaPlayback`) que arranca

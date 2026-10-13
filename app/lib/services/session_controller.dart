@@ -205,6 +205,7 @@ class SessionController extends ChangeNotifier {
     _server = await _store.loadServerProfile();
     _p2p = await _store.loadP2pProfile();
     _settings = await _store.loadSettings();
+    unawaited(BackgroundSession.setBubbleEnabled(_settings.pttBubble));
     notifyListeners();
   }
 
@@ -213,6 +214,7 @@ class SessionController extends ChangeNotifier {
     // La calidad y la reducción de ruido se pueden cambiar a media
     // conversación.
     _engine.applyAudioSettings(s);
+    unawaited(BackgroundSession.setBubbleEnabled(s.pttBubble));
     _store.saveSettings(s);
     notifyListeners();
   }
@@ -751,6 +753,7 @@ class SessionController extends ChangeNotifier {
       if (talking != _peerTalking) {
         _peerTalking = talking;
         _turnTone(end: !talking);
+        unawaited(BackgroundSession.peerTalking(talking));
       }
     } catch (_) {
       // Motor entre dos estados: el siguiente tick reintenta.

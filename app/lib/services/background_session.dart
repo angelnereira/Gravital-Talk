@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -80,9 +81,82 @@ class BackgroundSession {
 
   static String _room = '';
 
+  // ── Burbuja para hablar ──────────────────────────────────────────────────
+
+  static bool _bubble = true;
+  static bool _talking = false;
+  static bool _paused = false;
+  static bool _peerTalking = false;
+  static String? _caller;
+
+  /// Activa o quita la burbuja flotante (Ajustes). Sale sólo con la app
+  /// oculta, con una sala en curso o una llamada entrante, y si el sistema
+  /// deja mostrarla encima de otras apps.
+  static Future<void> setBubbleEnabled(bool on) async {
+    if (_bubble == on) return;
+    _bubble = on;
+    await _syncBubble();
+  }
+
+  /// `true` si Android deja dibujar la burbuja encima de otras apps.
+  static Future<bool> bubbleAllowed() async {
+    if (!_supported) return false;
+    try {
+      return await Permission.systemAlertWindow.isGranted;
+    } on Object {
+      return false;
+    }
+  }
+
+  /// Lleva a la pantalla del sistema donde se concede el permiso.
+  static Future<bool> requestBubble() async {
+    if (!_supported) return false;
+    try {
+      return (await Permission.systemAlertWindow.request()).isGranted;
+    } on Object {
+      return false;
+    }
+  }
+
+  /// El otro toma o suelta la palabra: la burbuja late mientras habla.
+  static Future<void> peerTalking(bool on) async {
+    if (_peerTalking == on) return;
+    _peerTalking = on;
+    await _syncBubble();
+  }
+
+  /// Llamada entrante de `caller` esperando respuesta, o `null` si ya no.
+  static Future<void> ringing(String? caller) async {
+    if (_caller == caller) return;
+    _caller = caller;
+    await _syncBubble();
+  }
+
+  static Future<void> _syncBubble() => _invoke('bubble', bubbleState());
+
+  /// Lo que se le manda a la burbuja: modo (`off`, `session`, `ringing`) y
+  /// estado de la sala.
+  @visibleForTesting
+  static Map<String, Object> bubbleState() => {
+        'mode': _inSession
+            ? 'session'
+            : (_caller != null ? 'ringing' : 'off'),
+        'talking': _talking,
+        'paused': _paused,
+        'peerTalking': _peerTalking,
+        'caller': _caller ?? '',
+        'enabled': _bubble,
+      };
+
+  /// Manda la app al fondo, de vuelta a lo que se estaba haciendo.
+  static Future<void> moveToBack() => _invoke('moveToBack', {});
+
   /// Refleja en la notificación si se está hablando, escuchando o en pausa.
   static Future<void> update({required bool talking, required bool paused}) async {
+    _talking = talking;
+    _paused = paused;
     if (!_supported || !_inSession) return;
+    unawaited(_syncBubble());
     try {
       await _channel.invokeMethod<bool>('start', {
         'room': _room,
@@ -98,7 +172,12 @@ class BackgroundSession {
   static Future<void> start(String room) async {
     _inSession = true;
     _room = room;
+    _talking = false;
+    _paused = false;
+    _peerTalking = false;
+    _caller = null;
     if (!_supported) return;
+    unawaited(_syncBubble());
     try {
       // La notificación es desde donde se vuelve o se sale; sin permiso el
       // servicio funciona igual, sólo que no se ve.
@@ -115,7 +194,11 @@ class BackgroundSession {
 
   static Future<void> stop() async {
     _inSession = false;
+    _talking = false;
+    _paused = false;
+    _peerTalking = false;
     if (!_supported) return;
+    unawaited(_syncBubble());
     try {
       // Con las llamadas en segundo plano activas, el servicio no se para:
       // vuelve a la espera.
@@ -131,14 +214,36 @@ class BackgroundSession {
     }
   }
 
-  /// Avisa cuando el usuario pulsa "Salir de la sala" en la notificación.
-  static void onLeave(void Function() leave, {void Function()? togglePtt}) {
+  /// Contestar desde la burbuja: como "Contestar", pero al conectar la app
+  /// vuelve al fondo y se sigue hablando desde la burbuja.
+  static void Function()? onBubbleAnswer;
+
+  /// Avisa cuando el usuario pulsa "Salir de la sala" en la notificación, el
+  /// botón de hablar de la notificación (`togglePtt`) o mantiene pulsada la
+  /// burbuja (`ptt`, con `true` al pulsar y `false` al soltar).
+  static void onLeave(
+    void Function() leave, {
+    void Function()? togglePtt,
+    void Function(bool down)? ptt,
+  }) {
     if (!_supported) return;
     _channel.setMethodCallHandler((call) async {
-      if (call.method == 'leave') leave();
-      if (call.method == 'togglePtt') togglePtt?.call();
-      if (call.method == 'answerCall') onCallAction?.call(true);
-      if (call.method == 'declineCall') onCallAction?.call(false);
+      switch (call.method) {
+        case 'leave':
+          leave();
+        case 'togglePtt':
+          togglePtt?.call();
+        case 'pttDown':
+          ptt?.call(true);
+        case 'pttUp':
+          ptt?.call(false);
+        case 'answerCall':
+          onCallAction?.call(true);
+        case 'answerFromBubble':
+          onBubbleAnswer?.call();
+        case 'declineCall':
+          onCallAction?.call(false);
+      }
     });
   }
 }

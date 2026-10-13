@@ -334,13 +334,16 @@ class ContactsService extends ChangeNotifier {
     _ringTimer = null;
     if (call == null || call.auto) {
       unawaited(BackgroundSession.ring(false));
+      unawaited(BackgroundSession.ringing(null));
       return;
     }
     unawaited(BackgroundSession.ring(true));
-    _ringTimer = Timer(
-      const Duration(seconds: 30),
-      () => unawaited(BackgroundSession.ring(false)),
-    );
+    // Con la app oculta, la burbuja también avisa: tocarla contesta.
+    unawaited(BackgroundSession.ringing(call.contact.name));
+    _ringTimer = Timer(const Duration(seconds: 30), () {
+      unawaited(BackgroundSession.ring(false));
+      unawaited(BackgroundSession.ringing(null));
+    });
   }
 
   /// `false` sin librería nativa (modo demostración): no hay con qué cifrar.

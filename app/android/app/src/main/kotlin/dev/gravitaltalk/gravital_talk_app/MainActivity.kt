@@ -18,6 +18,7 @@ import java.io.File
  */
 class MainActivity : FlutterActivity() {
     private var channel: MethodChannel? = null
+    private var background: MethodChannel? = null
 
     /** Enlace con el que se lanzó la app; se entrega una sola vez. */
     private var initialLink: String? = null
@@ -70,15 +71,29 @@ class MainActivity : FlutterActivity() {
     /** La sala sigue viva en segundo plano mientras dure: ver [SessionService]. */
     private fun bindBackground(flutterEngine: FlutterEngine) {
         val background = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "gravital_talk/background")
+        this.background = background
         SessionService.onLeave = { runOnUiThread { background.invokeMethod("leave", null) } }
         SessionService.onTogglePtt = { runOnUiThread { background.invokeMethod("togglePtt", null) } }
         SessionService.onCallAction = { accept ->
             runOnUiThread { background.invokeMethod(if (accept) "answerCall" else "declineCall", null) }
         }
+        PttBubble.onPtt = { down ->
+            runOnUiThread { background.invokeMethod(if (down) "pttDown" else "pttUp", null) }
+        }
         background.setMethodCallHandler { call, result ->
             val service = Intent(this, SessionService::class.java)
             when (call.method) {
                 "start" -> {
+                    // Con la sala ya en marcha, sólo cambia el estado: se
+                    // repinta la notificación sin volver a arrancar el servicio.
+                    val status = call.argument<String>("status")
+                    val running = SessionService.current
+                    if (status != null && call.argument<String>("mode") != "standby" &&
+                        running != null && running.refresh(call.argument<String>("room").orEmpty(), status)
+                    ) {
+                        result.success(true)
+                        return@setMethodCallHandler
+                    }
                     service.putExtra(SessionService.EXTRA_ROOM, call.argument<String>("room").orEmpty())
                     service.putExtra(SessionService.EXTRA_STANDBY, call.argument<String>("mode") == "standby")
                     call.argument<String>("status")?.let { service.putExtra(SessionService.EXTRA_STATUS, it) }
@@ -110,6 +125,24 @@ class MainActivity : FlutterActivity() {
                     if (call.argument<Boolean>("on") == true) Ringer.start(this) else Ringer.stop()
                     result.success(true)
                 }
+                "bubble" -> {
+                    val mode = when (call.argument<String>("mode")) {
+                        "session" -> PttBubble.Mode.SESSION
+                        "ringing" -> PttBubble.Mode.RINGING
+                        else -> PttBubble.Mode.OFF
+                    }
+                    PttBubble.update(
+                        this,
+                        mode,
+                        talking = call.argument<Boolean>("talking") == true,
+                        paused = call.argument<Boolean>("paused") == true,
+                        peerTalking = call.argument<Boolean>("peerTalking") == true,
+                        caller = call.argument<String>("caller").orEmpty(),
+                        enabled = call.argument<Boolean>("enabled") != false,
+                    )
+                    result.success(true)
+                }
+                "moveToBack" -> result.success(moveTaskToBack(true))
                 "notifyInfo" -> {
                     SessionService.notifyInfo(
                         this,
@@ -123,8 +156,20 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        PttBubble.setAppVisible(this, true)
+    }
+
+    override fun onStop() {
+        // Fuera de la app, la burbuja toma el relevo del botón de hablar.
+        PttBubble.setAppVisible(this, false)
+        super.onStop()
+    }
+
     override fun onDestroy() {
         // Sin actividad no hay Dart que mantenga la sesión.
+        PttBubble.release()
         SessionService.onLeave = null
         SessionService.onTogglePtt = null
         SessionService.onCallAction = null
@@ -138,8 +183,14 @@ class MainActivity : FlutterActivity() {
         // La app ya estaba abierta: el enlace llega aquí, no al arranque.
         intent.pairingLink()?.let { channel?.invokeMethod("onLink", it) }
         // "Contestar" en la notificación de una llamada.
+        // Desde la burbuja, además, se vuelve a lo que se estaba haciendo en
+        // cuanto la sala conecta.
         if (intent.getBooleanExtra(SessionService.EXTRA_ANSWER, false)) {
-            SessionService.onCallAction?.invoke(true)
+            if (intent.getBooleanExtra(PttBubble.EXTRA_FROM_BUBBLE, false)) {
+                background?.invokeMethod("answerFromBubble", null)
+            } else {
+                SessionService.onCallAction?.invoke(true)
+            }
         }
     }
 
