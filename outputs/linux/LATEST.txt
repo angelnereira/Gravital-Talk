@@ -1,1 +1,1 @@
-gravital-talk-0.3.0-alpha.1-f6acfeb-linux-x64.tar.gz
+gravital-talk-0.3.0-alpha.1-d5ea386-linux-x64.tar.gz
