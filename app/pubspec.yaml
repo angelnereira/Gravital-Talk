@@ -51,3 +51,10 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  # Google Sans Flex (SIL OFL 1.1). Variable: los ejes los fija el tema con
+  # `TextStyle.fontVariations`, no el pubspec. Va empaquetada y no se descarga en
+  # tiempo de ejecución: la app tiene que verse igual sin red.
+  fonts:
+    - family: GoogleSansFlex
+      fonts:
+        - asset: assets/fonts/GoogleSansFlex.ttf

@@ -7,10 +7,65 @@ library;
 import 'package:flutter/cupertino.dart' show CupertinoPageTransitionsBuilder;
 import 'package:flutter/material.dart';
 
+import 'fonts.dart';
 import 'semantic_colors.dart';
 import 'tokens.dart';
 
+/// Escrituras que Google Sans Flex no cubre (chino, árabe, tailandés…).
+/// Sin esto Dart eliges una fuente del sistema por su cuenta y el resultado
+/// cambia entre plataformas.
+const List<String> _fallback = <String>[
+  'Roboto Flex',
+  'Noto Sans',
+  '.SF Pro Text',
+];
+
 /// Tema principal de la app.
+/// Un estilo de la escala tipográfica.
+///
+/// Los tamaños van aquí, explícitos, y no se dejan al tema de Flutter.
+///
+/// La razón es concreta: en Flutter 3.47 `ThemeData.textTheme` devuelve los
+/// estilos con `fontSize` nulo — el tamaño se resuelve más tarde, al renderizar.
+/// Con el tamaño en nulo no hay forma de mandar el eje óptico `opsz` de Google
+/// Sans Flex, que es justo lo que hace que una misma variable se dibuje bien a
+/// 11 y a 57 dp. Declarar la escala (sección 5.2 del documento GEUI) devuelve el
+/// tamaño al tema y hace el eje posible.
+@immutable
+class _Style {
+  const _Style(this.size, this.lineHeight, this.weight, this.tracking);
+
+  /// Tamaño en puntos lógicos.
+  final double size;
+
+  /// Interlineado, en múltiplos del tamaño.
+  final double lineHeight;
+
+  final FontWeight weight;
+
+  /// Tracking en sp; negativo en los títulos grandes, como en la escala M3.
+  final double tracking;
+}
+
+/// La escala oficial de Material 3 (GEUI §5.2).
+const List<(String, _Style)> _scale = [
+  ('displayLarge', _Style(57, 64 / 57, FontWeight.w400, -0.5)),
+  ('displayMedium', _Style(45, 52 / 45, FontWeight.w400, -0.4)),
+  ('displaySmall', _Style(36, 44 / 36, FontWeight.w400, -0.3)),
+  ('headlineLarge', _Style(32, 40 / 32, FontWeight.w400, -0.4)),
+  ('headlineMedium', _Style(28, 36 / 28, FontWeight.w400, -0.3)),
+  ('headlineSmall', _Style(24, 32 / 24, FontWeight.w400, -0.2)),
+  ('titleLarge', _Style(22, 28 / 22, FontWeight.w400, -0.1)),
+  ('titleMedium', _Style(16, 24 / 16, FontWeight.w500, 0.1)),
+  ('titleSmall', _Style(14, 20 / 14, FontWeight.w500, 0.1)),
+  ('bodyLarge', _Style(16, 24 / 16, FontWeight.w400, 0.5)),
+  ('bodyMedium', _Style(14, 20 / 14, FontWeight.w400, 0.25)),
+  ('bodySmall', _Style(12, 16 / 12, FontWeight.w400, 0.4)),
+  ('labelLarge', _Style(14, 20 / 14, FontWeight.w500, 0.1)),
+  ('labelMedium', _Style(12, 16 / 12, FontWeight.w500, 0.5)),
+  ('labelSmall', _Style(11, 16 / 11, FontWeight.w500, 0.5)),
+];
+
 abstract final class NTheme {
   /// Color semilla de marca Gravital (teal de "señal").
   static const Color brandSeed = Color(0xFF0D9488);
@@ -119,7 +174,9 @@ abstract final class NTheme {
         backgroundColor: scheme.surfaceContainerLow,
         showDragHandle: true,
         shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(NShape.extraLarge)),
+          borderRadius: BorderRadius.vertical(
+            top: Radius.circular(NShape.extraLarge),
+          ),
         ),
       ),
 
@@ -142,9 +199,7 @@ abstract final class NTheme {
       highlightColor: scheme.primary.withValues(alpha: 0.04),
 
       // ── Extensiones ──────────────────────────────────────────────────────
-      extensions: [
-        SemanticColors.from(scheme),
-      ],
+      extensions: [SemanticColors.from(scheme)],
     );
   }
 
@@ -158,44 +213,47 @@ abstract final class NTheme {
   }
 
   static TextTheme _buildTextTheme(TextTheme base, ColorScheme scheme) {
-    final onSurface = scheme.onSurface;
-
-    final scaled = base.apply(
-      bodyColor: onSurface,
-      displayColor: onSurface,
-    );
-
-    // Cifras tabulares en toda la escala: el RTT, el jitter y la duración de la
-    // conversación se actualizan varias veces por segundo, y sin esto un "9" que
-    // pasa a "10" desplaza la fila entera.
-    TextStyle? tune(TextStyle? s, FontWeight weight, [double? tracking]) {
+    // Google Sans Flex es un único fichero variable: los ejes los pide el
+    // `TextStyle`, no el pubspec (ver lib/ui/fonts.dart). Sin `FontVariation.weight`
+    // todo se dibujaría con el peso por defecto y los títulos no se
+    // distinguirían del cuerpo.
+    TextStyle? tune(TextStyle? s, _Style spec) {
       if (s == null) return null;
       return s.copyWith(
-        fontWeight: weight,
+        fontFamily: kFontFamily,
+        fontFamilyFallback: _fallback,
+        fontSize: spec.size,
+        height: spec.lineHeight,
+        fontWeight: spec.weight,
+        // Cifras tabulares en toda la escala: el RTT, el jitter y la duración de
+        // la conversación se actualizan varias veces por segundo, y sin esto un
+        // "9" que pasa a "10" desplaza la fila entera.
         fontFeatures: const [FontFeature.tabularFigures()],
-        letterSpacing: tracking,
+        letterSpacing: spec.tracking,
+        fontVariations: [
+          FontVariation.weight(FontAxis.weight(spec.weight.value.toDouble())),
+          FontVariation('opsz', FontAxis.opticalSize(spec.size)),
+          kRoundnessText,
+        ],
       );
     }
 
-    // Pesos y tracking de la escala oficial M3 (sección 5.2 del documento GEUI):
-    // los títulos grandes van en 400 y tracking negativo, los medianos en 500 y
-    // las etiquetas en 500.
-    return scaled.copyWith(
-      displayLarge: tune(scaled.displayLarge, FontWeight.w400, -0.5),
-      displayMedium: tune(scaled.displayMedium, FontWeight.w400, -0.4),
-      displaySmall: tune(scaled.displaySmall, FontWeight.w400, -0.3),
-      headlineLarge: tune(scaled.headlineLarge, FontWeight.w400, -0.4),
-      headlineMedium: tune(scaled.headlineMedium, FontWeight.w400, -0.3),
-      headlineSmall: tune(scaled.headlineSmall, FontWeight.w400, -0.2),
-      titleLarge: tune(scaled.titleLarge, FontWeight.w400, -0.1),
-      titleMedium: tune(scaled.titleMedium, FontWeight.w500),
-      titleSmall: tune(scaled.titleSmall, FontWeight.w500),
-      bodyLarge: tune(scaled.bodyLarge, FontWeight.w400),
-      bodyMedium: tune(scaled.bodyMedium, FontWeight.w400),
-      bodySmall: tune(scaled.bodySmall, FontWeight.w400),
-      labelLarge: tune(scaled.labelLarge, FontWeight.w500),
-      labelMedium: tune(scaled.labelMedium, FontWeight.w500),
-      labelSmall: tune(scaled.labelSmall, FontWeight.w500),
+    return TextTheme(
+      displayLarge: tune(base.displayLarge, _scale[0].$2),
+      displayMedium: tune(base.displayMedium, _scale[1].$2),
+      displaySmall: tune(base.displaySmall, _scale[2].$2),
+      headlineLarge: tune(base.headlineLarge, _scale[3].$2),
+      headlineMedium: tune(base.headlineMedium, _scale[4].$2),
+      headlineSmall: tune(base.headlineSmall, _scale[5].$2),
+      titleLarge: tune(base.titleLarge, _scale[6].$2),
+      titleMedium: tune(base.titleMedium, _scale[7].$2),
+      titleSmall: tune(base.titleSmall, _scale[8].$2),
+      bodyLarge: tune(base.bodyLarge, _scale[9].$2),
+      bodyMedium: tune(base.bodyMedium, _scale[10].$2),
+      bodySmall: tune(base.bodySmall, _scale[11].$2),
+      labelLarge: tune(base.labelLarge, _scale[12].$2),
+      labelMedium: tune(base.labelMedium, _scale[13].$2),
+      labelSmall: tune(base.labelSmall, _scale[14].$2),
     );
   }
 }
@@ -218,8 +276,8 @@ class EmphasizedTextTheme extends ThemeExtension<EmphasizedTextTheme> {
   @override
   EmphasizedTextTheme lerp(EmphasizedTextTheme? other, double t) =>
       other == null
-          ? this
-          : EmphasizedTextTheme(TextTheme.lerp(text, other.text, t));
+      ? this
+      : EmphasizedTextTheme(TextTheme.lerp(text, other.text, t));
 }
 
 /// Construye un TextTheme enfatizado a partir del normal.

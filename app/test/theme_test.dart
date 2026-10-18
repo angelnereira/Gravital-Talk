@@ -10,6 +10,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/cupertino.dart' show CupertinoPageTransitionsBuilder;
+import 'package:gravital_talk_app/ui/fonts.dart';
 import 'package:gravital_talk_app/ui/semantic_colors.dart';
 import 'package:gravital_talk_app/ui/theme.dart';
 import 'package:gravital_talk_app/ui/tokens.dart';
@@ -182,6 +183,43 @@ void main() {
     });
   });
 
+  group('Google Sans Flex', () {
+    test('la familia esta declarada en toda la escala', () {
+      final t = NTheme.build(NTheme.scheme(Brightness.light)).textTheme;
+      for (final e in _all(t)) {
+        expect(e.$2!.fontFamily, kFontFamily, reason: e.$1);
+      }
+    });
+
+    test('el eje de peso varia segun el estilo, no se queda en 400', () {
+      // El fallo silencioso de una fuente variable: declarar la familia y
+      // seguir usando el peso por defecto en todas partes.
+      final t = NTheme.build(NTheme.scheme(Brightness.light)).textTheme;
+
+      expect(_wght(t.titleLarge), 400);
+      expect(_wght(t.titleMedium), 500);
+      expect(_wght(t.labelLarge), 500);
+    });
+
+    test('el tamano optico sigue al tamano en puntos y entra en rango', () {
+      final t = NTheme.build(NTheme.scheme(Brightness.light)).textTheme;
+
+      expect(_opsz(t.displayLarge), t.displayLarge!.fontSize);
+      expect(_opsz(t.labelSmall), t.labelSmall!.fontSize);
+      for (final size in [_opsz(t.displayLarge)!, _opsz(t.labelSmall)!]) {
+        expect(size, greaterThanOrEqualTo(1));
+        expect(size, lessThanOrEqualTo(144));
+      }
+    });
+
+    test('los ejes se recortan al rango que declara la fuente', () {
+      expect(FontAxis.weight(5000), 1000);
+      expect(FontAxis.weight(-3), 1);
+      expect(FontAxis.opticalSize(400), 144);
+      expect(FontAxis.opticalSize(0), 1);
+    });
+  });
+
   group('componentes del tema', () {
     test('los botones tienen forma de píldora y altura de 48 dp', () {
       final theme = NTheme.build(NTheme.scheme(Brightness.light));
@@ -221,4 +259,43 @@ void main() {
           contains(const FontFeature.tabularFigures()));
     });
   });
+}
+
+/// Eje wght de un estilo.
+double? _wght(TextStyle? s) {
+  if (s == null) return null;
+  final axis = FontVariation.weight(1).axis;
+  for (final v in s.fontVariations ?? const <FontVariation>[]) {
+    if (v.axis == axis) return v.value;
+  }
+  return null;
+}
+
+/// Eje opsz de un estilo.
+double? _opsz(TextStyle? s) {
+  if (s == null) return null;
+  const axis = 'opsz';
+  for (final v in s.fontVariations ?? const <FontVariation>[]) {
+    if (v.axis == axis) return v.value;
+  }
+  return null;
+}
+
+/// Los quince estilos de la escala.
+Iterable<(String, TextStyle?)> _all(TextTheme t) sync* {
+  yield ('displayLarge', t.displayLarge);
+  yield ('displayMedium', t.displayMedium);
+  yield ('displaySmall', t.displaySmall);
+  yield ('headlineLarge', t.headlineLarge);
+  yield ('headlineMedium', t.headlineMedium);
+  yield ('headlineSmall', t.headlineSmall);
+  yield ('titleLarge', t.titleLarge);
+  yield ('titleMedium', t.titleMedium);
+  yield ('titleSmall', t.titleSmall);
+  yield ('bodyLarge', t.bodyLarge);
+  yield ('bodyMedium', t.bodyMedium);
+  yield ('bodySmall', t.bodySmall);
+  yield ('labelLarge', t.labelLarge);
+  yield ('labelMedium', t.labelMedium);
+  yield ('labelSmall', t.labelSmall);
 }
