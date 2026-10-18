@@ -36,7 +36,7 @@ Toda la app Flutter de Gravital-Talk —actual y futura— usará un único sist
 | M3E oficial en `material_ui` | `StyleVariant` (M3 / M3 Expressive) desde 1.2.0; `IconButton` expresivo y niveles de contraste estándar/medio/alto desde 1.5.0 | Activar lo oficial a medida que llegue |
 | [dynamic\_color](https://pub.dev/packages/dynamic_color/changelog) | 2.1.0 (20 ago 2026); desde 2.0 depende de `material_ui` | Usar la serie 2.x |
 | [material\_3\_expressive](https://pub.dev/packages/material_3_expressive) | 1.1.6 (8 oct 2026), MIT, 44 widgets. Requiere Flutter ≥ 3.47 y `material_ui` ^1.6.0 | Solo para lo que falta, siempre envuelto en adaptadores |
-| [Google Sans Flex](https://www.androidauthority.com/google-sans-flex-free-3617034/) | Abierta en Google Fonts el 18 nov 2025 bajo SIL OFL 1.1; seis ejes: peso, ancho, tamaño óptico, inclinación, redondez y grado | Fuente oficial del sistema |
+| [Google Sans Flex](https://www.androidauthority.com/google-sans-flex-free-3617034/) | Abierta en Google Fonts el 18 nov 2025 bajo SIL OFL 1.1; cinco ejes en el fichero que ofrece (peso, ancho, tamaño óptico, inclinación, redondez). El eje de grado no viene en ese fichero y no se usa. | Fuente oficial del sistema |
 
 **Regla de actualización:** cada trimestre, al salir una versión estable de Flutter, se revisa el changelog de `material_ui`. Cada componente M3E que pase a oficial reemplaza su adaptador comunitario sin cambiar la API pública del sistema.
 
@@ -138,7 +138,7 @@ Toda la app usa **Google Sans Flex**, empaquetada como fuente variable dentro de
 
 - **Archivo:** el TTF variable se incluye en `app/assets/fonts/` y se declara en `pubspec.yaml`. No se descarga en tiempo de ejecución.
 - **Licencia:** el texto OFL se registra en `LicenseRegistry`.
-- **Ejes:** `wght` 1–1000, `wdth` 25–151, `opsz` 6–144, `slnt` −10–0, `ROND` 0–100 y `GRAD` 0–100. Se controlan con `TextStyle.fontVariations`. Regla: `ROND` 0 en datos y formularios; `GRAD` cambia el grosor sin cambiar el ancho.
+- **Ejes:** `wght` 1–1000, `wdth` 25–151, `opsz` 1–144, `slnt` −10–0, `ROND` 0–100. El fichero que se empaqueta no lleva `GRAD`: el que ofrece Google Fonts (noviembre 2025) tiene cinco ejes, no seis. Se controlan con `TextStyle.fontVariations`. Regla: `ROND` 0 en datos y formularios; los textos corrientes usan 8.
 - **Respaldo:** `fontFamilyFallback` con Roboto Flex y la fuente del sistema para escrituras que Google Sans Flex no cubra.
 
 ### 5.2 Escala base (valores de los tokens oficiales de Material 3)
