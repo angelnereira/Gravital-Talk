@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:gravital_talk_app/core/states.dart';
+import 'package:gravital_talk_app/ui/patterns.dart';
 
 void main() {
   Widget wrap(Widget child) => MaterialApp(home: Scaffold(body: child));
@@ -109,9 +109,9 @@ void main() {
     });
   });
 
-  group('LoadingStates', () {
+  group('UILoading', () {
     testWidgets('centered muestra el mensaje y el indicador', (tester) async {
-      await tester.pumpWidget(wrap(LoadingStates.centered(
+      await tester.pumpWidget(wrap(UILoading.centered(
         message: 'Conectando…',
       )));
 
@@ -120,7 +120,7 @@ void main() {
     });
 
     testWidgets('button está deshabilitado y conserva el alto', (tester) async {
-      await tester.pumpWidget(wrap(LoadingStates.button(
+      await tester.pumpWidget(wrap(UILoading.button(
         label: 'Creando sala…',
       )));
 

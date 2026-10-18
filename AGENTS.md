@@ -311,6 +311,10 @@ de gRPC-Web viven en `grpc_web_io.dart` y llegan por import condicional desde
   regresión ≥ 10 % requiere justificación escrita.
 - **fuzzing** → `make docker-fuzz` o `FUZZ_SECONDS=90 make docker-fuzz`.
 
+## Gravital Experience UI — Regla estricta de interfaces Flutter
+
+`docs/gravital-experience-ui.md` es la **regla de diseño obligatoria** para construir y diseñar todas las interfaces Flutter del proyecto (presentes y futuras). Toda pantalla, diálogo, notificación in-app o flujo debe seguir sus tokens, componentes y patrones. Ningún widget usa colores, radios, espacios o duraciones literales; todo sale del sistema en `app/lib/ui/`. El checklist de revisión de cada pantalla está en la sección 13.2 de ese documento.
+
 ## Documentación
 
 - `docs/protocol-spec.md`, `docs/packet-format.md`, `docs/session-model.md` — el formato de header es **24 bytes**;

@@ -1,21 +1,19 @@
+/// Patrones de pantalla reutilizables (GEUI).
+///
+/// Estados de carga, vacío, error, confirmación y avisos: la misma forma en
+/// toda la app.
+library;
+
 import 'package:flutter/material.dart';
 
-import 'palette.dart';
 import 'tokens.dart';
 
 /// Estados de carga reutilizables.
-///
-/// Existen porque sin ellos el usuario no distingue "estoy trabajando" de "se
-/// quedó colgado". En esta app eso importa especialmente en el handshake, que
-/// puede tardar segundos.
-class LoadingStates {
-  const LoadingStates._();
+abstract final class UILoading {
+  const UILoading._();
 
   /// Indicador centrado con mensaje. Para cargas que ocupan la pantalla.
-  static Widget centered({
-    required String message,
-    double size = 32,
-  }) {
+  static Widget centered({required String message, double size = 32}) {
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -25,19 +23,15 @@ class LoadingStates {
             height: size,
             child: const CircularProgressIndicator(strokeWidth: 3),
           ),
-          const SizedBox(height: Spacing.lg),
-          Text(
-            message,
-            textAlign: TextAlign.center,
-            style: null,
-          ),
+          const SizedBox(height: NSpace.lg),
+          Text(message, textAlign: TextAlign.center),
         ],
       ),
     );
   }
 
   /// Botón en estado de carga. Conserva el ancho para no mover el layout.
-  static Widget button({required String label, double height = HitSizes.minTouch}) {
+  static Widget button({required String label, double height = NHitSize.minTouch}) {
     return SizedBox(
       height: height,
       child: FilledButton(
@@ -50,7 +44,7 @@ class LoadingStates {
               height: 16,
               child: CircularProgressIndicator(strokeWidth: 2),
             ),
-            const SizedBox(width: Spacing.md),
+            const SizedBox(width: NSpace.md),
             Text(label),
           ],
         ),
@@ -81,7 +75,7 @@ class EmptyState extends StatelessWidget {
     final theme = Theme.of(context);
     return Center(
       child: Padding(
-        padding: const EdgeInsets.all(Spacing.xxl),
+        padding: const EdgeInsets.all(NSpace.xxl),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -92,20 +86,16 @@ class EmptyState extends StatelessWidget {
                 color: theme.colorScheme.primary.withValues(alpha: 0.1),
                 shape: BoxShape.circle,
               ),
-              child: Icon(
-                icon,
-                size: 32,
-                color: theme.colorScheme.primary,
-              ),
+              child: Icon(icon, size: 32, color: theme.colorScheme.primary),
             ),
-            const SizedBox(height: Spacing.lg),
+            const SizedBox(height: NSpace.lg),
             Text(
               title,
               textAlign: TextAlign.center,
               style: theme.textTheme.titleMedium,
             ),
             if (message != null) ...[
-              const SizedBox(height: Spacing.sm),
+              const SizedBox(height: NSpace.sm),
               Text(
                 message!,
                 textAlign: TextAlign.center,
@@ -115,7 +105,7 @@ class EmptyState extends StatelessWidget {
               ),
             ],
             if (actionLabel != null && onAction != null) ...[
-              const SizedBox(height: Spacing.xl),
+              const SizedBox(height: NSpace.xl),
               FilledButton(onPressed: onAction, child: Text(actionLabel!)),
             ],
           ],
@@ -126,9 +116,6 @@ class EmptyState extends StatelessWidget {
 }
 
 /// Banner de error con acción de reintento.
-///
-/// Un error sin salida es un callejón sin salida: por eso siempre que se
-/// muestra uno se ofrece o un reintento o una acción concreta.
 class ErrorBanner extends StatelessWidget {
   const ErrorBanner({
     super.key,
@@ -144,42 +131,37 @@ class ErrorBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
     return Container(
-      margin: const EdgeInsets.only(bottom: Spacing.md),
-      padding: const EdgeInsets.all(Spacing.md),
+      margin: const EdgeInsets.only(bottom: NSpace.md),
+      padding: const EdgeInsets.all(NSpace.md),
       decoration: BoxDecoration(
-        color: theme.colorScheme.errorContainer,
-        borderRadius: BorderRadius.circular(Radii.md),
-        border: Border.all(
-          color: theme.colorScheme.error.withValues(alpha: 0.4),
-        ),
+        color: scheme.errorContainer,
+        borderRadius: BorderRadius.circular(NShape.medium),
+        border: Border.all(color: scheme.error.withValues(alpha: 0.4)),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(Icons.error_outline, color: theme.colorScheme.error, size: 20),
-          const SizedBox(width: Spacing.md),
+          Icon(Icons.error_outline, color: scheme.error, size: 20),
+          const SizedBox(width: NSpace.md),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
                   message,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onErrorContainer,
-                  ),
+                  style: theme.textTheme.bodySmall?.copyWith(color: scheme.onErrorContainer),
                 ),
                 if (onRetry != null || onDismiss != null) ...[
-                  const SizedBox(height: Spacing.sm),
+                  const SizedBox(height: NSpace.sm),
                   Row(
                     children: [
                       if (onRetry != null)
                         TextButton(
                           onPressed: onRetry,
                           style: TextButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: Spacing.md,
-                            ),
+                            padding: const EdgeInsets.symmetric(horizontal: NSpace.md),
                             minimumSize: const Size(0, 32),
                           ),
                           child: const Text('Reintentar'),
@@ -188,9 +170,7 @@ class ErrorBanner extends StatelessWidget {
                         TextButton(
                           onPressed: onDismiss,
                           style: TextButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: Spacing.md,
-                            ),
+                            padding: const EdgeInsets.symmetric(horizontal: NSpace.md),
                             minimumSize: const Size(0, 32),
                           ),
                           child: const Text('Descartar'),
@@ -207,7 +187,7 @@ class ErrorBanner extends StatelessWidget {
   }
 }
 
-/// Banner de aviso no bloqueante (modo demo, red degradada, etc.).
+/// Banner de aviso no bloqueante.
 class WarningBanner extends StatelessWidget {
   const WarningBanner({
     super.key,
@@ -223,35 +203,29 @@ class WarningBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    // Ámbar translúcido: sobre el fondo degradado, el `secondaryContainer`
-    // del tema salía verde saturado y se leía como "todo va bien", justo lo
-    // contrario de un aviso.
-    const amber = GravitalPalette.warning;
-    final onAmber = theme.brightness == Brightness.dark
-        ? const Color(0xFFFFE2B0)
-        : const Color(0xFF5C3A00);
+    final scheme = theme.colorScheme;
     return Container(
-      margin: const EdgeInsets.only(bottom: Spacing.md),
-      padding: const EdgeInsets.all(Spacing.md),
+      margin: const EdgeInsets.only(bottom: NSpace.md),
+      padding: const EdgeInsets.all(NSpace.md),
       decoration: BoxDecoration(
-        color: amber.withValues(alpha: 0.18),
-        border: Border.all(color: amber.withValues(alpha: 0.55)),
-        borderRadius: BorderRadius.circular(Radii.md),
+        color: scheme.tertiaryContainer,
+        borderRadius: BorderRadius.circular(NShape.medium),
+        border: Border.all(color: scheme.tertiary.withValues(alpha: 0.4)),
       ),
       child: Row(
         children: [
-          Icon(Icons.warning_amber_rounded, color: onAmber, size: 20),
-          const SizedBox(width: Spacing.md),
+          Icon(Icons.warning_amber_rounded, color: scheme.tertiary, size: 20),
+          const SizedBox(width: NSpace.md),
           Expanded(
             child: Text(
               message,
-              style: theme.textTheme.bodyMedium?.copyWith(color: onAmber),
+              style: theme.textTheme.bodyMedium?.copyWith(color: scheme.onTertiaryContainer),
             ),
           ),
           if (actionLabel != null && onAction != null)
             TextButton(
               onPressed: onAction,
-              style: TextButton.styleFrom(foregroundColor: onAmber),
+              style: TextButton.styleFrom(foregroundColor: scheme.onTertiaryContainer),
               child: Text(actionLabel!),
             ),
         ],
@@ -261,9 +235,6 @@ class WarningBanner extends StatelessWidget {
 }
 
 /// Confirmación de acción destructiva.
-///
-/// Cerrar una sesión en curso es destructivo (se pierde el audio), así que
-/// pide confirmación en vez de ejecutarse al primer toque.
 class ConfirmDialog extends StatelessWidget {
   const ConfirmDialog({
     super.key,
@@ -280,7 +251,6 @@ class ConfirmDialog extends StatelessWidget {
   final String cancelLabel;
   final bool destructive;
 
-  /// Muestra el diálogo y devuelve `true` si se confirma.
   static Future<bool> show(
     BuildContext context, {
     required String title,
@@ -308,7 +278,7 @@ class ConfirmDialog extends StatelessWidget {
       title: Text(title),
       content: Text(message),
       actions: [
-        DialogActions(
+        UIDialogActions(
           cancelLabel: cancelLabel,
           onCancel: () => Navigator.pop(context, false),
           confirmLabel: confirmLabel,
@@ -320,11 +290,9 @@ class ConfirmDialog extends StatelessWidget {
   }
 }
 
-/// Los dos botones de un diálogo: el que descarta y el que confirma, igual
-/// de anchos y los dos con forma de botón. El de descartar no es un texto
-/// suelto: se tiene que ver que se puede pulsar.
-class DialogActions extends StatelessWidget {
-  const DialogActions({
+/// Los dos botones de un diálogo: cancelar y confirmar.
+class UIDialogActions extends StatelessWidget {
+  const UIDialogActions({
     super.key,
     required this.cancelLabel,
     required this.onCancel,
@@ -337,15 +305,12 @@ class DialogActions extends StatelessWidget {
   final VoidCallback onCancel;
   final String confirmLabel;
   final VoidCallback onConfirm;
-
-  /// `true` si confirmar borra o corta algo: el botón va en color de error.
   final bool destructive;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    // Los botones del tema ocupan todo el ancho; aquí comparten una fila.
-    const size = Size(0, HitSizes.minTouch);
+    const size = Size(0, NHitSize.minTouch);
     return Row(
       children: [
         Expanded(
@@ -355,7 +320,7 @@ class DialogActions extends StatelessWidget {
             child: Text(cancelLabel, maxLines: 1, overflow: TextOverflow.ellipsis),
           ),
         ),
-        const SizedBox(width: Spacing.md),
+        const SizedBox(width: NSpace.md),
         Expanded(
           child: FilledButton(
             style: FilledButton.styleFrom(

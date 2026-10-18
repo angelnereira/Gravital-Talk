@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gravital_talk_app/core/routes.dart';
-import 'package:gravital_talk_app/core/tokens.dart';
+import 'package:gravital_talk_app/ui/tokens.dart';
 
 void main() {
   group('rutas de navegación', () {
@@ -88,20 +88,20 @@ void main() {
     });
   });
 
-  group('GravitalDurations', () {
-    test('instant es menor que fast, y fast que normal', () {
+  group('NDuration', () {
+    test('la escala crece de forma monótona', () {
       // El orden importa: si alguien invierte las duraciones, las transiciones
       // se sienten lentas sin motivo visible.
-      expect(GravitalDurations.instant.inMilliseconds,
-          lessThan(GravitalDurations.fast.inMilliseconds));
-      expect(GravitalDurations.fast.inMilliseconds,
-          lessThan(GravitalDurations.normal.inMilliseconds));
-      expect(GravitalDurations.normal.inMilliseconds,
-          lessThan(GravitalDurations.slow.inMilliseconds));
+      expect(NDuration.short.inMilliseconds,
+          lessThan(NDuration.medium.inMilliseconds));
+      expect(NDuration.medium.inMilliseconds,
+          lessThan(NDuration.long.inMilliseconds));
+      expect(NDuration.long.inMilliseconds,
+          lessThan(NDuration.extraLong.inMilliseconds));
     });
 
-    test('fast está por debajo del umbral de respuesta inmediata', () {
-      expect(GravitalDurations.fast.inMilliseconds, lessThanOrEqualTo(150));
+    test('short está por debajo del umbral de respuesta inmediata', () {
+      expect(NDuration.short.inMilliseconds, lessThanOrEqualTo(150));
     });
   });
 }

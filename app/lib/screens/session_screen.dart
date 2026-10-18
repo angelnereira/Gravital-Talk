@@ -3,15 +3,15 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
-import '../core/glass.dart';
-import '../core/states.dart';
-import '../core/tokens.dart';
 import '../models/session.dart';
 import '../services/contacts.dart';
 import '../services/engine.dart';
 import '../services/session_controller.dart';
 import '../services/share.dart';
-import '../widgets/common.dart';
+import '../ui/components/index.dart';
+import '../ui/patterns.dart';
+import '../ui/semantic_colors.dart';
+import '../ui/tokens.dart';
 
 /// Pantalla de hablar.
 ///
@@ -38,7 +38,8 @@ class SessionScreen extends StatelessWidget {
     final ok = await ConfirmDialog.show(
       context,
       title: 'Salir de la sala',
-      message: 'Se cortará la conversación. Para volver a hablar habrá que '
+      message:
+          'Se cortará la conversación. Para volver a hablar habrá que '
           'emparejar de nuevo.',
       confirmLabel: 'Salir',
       destructive: true,
@@ -65,7 +66,7 @@ class SessionScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = context.watch<SessionController>();
     final theme = Theme.of(context);
-    final glass = GlassTextTheme.of(context);
+    final scheme = theme.colorScheme;
 
     return Scaffold(
       appBar: AppBar(
@@ -85,15 +86,16 @@ class SessionScreen extends StatelessWidget {
                 c.canInvite && c.roomSize > 2
                     ? '${_formatDuration(c.elapsed)} · ${c.roomSize} en la sala'
                     : _formatDuration(c.elapsed),
-                style: theme.textTheme.labelSmall
-                    ?.copyWith(color: glass.secondary),
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
               ),
           ],
         ),
         actions: [
           if (c.isLive)
             Padding(
-              padding: const EdgeInsets.only(right: Spacing.lg),
+              padding: const EdgeInsets.only(right: NSpace.lg),
               child: Center(
                 child: _QualityChip(metrics: c.metrics, relayed: c.relayed),
               ),
@@ -108,27 +110,32 @@ class SessionScreen extends StatelessWidget {
                   constraints: const BoxConstraints(maxWidth: 520),
                   child: ListView(
                     padding: const EdgeInsets.fromLTRB(
-                        Spacing.xl, Spacing.md, Spacing.xl, Spacing.xxl),
+                      NSpace.xl,
+                      NSpace.md,
+                      NSpace.xl,
+                      NSpace.xxl,
+                    ),
                     children: [
                       if (c.state == SessionState.reconnecting ||
                           c.connectionStalled) ...[
                         const ReconnectingBanner(),
-                        const SizedBox(height: Spacing.md),
+                        const SizedBox(height: NSpace.md),
                       ],
                       if (c.engineKind == EngineKind.demo) ...[
                         const WarningBanner(
                           message: 'Modo demostración: no hay audio real.',
                         ),
-                        const SizedBox(height: Spacing.md),
+                        const SizedBox(height: NSpace.md),
                       ],
                       if (c.paused) ...[
                         WarningBanner(
-                          message: 'Sala en pausa: no oyes ni te oyen. '
+                          message:
+                              'Sala en pausa: no oyes ni te oyen. '
                               'Sigues dentro.',
                           actionLabel: 'Reanudar',
                           onAction: () => c.setPaused(false),
                         ),
-                        const SizedBox(height: Spacing.md),
+                        const SizedBox(height: NSpace.md),
                       ],
                       if (c.notice != null) ...[
                         WarningBanner(
@@ -136,20 +143,20 @@ class SessionScreen extends StatelessWidget {
                           actionLabel: 'Entendido',
                           onAction: c.clearNotice,
                         ),
-                        const SizedBox(height: Spacing.md),
+                        const SizedBox(height: NSpace.md),
                       ],
-                      const SizedBox(height: Spacing.xl),
+                      const SizedBox(height: NSpace.xl),
                       _TalkPanel(controller: c),
-                      const SizedBox(height: Spacing.xxxl),
+                      const SizedBox(height: NSpace.xxxl),
                       _TechnicalDetails(controller: c),
-                      const SizedBox(height: Spacing.lg),
+                      const SizedBox(height: NSpace.lg),
                       if (!c.paused) ...[
                         OutlinedButton.icon(
                           onPressed: () => c.setPaused(true),
                           icon: const Icon(Icons.pause_circle_outline),
                           label: const Text('Pausar'),
                         ),
-                        const SizedBox(height: Spacing.md),
+                        const SizedBox(height: NSpace.md),
                       ],
                       if (c.canInvite) ...[
                         FilledButton.tonalIcon(
@@ -157,15 +164,14 @@ class SessionScreen extends StatelessWidget {
                           icon: const Icon(Icons.person_add_alt_1),
                           label: const Text('Invitar a alguien más'),
                         ),
-                        const SizedBox(height: Spacing.md),
+                        const SizedBox(height: NSpace.md),
                       ],
                       OutlinedButton.icon(
                         onPressed: () => _confirmEndSession(context, c),
-                        icon: Icon(Icons.call_end,
-                            color: theme.colorScheme.error),
+                        icon: Icon(Icons.call_end, color: scheme.error),
                         label: Text(
                           'Salir de la sala',
-                          style: TextStyle(color: theme.colorScheme.error),
+                          style: TextStyle(color: scheme.error),
                         ),
                       ),
                     ],
@@ -205,30 +211,30 @@ class _InviteSheetState extends State<_InviteSheet> {
     final contacts = context.watch<ContactsService>();
     return SafeArea(
       child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(
-            Spacing.xl, 0, Spacing.xl, Spacing.xl),
+        padding: const EdgeInsets.fromLTRB(NSpace.xl, 0, NSpace.xl, NSpace.xl),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
               'Que escaneen este código',
-              style: theme.textTheme.titleLarge
-                  ?.copyWith(fontWeight: FontWeight.w800),
+              style: theme.textTheme.titleLarge?.copyWith(
+                fontWeight: FontWeight.w800,
+              ),
             ),
-            const SizedBox(height: Spacing.xs),
+            const SizedBox(height: NSpace.xs),
             Text(
               'Entran en esta misma conversación, sin cortarla.',
               textAlign: TextAlign.center,
               style: theme.textTheme.bodyMedium,
             ),
-            const SizedBox(height: Spacing.lg),
+            const SizedBox(height: NSpace.lg),
             Semantics(
               label: 'Código QR de invitación a la sala',
               child: Container(
-                padding: const EdgeInsets.all(Spacing.md),
+                padding: const EdgeInsets.all(NSpace.md),
                 decoration: BoxDecoration(
                   color: Colors.white,
-                  borderRadius: BorderRadius.circular(Radii.glass),
+                  borderRadius: BorderRadius.circular(NShape.extraLarge),
                 ),
                 child: QrImageView(
                   data: widget.invite,
@@ -237,7 +243,7 @@ class _InviteSheetState extends State<_InviteSheet> {
                 ),
               ),
             ),
-            const SizedBox(height: Spacing.md),
+            const SizedBox(height: NSpace.md),
             Text(
               widget.roomCode,
               style: theme.textTheme.titleLarge?.copyWith(
@@ -245,21 +251,22 @@ class _InviteSheetState extends State<_InviteSheet> {
                 letterSpacing: 4,
               ),
             ),
-            const SizedBox(height: Spacing.lg),
+            const SizedBox(height: NSpace.lg),
             Row(
               children: [
                 Expanded(
                   child: FilledButton.tonalIcon(
                     onPressed: () async {
                       final shared = await shareText(
-                          'Únete a mi sala de Gravital Talk:\n${widget.invite}');
+                        'Únete a mi sala de Gravital Talk:\n${widget.invite}',
+                      );
                       if (!shared && mounted) setState(() => _copied = true);
                     },
                     icon: const Icon(Icons.ios_share),
                     label: const Text('Compartir'),
                   ),
                 ),
-                const SizedBox(width: Spacing.md),
+                const SizedBox(width: NSpace.md),
                 Expanded(
                   child: OutlinedButton.icon(
                     onPressed: _copy,
@@ -270,13 +277,14 @@ class _InviteSheetState extends State<_InviteSheet> {
               ],
             ),
             if (contacts.available && contacts.contacts.isNotEmpty) ...[
-              const SizedBox(height: Spacing.xl),
+              const SizedBox(height: NSpace.xl),
               Align(
                 alignment: Alignment.centerLeft,
                 child: Text(
                   'O avisa a un contacto',
-                  style: theme.textTheme.titleSmall
-                      ?.copyWith(fontWeight: FontWeight.w800),
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
               ),
               for (final contact in contacts.contacts)
@@ -316,7 +324,8 @@ class _TalkPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = controller;
     final theme = Theme.of(context);
-    final glass = GlassTextTheme.of(context);
+    final scheme = theme.colorScheme;
+    final sem = SemanticColors.of(context);
     final talking = c.pttActive;
     final listening = c.peerPttActive && !talking;
 
@@ -327,22 +336,18 @@ class _TalkPanel extends StatelessWidget {
         // llega audio, alguien está hablando, se haya recibido o no su PTT.
         final hearing = listening || (!talking && levels.rx > 0.02);
         final (headline, detail, color) = talking
-            ? (
-                'Estás hablando',
-                'Suelta para escuchar',
-                GravitalColors.transmit,
-              )
+            ? ('Estás hablando', 'Suelta para escuchar', sem.pttActive.color)
             : hearing
-                ? (
-                    'Te están hablando',
-                    'Espera a que termine para contestar',
-                    theme.colorScheme.primary,
-                  )
-                : (
-                    'Mantén pulsado para hablar',
-                    'El otro te oye mientras no sueltes',
-                    glass.primary,
-                  );
+            ? (
+                'Te están hablando',
+                'Espera a que termine para contestar',
+                scheme.primary,
+              )
+            : (
+                'Mantén pulsado para hablar',
+                'El otro te oye mientras no sueltes',
+                scheme.onSurface,
+              );
         final level = talking ? levels.mic : (hearing ? levels.rx : 0.0);
 
         return Column(
@@ -358,14 +363,15 @@ class _TalkPanel extends StatelessWidget {
                 ),
               ),
             ),
-            const SizedBox(height: Spacing.xs),
+            const SizedBox(height: NSpace.xs),
             Text(
               detail,
               textAlign: TextAlign.center,
-              style:
-                  theme.textTheme.bodyMedium?.copyWith(color: glass.secondary),
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: scheme.onSurfaceVariant,
+              ),
             ),
-            const SizedBox(height: Spacing.xxxl),
+            const SizedBox(height: NSpace.xxxl),
             PttButton(
               pressed: talking,
               enabled: c.isLive && !c.paused,
@@ -374,9 +380,9 @@ class _TalkPanel extends StatelessWidget {
               onDown: c.pttDown,
               onUp: c.pttUp,
             ),
-            const SizedBox(height: Spacing.xxxl),
+            const SizedBox(height: NSpace.xxxl),
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: Spacing.xxxl),
+              padding: const EdgeInsets.symmetric(horizontal: NSpace.xxxl),
               child: LevelMeter(level: level, transmitting: talking),
             ),
           ],
@@ -401,6 +407,8 @@ class _QualityChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final sem = SemanticColors.of(context);
     // Sin tráfico en los dos sentidos aún no hay nada que medir, y el MOS
     // que se calcula sobre nada sale bajo: no se afirma ni que va bien ni que
     // va mal, sólo que hay conexión.
@@ -409,22 +417,18 @@ class _QualityChip extends StatelessWidget {
     final (label, color, icon) = mos <= 0
         ? (
             relayed ? 'Vía servidor' : 'Conectado',
-            GravitalColors.online,
+            sem.success.color,
             relayed ? Icons.cloud_outlined : Icons.check_circle_outline,
           )
         : mos >= 4
-            ? ('Buena señal', GravitalColors.online, Icons.signal_cellular_alt)
-            : mos >= 3
-                ? (
-                    'Señal regular',
-                    GravitalColors.transmit,
-                    Icons.signal_cellular_alt_2_bar,
-                  )
-                : (
-                    'Señal mala',
-                    theme.colorScheme.error,
-                    Icons.signal_cellular_alt_1_bar,
-                  );
+        ? ('Buena señal', sem.success.color, Icons.signal_cellular_alt)
+        : mos >= 3
+        ? (
+            'Señal regular',
+            sem.pttActive.color,
+            Icons.signal_cellular_alt_2_bar,
+          )
+        : ('Señal mala', scheme.error, Icons.signal_cellular_alt_1_bar);
     return Semantics(
       label: 'Calidad de la conexión: $label',
       child: ExcludeSemantics(
@@ -432,11 +436,13 @@ class _QualityChip extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(icon, size: 18, color: color),
-            const SizedBox(width: Spacing.xs),
+            const SizedBox(width: NSpace.xs),
             Text(
               label,
-              style: theme.textTheme.labelMedium
-                  ?.copyWith(color: color, fontWeight: FontWeight.w700),
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: color,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ],
         ),
@@ -454,40 +460,53 @@ class _TechnicalDetails extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final glass = GlassTextTheme.of(context);
     final scheme = theme.colorScheme;
     final c = controller;
     final m = c.metrics;
 
-    return GlassSurface(
-      padding: EdgeInsets.zero,
+    return Card(
+      color: scheme.surfaceContainerLow,
+      shape: NShape.rounded(NShape.medium),
+      margin: EdgeInsets.zero,
       child: Theme(
+        // Sin las líneas divisorias que `ExpansionTile` pinta al abrirse:
+        // dentro de una tarjeta son ruido.
         data: theme.copyWith(dividerColor: Colors.transparent),
         child: ExpansionTile(
           shape: const Border(),
           collapsedShape: const Border(),
-          iconColor: glass.secondary,
-          collapsedIconColor: glass.secondary,
+          iconColor: scheme.onSurfaceVariant,
+          collapsedIconColor: scheme.onSurfaceVariant,
           trailing: const Icon(Icons.keyboard_arrow_down_rounded),
           tilePadding: const EdgeInsets.symmetric(
-              horizontal: Spacing.xl, vertical: Spacing.xs),
+            horizontal: NSpace.xl,
+            vertical: NSpace.xs,
+          ),
           childrenPadding: const EdgeInsets.fromLTRB(
-              Spacing.xl, 0, Spacing.xl, Spacing.xl),
+            NSpace.xl,
+            0,
+            NSpace.xl,
+            NSpace.xl,
+          ),
           title: Text(
             'Detalles técnicos',
-            style: theme.textTheme.titleSmall?.copyWith(color: glass.primary),
+            style: theme.textTheme.titleSmall?.copyWith(
+              color: scheme.onSurface,
+            ),
           ),
           subtitle: Text(
             'Latencia, pérdida y registro de la sesión',
-            style: theme.textTheme.bodySmall?.copyWith(color: glass.secondary),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: scheme.onSurfaceVariant,
+            ),
           ),
           children: [
             GridView.count(
               crossAxisCount: 2,
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
-              mainAxisSpacing: 10,
-              crossAxisSpacing: 10,
+              mainAxisSpacing: NSpace.sm,
+              crossAxisSpacing: NSpace.sm,
               childAspectRatio: 2.1,
               children: [
                 MetricTile(
@@ -558,9 +577,9 @@ class _TechnicalDetails extends StatelessWidget {
                 ),
               ],
             ),
-            const SizedBox(height: Spacing.lg),
+            const SizedBox(height: NSpace.lg),
             const ParticipantsCard(),
-            const SizedBox(height: Spacing.lg),
+            const SizedBox(height: NSpace.lg),
             EventLogView(log: c.log, max: 6),
           ],
         ),
@@ -578,30 +597,32 @@ class _IdlePlaceholder extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = context.watch<SessionController>();
     final theme = Theme.of(context);
-    final glass = GlassTextTheme.of(context);
+    final scheme = theme.colorScheme;
     return Center(
       child: Padding(
-        padding: const EdgeInsets.all(Spacing.xxxl),
+        padding: const EdgeInsets.all(NSpace.xxxl),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.call_end, size: 56, color: glass.secondary),
-            const SizedBox(height: Spacing.lg),
+            Icon(Icons.call_end, size: 56, color: scheme.onSurfaceVariant),
+            const SizedBox(height: NSpace.lg),
             Text(
               'La conversación terminó',
-              style:
-                  theme.textTheme.titleLarge?.copyWith(color: glass.primary),
+              style: theme.textTheme.titleLarge?.copyWith(
+                color: scheme.onSurface,
+              ),
             ),
             if (c.error != null) ...[
-              const SizedBox(height: Spacing.sm),
+              const SizedBox(height: NSpace.sm),
               Text(
                 c.error!,
                 textAlign: TextAlign.center,
-                style: theme.textTheme.bodyMedium
-                    ?.copyWith(color: glass.secondary),
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
               ),
             ],
-            const SizedBox(height: Spacing.xl),
+            const SizedBox(height: NSpace.xl),
             FilledButton(onPressed: onBack, child: const Text('Volver')),
           ],
         ),

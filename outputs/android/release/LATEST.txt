@@ -1,1 +1,1 @@
-gravital-talk-0.3.0-alpha.1+1-d5ea386-release-unsigned.apk
+gravital-talk-0.3.0-alpha.1+1-0e7a2fb-release-unsigned.apk

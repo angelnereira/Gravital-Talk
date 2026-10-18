@@ -4,12 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:toastification/toastification.dart';
 
-import 'core/glass.dart';
-import 'core/theme.dart';
+import 'core/routes.dart';
 import 'models/connection.dart';
 import 'screens/home_screen.dart';
-import 'core/routes.dart';
-import 'core/states.dart';
+import 'ui/app.dart';
+import 'ui/patterns.dart' show UIDialogActions;
 import 'screens/invite_screen.dart';
 import 'screens/onboarding_screen.dart';
 import 'screens/pairing_screen.dart';
@@ -166,7 +165,7 @@ class _GravitalTalkAppState extends State<GravitalTalkApp> {
         title: Text('${call.contact.name} quiere hablar'),
         content: const Text('Si aceptas, entras directamente en su sala.'),
         actions: [
-          DialogActions(
+          UIDialogActions(
             cancelLabel: 'Ahora no',
             onCancel: () => Navigator.pop(dialog, false),
             confirmLabel: 'Aceptar',
@@ -358,26 +357,28 @@ class _GravitalTalkAppState extends State<GravitalTalkApp> {
       ],
       child: ToastificationWrapper(
         child: Consumer<SessionController>(
-          builder: (context, c, _) => MaterialApp(
-            title: 'Gravital Talk',
-            navigatorKey: _navigator,
-            debugShowCheckedModeBanner: false,
-            // El fondo va por debajo del Navigator, no dentro de cada
-            // pantalla: así todas las rutas comparten el mismo degradado y el
-            // vidrio tiene algo que difuminar en cualquiera de ellas.
-            builder: (context, child) =>
-                GravitalBackground(child: child ?? const SizedBox.shrink()),
-            theme: GravitalTheme.light(),
-            darkTheme: GravitalTheme.dark(),
-            themeMode: switch (c.settings.themeMode) {
-              AppThemeMode.system => ThemeMode.system,
-              AppThemeMode.light => ThemeMode.light,
-              AppThemeMode.dark => ThemeMode.dark,
-            },
+          builder: (context, c, _) {
+            // Los cuatro temas se calculan una vez por arranque, no en cada
+            // reconstrucción del árbol: `fromSeed` es puro pero no gratis.
+            final themes = GravitalThemes();
+            return MaterialApp(
+              title: 'Gravital Talk',
+              navigatorKey: _navigator,
+              debugShowCheckedModeBanner: false,
+              theme: themes.light,
+              darkTheme: themes.dark,
+              highContrastTheme: themes.highContrastLight,
+              highContrastDarkTheme: themes.highContrastDark,
+              themeMode: switch (c.settings.themeMode) {
+                AppThemeMode.system => ThemeMode.system,
+                AppThemeMode.light => ThemeMode.light,
+                AppThemeMode.dark => ThemeMode.dark,
+              },
             home: _showOnboarding
-                ? OnboardingScreen(onDone: _finishOnboarding)
-                : const HomeScreen(),
-          ),
+                  ? OnboardingScreen(onDone: _finishOnboarding)
+                  : const HomeScreen(),
+            );
+          },
         ),
       ),
     );

@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../core/tokens.dart';
+import '../ui/tokens.dart';
 
 /// Tarjeta del código de autorización rotativo.
 ///
@@ -85,10 +85,10 @@ class _AuthCodeCardState extends State<AuthCodeCard> {
     final urgent = _remaining <= 5;
 
     return Container(
-      padding: const EdgeInsets.all(Spacing.lg),
+      padding: const EdgeInsets.all(NSpace.lg),
       decoration: BoxDecoration(
         color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-        borderRadius: BorderRadius.circular(Radii.lg),
+        borderRadius: BorderRadius.circular(NShape.large),
         border: Border.all(color: theme.colorScheme.outlineVariant),
       ),
       child: Column(
@@ -101,7 +101,7 @@ class _AuthCodeCardState extends State<AuthCodeCard> {
                 size: 18,
                 color: urgent ? theme.colorScheme.error : theme.colorScheme.primary,
               ),
-              const SizedBox(width: Spacing.sm),
+              const SizedBox(width: NSpace.sm),
               Expanded(
                 child: Text(
                   'Código de autorización',
@@ -120,7 +120,7 @@ class _AuthCodeCardState extends State<AuthCodeCard> {
                 ),
             ],
           ),
-          const SizedBox(height: Spacing.md),
+          const SizedBox(height: NSpace.md),
           // El código se muestra grande y monoespaciado: se lee y se teclea.
           SelectableText(
             _formatCode(widget.code),
@@ -130,9 +130,9 @@ class _AuthCodeCardState extends State<AuthCodeCard> {
               fontFeatures: const [FontFeature.tabularFigures()],
             ),
           ),
-          const SizedBox(height: Spacing.md),
+          const SizedBox(height: NSpace.md),
           ClipRRect(
-            borderRadius: BorderRadius.circular(Radii.pill),
+            borderRadius: BorderRadius.circular(NShape.full),
             child: LinearProgressIndicator(
               value: fraction.clamp(0.0, 1.0),
               minHeight: 4,
@@ -143,7 +143,7 @@ class _AuthCodeCardState extends State<AuthCodeCard> {
             ),
           ),
           if (widget.onCodeChanged != null) ...[
-            const SizedBox(height: Spacing.sm),
+            const SizedBox(height: NSpace.sm),
             Align(
               alignment: Alignment.centerRight,
               child: TextButton.icon(

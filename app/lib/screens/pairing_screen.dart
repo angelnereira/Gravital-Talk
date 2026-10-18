@@ -8,16 +8,16 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:provider/provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
-import '../core/glass.dart';
 import '../core/routes.dart';
-import '../core/states.dart';
-import '../core/tokens.dart';
 import '../models/session.dart';
 import '../services/contacts.dart';
 import '../services/haptics.dart';
 import '../services/launch_links.dart';
 import '../services/session_controller.dart';
 import '../services/share.dart';
+import '../ui/patterns.dart';
+import '../ui/semantic_colors.dart';
+import '../ui/tokens.dart';
 import 'session_screen.dart';
 
 /// Qué viene a hacer el usuario a la pantalla de emparejamiento.
@@ -144,7 +144,7 @@ class _HostViewState extends State<_HostView> {
   Widget build(BuildContext context) {
     final c = context.watch<SessionController>();
     final theme = Theme.of(context);
-    final glass = GlassTextTheme.of(context);
+    final scheme = theme.colorScheme;
     final invite = c.pairingUri?.toUri();
 
     final callee = widget.callee;
@@ -161,7 +161,7 @@ class _HostViewState extends State<_HostView> {
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.all(Spacing.xl),
+            padding: const EdgeInsets.all(NSpace.xl),
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 420),
               child: Column(
@@ -172,7 +172,7 @@ class _HostViewState extends State<_HostView> {
                       message: 'Modo demostración: esta sala no acepta '
                           'conexiones reales.',
                     ),
-                    const SizedBox(height: Spacing.lg),
+                    const SizedBox(height: NSpace.lg),
                   ],
                   if (c.error != null && invite == null)
                     ErrorBanner(
@@ -181,83 +181,97 @@ class _HostViewState extends State<_HostView> {
                       onDismiss: c.clearError,
                     )
                   else if (invite == null)
-                    LoadingStates.centered(message: 'Abriendo la sala…')
+                    UILoading.centered(message: 'Abriendo la sala…')
                   else
-                    GlassSurface(
-                      glow: theme.colorScheme.primary.withValues(alpha: 0.25),
-                      padding: const EdgeInsets.all(Spacing.xxl),
-                      child: Column(
-                        children: [
-                          Text(
-                            'Que escaneen este código',
-                            textAlign: TextAlign.center,
-                            style: theme.textTheme.titleLarge?.copyWith(
-                              fontWeight: FontWeight.w800,
-                              color: glass.primary,
-                            ),
-                          ),
-                          const SizedBox(height: Spacing.xs),
-                          Text(
-                            c.reachableFromOtherNetworks
-                                ? 'Con Gravital Talk, desde cualquier red.'
-                                : 'Con Gravital Talk, desde la misma red wifi.',
-                            textAlign: TextAlign.center,
-                            style: theme.textTheme.bodyMedium
-                                ?.copyWith(color: glass.secondary),
-                          ),
-                          const SizedBox(height: Spacing.xl),
-                          Semantics(
-                            label: 'Código QR de invitación a la sala',
-                            child: Container(
-                              padding: const EdgeInsets.all(Spacing.md),
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.circular(Radii.glass),
-                              ),
-                              child: QrImageView(
-                                data: invite,
-                                size: 232,
-                                backgroundColor: Colors.white,
+                    Card(
+                      color: scheme.surfaceContainerLow,
+                      shape: NShape.rounded(NShape.extraLarge),
+                      child: Padding(
+                        padding: const EdgeInsets.all(NSpace.xxl),
+                        child: Column(
+                          children: [
+                            Text(
+                              'Que escaneen este código',
+                              textAlign: TextAlign.center,
+                              style: theme.textTheme.titleLarge?.copyWith(
+                                fontWeight: FontWeight.w800,
+                                color: scheme.onSurface,
                               ),
                             ),
-                          ),
-                          const SizedBox(height: Spacing.xl),
-                          Text(
-                            c.roomCode ?? '',
-                            style: theme.textTheme.headlineSmall?.copyWith(
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: 4,
-                              color: glass.primary,
-                            ),
-                          ),
-                          const SizedBox(height: Spacing.lg),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              const SizedBox(
-                                width: 16,
-                                height: 16,
-                                child: CircularProgressIndicator(strokeWidth: 2),
+                            const SizedBox(height: NSpace.xs),
+                            Text(
+                              c.reachableFromOtherNetworks
+                                  ? 'Con Gravital Talk, desde cualquier red.'
+                                  : 'Con Gravital Talk, desde la misma '
+                                      'red wifi.',
+                              textAlign: TextAlign.center,
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                color: scheme.onSurfaceVariant,
                               ),
-                              const SizedBox(width: Spacing.md),
-                              Flexible(
-                                child: Text(
-                                  'Esperando a que alguien se una…',
-                                  style: theme.textTheme.bodyMedium
-                                      ?.copyWith(color: glass.secondary),
+                            ),
+                            const SizedBox(height: NSpace.xl),
+                            Semantics(
+                              label: 'Código QR de invitación a la sala',
+                              child: Container(
+                                padding: const EdgeInsets.all(NSpace.md),
+                                // Fondo blanco aunque el tema sea oscuro: el
+                                // lector mide el contraste con el papel que
+                                // rodea al código, y sobre una superficie
+                                // oscura deja de detectarse. Es la única
+                                // excepción al sistema de color.
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius:
+                                      BorderRadius.circular(NShape.large),
+                                ),
+                                child: QrImageView(
+                                  data: invite,
+                                  size: 232,
+                                  backgroundColor: Colors.white,
                                 ),
                               ),
-                            ],
-                          ),
-                        ],
+                            ),
+                            const SizedBox(height: NSpace.xl),
+                            Text(
+                              c.roomCode ?? '',
+                              style: theme.textTheme.headlineSmall?.copyWith(
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 4,
+                                color: scheme.onSurface,
+                              ),
+                            ),
+                            const SizedBox(height: NSpace.lg),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child:
+                                      CircularProgressIndicator(strokeWidth: 2),
+                                ),
+                                const SizedBox(width: NSpace.md),
+                                Flexible(
+                                  child: Text(
+                                    'Esperando a que alguien se una…',
+                                    style: theme.textTheme.bodyMedium
+                                        ?.copyWith(
+                                      color: scheme.onSurfaceVariant,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   if (invite != null) ...[
                     if (c.error != null) ...[
-                      const SizedBox(height: Spacing.lg),
+                      const SizedBox(height: NSpace.lg),
                       ErrorBanner(message: c.error!, onDismiss: c.clearError),
                     ],
-                    const SizedBox(height: Spacing.lg),
+                    const SizedBox(height: NSpace.lg),
                     FilledButton.tonalIcon(
                       onPressed: () async {
                         final shared = await shareText(
@@ -269,7 +283,7 @@ class _HostViewState extends State<_HostView> {
                       icon: const Icon(Icons.ios_share),
                       label: const Text('Compartir enlace de la sala'),
                     ),
-                    const SizedBox(height: Spacing.md),
+                    const SizedBox(height: NSpace.md),
                     OutlinedButton.icon(
                       onPressed: () => _copyInvite(invite),
                       icon: Icon(_copied ? Icons.check : Icons.link),
@@ -424,14 +438,14 @@ class _JoinViewState extends State<_JoinView> {
     }
     final c = context.watch<SessionController>();
     final theme = Theme.of(context);
-    final glass = GlassTextTheme.of(context);
+    final scheme = theme.colorScheme;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Unirse')),
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.all(Spacing.xl),
+            padding: const EdgeInsets.all(NSpace.xl),
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 420),
               child: Column(
@@ -439,7 +453,7 @@ class _JoinViewState extends State<_JoinView> {
                 children: [
                   if (c.error != null) ...[
                     ErrorBanner(message: c.error!, onDismiss: c.clearError),
-                    const SizedBox(height: Spacing.lg),
+                    const SizedBox(height: NSpace.lg),
                   ],
                   if (_joining)
                     _JoiningPanel(slow: _slow)
@@ -450,12 +464,12 @@ class _JoinViewState extends State<_JoinView> {
                         textAlign: TextAlign.center,
                         style: theme.textTheme.titleLarge?.copyWith(
                           fontWeight: FontWeight.w800,
-                          color: glass.primary,
+                          color: scheme.onSurface,
                         ),
                       ),
-                      const SizedBox(height: Spacing.lg),
+                      const SizedBox(height: NSpace.lg),
                       ClipRRect(
-                        borderRadius: BorderRadius.circular(Radii.glass),
+                        borderRadius: BorderRadius.circular(NShape.extraLarge),
                         child: AspectRatio(
                           aspectRatio: 1,
                           child: MobileScanner(
@@ -472,45 +486,49 @@ class _JoinViewState extends State<_JoinView> {
                           ),
                         ),
                       ),
-                      const SizedBox(height: Spacing.xl),
+                      const SizedBox(height: NSpace.xl),
                     ],
-                    GlassSurface(
-                      padding: const EdgeInsets.all(Spacing.xl),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Text(
-                            _scanner != null
-                                ? '¿Te la han enviado por mensaje?'
-                                : 'Pega la invitación',
-                            style: theme.textTheme.titleMedium?.copyWith(
-                              fontWeight: FontWeight.w700,
-                              color: glass.primary,
-                            ),
-                          ),
-                          const SizedBox(height: Spacing.md),
-                          TextField(
-                            controller: _inviteCtl,
-                            autocorrect: false,
-                            enableSuggestions: false,
-                            textInputAction: TextInputAction.go,
-                            onSubmitted: _join,
-                            decoration: InputDecoration(
-                              hintText: 'gravital-talk://pair?…',
-                              suffixIcon: IconButton(
-                                tooltip: 'Pegar del portapapeles',
-                                onPressed: _paste,
-                                icon: const Icon(Icons.content_paste),
+                    Card(
+                      color: scheme.surfaceContainerLow,
+                      shape: NShape.rounded(NShape.extraLarge),
+                      child: Padding(
+                        padding: const EdgeInsets.all(NSpace.xl),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Text(
+                              _scanner != null
+                                  ? '¿Te la han enviado por mensaje?'
+                                  : 'Pega la invitación',
+                              style: theme.textTheme.titleMedium?.copyWith(
+                                fontWeight: FontWeight.w700,
+                                color: scheme.onSurface,
                               ),
                             ),
-                          ),
-                          const SizedBox(height: Spacing.md),
-                          FilledButton.icon(
-                            onPressed: () => _join(_inviteCtl.text),
-                            icon: const Icon(Icons.login),
-                            label: const Text('Unirse'),
-                          ),
-                        ],
+                            const SizedBox(height: NSpace.md),
+                            TextField(
+                              controller: _inviteCtl,
+                              autocorrect: false,
+                              enableSuggestions: false,
+                              textInputAction: TextInputAction.go,
+                              onSubmitted: _join,
+                              decoration: InputDecoration(
+                                hintText: 'gravital-talk://pair?…',
+                                suffixIcon: IconButton(
+                                  tooltip: 'Pegar del portapapeles',
+                                  onPressed: _paste,
+                                  icon: const Icon(Icons.content_paste),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: NSpace.md),
+                            FilledButton.icon(
+                              onPressed: () => _join(_inviteCtl.text),
+                              icon: const Icon(Icons.login),
+                              label: const Text('Unirse'),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ],
@@ -537,8 +555,8 @@ class _JoiningPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 80),
-      child: LoadingStates.centered(
+      padding: const EdgeInsets.symmetric(vertical: NSpace.huge),
+      child: UILoading.centered(
         message: slow
             ? 'Buscando camino entre vuestras redes…'
             : 'Conectando…',
@@ -592,7 +610,10 @@ class _CallingViewState extends State<_CallingView> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final glass = GlassTextTheme.of(context);
+    final scheme = theme.colorScheme;
+    // Una llamada no es un estado genérico de la interfaz: por eso usa el tono
+    // semántico de llamada y no el primario del tema.
+    final calling = SemanticColors.of(context).calling;
     final name = widget.name;
     final initial = name.isEmpty ? '?' : name.characters.first.toUpperCase();
 
@@ -603,32 +624,31 @@ class _CallingViewState extends State<_CallingView> {
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 420),
             child: Padding(
-              padding: const EdgeInsets.all(Spacing.xl),
+              padding: const EdgeInsets.all(NSpace.xl),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   CircleAvatar(
                     radius: 48,
-                    backgroundColor:
-                        theme.colorScheme.primary.withValues(alpha: 0.2),
+                    backgroundColor: calling.container,
                     child: Text(
                       initial,
                       style: theme.textTheme.displaySmall?.copyWith(
                         fontWeight: FontWeight.w800,
-                        color: glass.primary,
+                        color: calling.onContainer,
                       ),
                     ),
                   ),
-                  const SizedBox(height: Spacing.xl),
+                  const SizedBox(height: NSpace.xl),
                   Text(
                     name,
                     textAlign: TextAlign.center,
                     style: theme.textTheme.headlineSmall?.copyWith(
                       fontWeight: FontWeight.w800,
-                      color: glass.primary,
+                      color: scheme.onSurface,
                     ),
                   ),
-                  const SizedBox(height: Spacing.sm),
+                  const SizedBox(height: NSpace.sm),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
@@ -637,40 +657,40 @@ class _CallingViewState extends State<_CallingView> {
                         height: 16,
                         child: CircularProgressIndicator(strokeWidth: 2),
                       ),
-                      const SizedBox(width: Spacing.md),
+                      const SizedBox(width: NSpace.md),
                       Text(
                         widget.status,
                         style: theme.textTheme.bodyLarge
-                            ?.copyWith(color: glass.secondary),
+                            ?.copyWith(color: scheme.onSurfaceVariant),
                       ),
                     ],
                   ),
                   if (_slow) ...[
-                    const SizedBox(height: Spacing.lg),
+                    const SizedBox(height: NSpace.lg),
                     Text(
                       'Está tardando. Puede que no tenga la app abierta o '
                       'que no tenga conexión ahora mismo.',
                       textAlign: TextAlign.center,
                       style: theme.textTheme.bodyMedium
-                          ?.copyWith(color: glass.secondary),
+                          ?.copyWith(color: scheme.onSurfaceVariant),
                     ),
                   ],
                   if (widget.error != null) ...[
-                    const SizedBox(height: Spacing.lg),
+                    const SizedBox(height: NSpace.lg),
                     Text(
                       widget.error!,
                       textAlign: TextAlign.center,
                       style: theme.textTheme.bodyMedium
-                          ?.copyWith(color: theme.colorScheme.error),
+                          ?.copyWith(color: scheme.error),
                     ),
                   ],
-                  const SizedBox(height: Spacing.xxxl),
+                  const SizedBox(height: NSpace.xxxl),
                   OutlinedButton.icon(
                     onPressed: widget.onCancel,
-                    icon: Icon(Icons.call_end, color: theme.colorScheme.error),
+                    icon: Icon(Icons.call_end, color: scheme.error),
                     label: Text(
                       'Cancelar',
-                      style: TextStyle(color: theme.colorScheme.error),
+                      style: TextStyle(color: scheme.error),
                     ),
                   ),
                 ],

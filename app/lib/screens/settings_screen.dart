@@ -7,16 +7,15 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 
 import '../core/constants.dart';
-import '../core/glass.dart';
-import '../core/states.dart';
-import '../core/tokens.dart';
 import '../models/connection.dart';
 import '../services/background_session.dart';
 import '../services/contacts.dart';
 import '../services/crash_report.dart';
 import '../services/engine.dart';
 import '../services/session_controller.dart';
-import '../widgets/common.dart';
+import '../ui/patterns.dart';
+import '../ui/semantic_colors.dart';
+import '../ui/tokens.dart';
 
 /// Ajustes: permisos, conexión, apariencia y datos de la app.
 ///
@@ -195,7 +194,7 @@ class _SettingsScreenState extends State<SettingsScreen>
           constraints: const BoxConstraints(maxWidth: 560),
           child: ListView(
             padding: const EdgeInsets.fromLTRB(
-                Spacing.xl, Spacing.md, Spacing.xl, Spacing.xxxl),
+                NSpace.xl, NSpace.md, NSpace.xl, NSpace.xxxl),
             children: [
               _Section(
                 title: 'Permisos',
@@ -237,7 +236,7 @@ class _SettingsScreenState extends State<SettingsScreen>
                     'el perfil decide cuánto.',
                 children: [
                   Padding(
-                    padding: const EdgeInsets.symmetric(vertical: Spacing.md),
+                    padding: const EdgeInsets.symmetric(vertical: NSpace.md),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -258,11 +257,13 @@ class _SettingsScreenState extends State<SettingsScreen>
                             ),
                           ),
                         ),
-                        const SizedBox(height: Spacing.sm),
+                        const SizedBox(height: NSpace.sm),
                         Text(
                           s.voiceProfile.description,
                           style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                color: GlassTextTheme.of(context).secondary,
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurfaceVariant,
                               ),
                         ),
                       ],
@@ -380,7 +381,7 @@ class _SettingsScreenState extends State<SettingsScreen>
                 title: 'Apariencia',
                 children: [
                   Padding(
-                    padding: const EdgeInsets.symmetric(vertical: Spacing.sm),
+                    padding: const EdgeInsets.symmetric(vertical: NSpace.sm),
                     child: SegmentedButton<AppThemeMode>(
                       segments: [
                         for (final mode in AppThemeMode.values)
@@ -474,7 +475,7 @@ class _SettingsScreenState extends State<SettingsScreen>
           onSubmitted: (v) => Navigator.pop(dialog, v),
         ),
         actions: [
-          DialogActions(
+          UIDialogActions(
             cancelLabel: 'Cancelar',
             onCancel: () => Navigator.pop(dialog),
             confirmLabel: 'Guardar',
@@ -523,7 +524,7 @@ class _SettingsScreenState extends State<SettingsScreen>
                 'dispositivos y, sólo si no hay camino directo, reenvía el '
                 'audio cifrado. Déjalo vacío para no usar ninguno.',
               ),
-              const SizedBox(height: Spacing.md),
+              const SizedBox(height: NSpace.md),
               TextField(
                 controller: ctl,
                 autofocus: true,
@@ -537,7 +538,7 @@ class _SettingsScreenState extends State<SettingsScreen>
             ],
           ),
           actions: [
-            DialogActions(
+            UIDialogActions(
               cancelLabel: 'Cancelar',
               onCancel: () => Navigator.pop(dialogCtx),
               confirmLabel: 'Guardar',
@@ -559,7 +560,7 @@ class _SettingsScreenState extends State<SettingsScreen>
   }
 }
 
-/// Bloque de ajustes: título, explicación opcional y sus filas sobre vidrio.
+/// Bloque de ajustes: título, explicación opcional y sus filas sobre Card.
 class _Section extends StatelessWidget {
   const _Section({required this.title, this.subtitle, required this.children});
 
@@ -570,14 +571,14 @@ class _Section extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final glass = GlassTextTheme.of(context);
+    final scheme = theme.colorScheme;
     return Padding(
-      padding: const EdgeInsets.only(bottom: Spacing.xl),
+      padding: const EdgeInsets.only(bottom: NSpace.xl),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
-            padding: const EdgeInsets.only(left: Spacing.xs, bottom: Spacing.sm),
+            padding: const EdgeInsets.only(left: NSpace.xs, bottom: NSpace.sm),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -585,32 +586,38 @@ class _Section extends StatelessWidget {
                   title,
                   style: theme.textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.w800,
-                    color: glass.primary,
+                    color: scheme.onSurface,
                   ),
                 ),
                 if (subtitle != null)
                   Text(
                     subtitle!,
                     style: theme.textTheme.bodySmall
-                        ?.copyWith(color: glass.secondary),
+                        ?.copyWith(color: scheme.onSurfaceVariant),
                   ),
               ],
             ),
           ),
-          GlassSurface(
-            padding: const EdgeInsets.symmetric(
-                horizontal: Spacing.lg, vertical: Spacing.sm),
-            child: Column(
-              children: [
-                for (var i = 0; i < children.length; i++) ...[
-                  if (i > 0)
-                    Divider(
-                      height: 1,
-                      color: glass.secondary.withValues(alpha: 0.18),
-                    ),
-                  children[i],
+          Card(
+            color: scheme.surfaceContainerLow,
+            elevation: 0,
+            margin: EdgeInsets.zero,
+            shape: NShape.rounded(NShape.medium),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: NSpace.lg, vertical: NSpace.sm),
+              child: Column(
+                children: [
+                  for (var i = 0; i < children.length; i++) ...[
+                    if (i > 0)
+                      Divider(
+                        height: 1,
+                        color: scheme.onSurfaceVariant.withValues(alpha: 0.18),
+                      ),
+                    children[i],
+                  ],
                 ],
-              ],
+              ),
             ),
           ),
         ],
@@ -638,13 +645,13 @@ class _Row extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final glass = GlassTextTheme.of(context);
+    final scheme = theme.colorScheme;
     final row = Padding(
-      padding: const EdgeInsets.symmetric(vertical: Spacing.md),
+      padding: const EdgeInsets.symmetric(vertical: NSpace.md),
       child: Row(
         children: [
-          Icon(icon, color: glass.secondary),
-          const SizedBox(width: Spacing.lg),
+          Icon(icon, color: scheme.onSurfaceVariant),
+          const SizedBox(width: NSpace.lg),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -653,22 +660,22 @@ class _Row extends StatelessWidget {
                   title,
                   style: theme.textTheme.bodyLarge?.copyWith(
                     fontWeight: FontWeight.w600,
-                    color: glass.primary,
+                    color: scheme.onSurface,
                   ),
                 ),
-                const SizedBox(height: Spacing.xxs),
+                const SizedBox(height: NSpace.xs),
                 Text(
                   subtitle,
                   style: theme.textTheme.bodySmall
-                      ?.copyWith(color: glass.secondary),
+                      ?.copyWith(color: scheme.onSurfaceVariant),
                 ),
               ],
             ),
           ),
           if (trailing != null) ...[
-            const SizedBox(width: Spacing.md),
+            const SizedBox(width: NSpace.md),
             IconTheme.merge(
-              data: IconThemeData(color: glass.secondary),
+              data: IconThemeData(color: scheme.onSurfaceVariant),
               child: trailing!,
             ),
           ],
@@ -678,7 +685,7 @@ class _Row extends StatelessWidget {
     if (onTap == null) return row;
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(Radii.md),
+      borderRadius: BorderRadius.circular(NShape.medium),
       child: row,
     );
   }
@@ -699,6 +706,8 @@ class _PermissionRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final semantic = SemanticColors.of(context);
     final granted = status.isGranted || status.isLimited;
     // Denegado sin posibilidad de volver a preguntar: el botón lleva a los
     // ajustes del sistema, y lo dice.
@@ -707,15 +716,15 @@ class _PermissionRow extends StatelessWidget {
     final Widget trailing = granted
         ? Semantics(
             label: 'Concedido',
-            child: const Row(
+            child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.check_circle, color: GravitalColors.online, size: 20),
-                SizedBox(width: Spacing.xs),
+                Icon(Icons.check_circle, color: semantic.success.color, size: 20),
+                const SizedBox(width: NSpace.xs),
                 Text(
                   'Concedido',
                   style: TextStyle(
-                    color: GravitalColors.online,
+                    color: semantic.success.color,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
@@ -727,13 +736,13 @@ class _PermissionRow extends StatelessWidget {
             // El tema da a los botones todo el ancho disponible; dentro de
             // una fila eso deja al texto sin sitio y lo parte letra a letra.
             style: FilledButton.styleFrom(
-              minimumSize: const Size(0, HitSizes.minTouch),
+              minimumSize: const Size(0, NHitSize.minTouch),
               backgroundColor: permission.essential
                   ? null
-                  : theme.colorScheme.secondaryContainer,
+                  : scheme.secondaryContainer,
               foregroundColor: permission.essential
                   ? null
-                  : theme.colorScheme.onSecondaryContainer,
+                  : scheme.onSecondaryContainer,
             ),
             child: Text(blocked ? 'Abrir ajustes' : 'Permitir'),
           );

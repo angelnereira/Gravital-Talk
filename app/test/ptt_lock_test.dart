@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:gravital_talk_app/core/theme.dart';
-import 'package:gravital_talk_app/widgets/common.dart';
+import 'package:gravital_talk_app/ui/components/index.dart';
+import 'package:gravital_talk_app/ui/theme.dart';
 
 /// Botón de hablar con un "motor" mínimo: `pressed` sigue a onDown/onUp.
 class _Harness extends StatefulWidget {
@@ -33,7 +33,7 @@ class _HarnessState extends State<_Harness> {
 void main() {
   Future<_HarnessState> pump(WidgetTester tester) async {
     await tester.pumpWidget(MaterialApp(
-      theme: GravitalTheme.dark(),
+      theme: NTheme.build(NTheme.scheme(Brightness.dark)),
       home: const Scaffold(body: _Harness()),
     ));
     return tester.state<_HarnessState>(find.byType(_Harness));

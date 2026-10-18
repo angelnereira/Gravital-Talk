@@ -1,22 +1,18 @@
-/// Tarjeta de sesión activa en la home.
-///
-/// Existe porque antes la sesión activa era un botón más dentro del `ListView`
-/// de la home, con el mismo peso visual que los modos de conexión. Con una
-/// llamada en curso, lo importante es volver a ella, no crear otra.
-///
-/// Muestra duración, estado y calidad para que la home sirva de resumen sin
-/// entrar en la sesión.
+/// Tarjeta de sesión activa en la home (GEUI).
 library;
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../core/tokens.dart';
-import '../models/connection.dart';
-import '../screens/session_screen.dart';
-import '../services/session_controller.dart';
-import 'common.dart';
+import '../../models/connection.dart';
+import '../../screens/session_screen.dart';
+import '../../services/session_controller.dart';
+import '../semantic_colors.dart';
+import '../tokens.dart';
+import 'metric_tile.dart';
+import 'status_badge.dart';
 
+/// Tarjeta de sesión activa en la home.
 class ActiveSessionCard extends StatelessWidget {
   const ActiveSessionCard({super.key});
 
@@ -32,37 +28,35 @@ class ActiveSessionCard extends StatelessWidget {
     if (!c.isLive) return const SizedBox.shrink();
 
     final theme = Theme.of(context);
+    final sem = SemanticColors.of(context);
     final m = c.metrics;
     final label = c.roomCode ??
         (c.mode == ConnectionMode.p2p ? 'P2P directo' : 'Sesión');
 
     return Card(
       color: theme.colorScheme.primaryContainer,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(Radii.glass),
-      ),
+      shape: NShape.rounded(NShape.extraLarge),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: () => Navigator.of(context).push(
           MaterialPageRoute(builder: (_) => const SessionScreen()),
         ),
         child: Padding(
-          padding: const EdgeInsets.all(Spacing.lg),
+          padding: const EdgeInsets.all(NSpace.lg),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(
                 children: [
-                  // Punto pulsante: indica llamada en vivo de un vistazo.
                   Container(
                     width: 10,
                     height: 10,
-                    decoration: const BoxDecoration(
-                      color: GravitalColors.online,
+                    decoration: BoxDecoration(
+                      color: sem.success.color,
                       shape: BoxShape.circle,
                     ),
                   ),
-                  const SizedBox(width: Spacing.sm),
+                  const SizedBox(width: NSpace.sm),
                   Expanded(
                     child: Text(
                       'Sesión activa',
@@ -74,15 +68,14 @@ class ActiveSessionCard extends StatelessWidget {
                   StatusBadge(c.state),
                 ],
               ),
-              const SizedBox(height: Spacing.xs),
+              const SizedBox(height: NSpace.xs),
               Text(
                 label,
                 style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onPrimaryContainer
-                      .withValues(alpha: 0.85),
+                  color: theme.colorScheme.onPrimaryContainer.withValues(alpha: 0.85),
                 ),
               ),
-              const SizedBox(height: Spacing.md),
+              const SizedBox(height: NSpace.md),
               Row(
                 children: [
                   Expanded(
@@ -93,20 +86,20 @@ class ActiveSessionCard extends StatelessWidget {
                       color: theme.colorScheme.onPrimaryContainer,
                     ),
                   ),
-                  const SizedBox(width: Spacing.sm),
+                  const SizedBox(width: NSpace.sm),
                   Expanded(
                     child: MetricTile(
                       label: 'MOS',
                       value: m.estimatedMos.toStringAsFixed(2),
                       icon: Icons.star_outline,
                       color: m.estimatedMos >= 4
-                          ? GravitalColors.online
+                          ? sem.success.color
                           : (m.estimatedMos >= 3
-                              ? Colors.orange
+                              ? sem.warning.color
                               : theme.colorScheme.error),
                     ),
                   ),
-                  const SizedBox(width: Spacing.sm),
+                  const SizedBox(width: NSpace.sm),
                   Expanded(
                     child: MetricTile(
                       label: 'RTT',
@@ -115,12 +108,12 @@ class ActiveSessionCard extends StatelessWidget {
                       icon: Icons.speed,
                       color: m.rttMs < 60
                           ? theme.colorScheme.onPrimaryContainer
-                          : GravitalColors.transmit,
+                          : sem.pttActive.color,
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: Spacing.md),
+              const SizedBox(height: NSpace.md),
               Align(
                 alignment: Alignment.centerRight,
                 child: TextButton.icon(

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import 'app.dart';
 import 'services/contacts.dart';
+import 'ui/app.dart' show prepareApp;
 import 'services/crash_report.dart';
 import 'services/engine.dart';
 import 'services/event_log.dart';
@@ -18,7 +19,9 @@ import 'services/settings_store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 Future<void> main(List<String> args) async {
-  WidgetsFlutterBinding.ensureInitialized();
+  // GEUI: borde a borde y overlay transparente antes de que exista ninguna
+  // pantalla. `WidgetsFlutterBinding.ensureInitialized()` va dentro.
+  prepareApp();
 
   // Escritorio: si ya hay una copia abierta y esto es sólo un enlace que el
   // sistema nos pasa, se le entrega a ella y esta copia termina.

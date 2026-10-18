@@ -10,7 +10,7 @@
 library;
 import 'package:flutter/material.dart';
 
-import '../core/tokens.dart' show GravitalDurations;
+import '../ui/tokens.dart' show NCurve, NDuration;
 
 
 /// Ruta estándar para pantallas de detalle: entra desde la derecha.
@@ -19,8 +19,8 @@ class ForwardRoute<T> extends PageRouteBuilder<T> {
       : super(
           pageBuilder: (context, animation, secondaryAnimation) =>
               builder(context),
-          transitionDuration: GravitalDurations.normal,
-          reverseTransitionDuration: GravitalDurations.fast,
+          transitionDuration: NDuration.medium,
+          reverseTransitionDuration: NDuration.short,
           transitionsBuilder: (context, animation, secondaryAnimation, child) =>
               _slideForward(animation, child),
         );
@@ -35,8 +35,8 @@ class BottomSheetRoute<T> extends PageRouteBuilder<T> {
       : super(
           pageBuilder: (context, animation, secondaryAnimation) =>
               builder(context),
-          transitionDuration: GravitalDurations.normal,
-          reverseTransitionDuration: GravitalDurations.fast,
+          transitionDuration: NDuration.medium,
+          reverseTransitionDuration: NDuration.short,
           opaque: false,
           barrierDismissible: true,
           barrierColor: Colors.black54,
@@ -51,8 +51,8 @@ class QuickRoute<T> extends PageRouteBuilder<T> {
       : super(
           pageBuilder: (context, animation, secondaryAnimation) =>
               builder(context),
-          transitionDuration: GravitalDurations.fast,
-          reverseTransitionDuration: GravitalDurations.fast,
+          transitionDuration: NDuration.short,
+          reverseTransitionDuration: NDuration.short,
           transitionsBuilder: (context, animation, secondaryAnimation, child) =>
               _fadeThrough(animation, child),
         );
@@ -63,8 +63,8 @@ class QuickRoute<T> extends PageRouteBuilder<T> {
 Widget _slideForward(Animation<double> animation, Widget child) {
   final curved = CurvedAnimation(
     parent: animation,
-    curve: Curves.easeOutCubic,
-    reverseCurve: Curves.easeInCubic,
+    curve: NCurve.emphasized,
+    reverseCurve: NCurve.emphasizedAccelerate,
   );
   return SlideTransition(
     position: Tween<Offset>(
@@ -78,8 +78,8 @@ Widget _slideForward(Animation<double> animation, Widget child) {
 Widget _slideUp(Animation<double> animation, Widget child) {
   final curved = CurvedAnimation(
     parent: animation,
-    curve: Curves.easeOutCubic,
-    reverseCurve: Curves.easeInCubic,
+    curve: NCurve.emphasized,
+    reverseCurve: NCurve.emphasizedAccelerate,
   );
   return SlideTransition(
     position: Tween<Offset>(
@@ -94,8 +94,8 @@ Widget _slideUp(Animation<double> animation, Widget child) {
 Widget _fadeThrough(Animation<double> animation, Widget child) {
   final curved = CurvedAnimation(
     parent: animation,
-    curve: Curves.easeOut,
-    reverseCurve: Curves.easeIn,
+    curve: NCurve.emphasizedDecelerate,
+    reverseCurve: NCurve.emphasizedAccelerate,
   );
   return FadeTransition(opacity: curved, child: child);
 }

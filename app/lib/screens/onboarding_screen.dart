@@ -1,16 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:introduction_screen/introduction_screen.dart';
 
-import '../core/glass.dart';
-import '../core/tokens.dart';
+import '../ui/tokens.dart';
 
 /// Presentación de primer arranque: tres ideas, las que hacen falta para
 /// empezar a hablar.
 ///
-/// Va sobre el mismo fondo y con el mismo vidrio que el resto de la app, y
-/// toma los colores de texto del tema: en claro y en oscuro se lee igual de
-/// bien. No explica el protocolo; eso está en "Acerca de" para quien lo
-/// busque.
+/// Va sobre el mismo fondo que el resto de la app y toma sus colores del
+/// esquema: en claro y en oscuro se lee igual de bien. No explica el
+/// protocolo; eso está en "Acerca de" para quien lo busque.
+///
+/// Cada página es una ilustración circular sobre `primaryContainer` y dos
+/// niveles de texto: el título manda y el cuerpo acompaña. Es un momento
+/// expresivo (§7.2 de la regla de diseño), así que el paso entre páginas usa
+/// la curva acentuada y el punto activo toma el color de marca.
 class OnboardingScreen extends StatelessWidget {
   const OnboardingScreen({super.key, this.onDone});
 
@@ -41,34 +44,37 @@ class OnboardingScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final glass = GlassTextTheme.of(context);
 
     final decoration = PageDecoration(
       pageColor: Colors.transparent,
-      imagePadding: const EdgeInsets.only(top: Spacing.xxxl),
-      contentMargin: const EdgeInsets.symmetric(horizontal: Spacing.xl),
+      imagePadding: const EdgeInsets.only(top: NSpace.xxxl),
+      contentMargin: const EdgeInsets.symmetric(horizontal: NSpace.xl),
       titleTextStyle: (theme.textTheme.headlineSmall ?? const TextStyle())
-          .copyWith(fontWeight: FontWeight.w800, color: glass.primary),
+          .copyWith(color: scheme.onSurface),
       bodyTextStyle: (theme.textTheme.bodyLarge ?? const TextStyle())
-          .copyWith(color: glass.secondary, height: 1.4),
+          .copyWith(color: scheme.onSurfaceVariant, height: 1.4),
     );
-    final action = TextStyle(fontWeight: FontWeight.w700, color: glass.primary);
+    final action = theme.textTheme.titleMedium
+        ?.copyWith(fontWeight: FontWeight.w700, color: scheme.primary);
 
     return IntroductionScreen(
-      // Transparente: detrás está el degradado común a toda la app.
+      // Transparente: detrás está el fondo común a toda la app.
       globalBackgroundColor: Colors.transparent,
       pages: [
         for (final (icon, title, body) in _pages)
           PageViewModel(
             title: title,
             body: body,
-            image: GlassSurface(
-              glow: scheme.primary.withValues(alpha: 0.3),
-              borderRadius: 48,
-              padding: const EdgeInsets.all(Spacing.xxl),
-              // Color de texto del tema, no el primario: el resplandor de la
-              // tarjeta ya es primario y el icono se perdía dentro.
-              child: Icon(icon, size: 84, color: glass.primary),
+            // Círculo de contenedor con el icono dentro: el color lo pone el
+            // esquema y el icono usa su sobre-color, de modo que se lee igual
+            // en claro, en oscuro y con el tema dinámico del teléfono.
+            image: Container(
+              padding: const EdgeInsets.all(NSpace.xl),
+              decoration: BoxDecoration(
+                color: scheme.primaryContainer,
+                borderRadius: BorderRadius.circular(NShape.full),
+              ),
+              child: Icon(icon, size: 84, color: scheme.onPrimaryContainer),
             ),
             decoration: decoration,
           ),
@@ -77,18 +83,20 @@ class OnboardingScreen extends StatelessWidget {
       onSkip: () => onDone?.call(),
       showSkipButton: true,
       showNextButton: true,
-      next: Icon(Icons.arrow_forward, color: glass.primary),
+      next: Icon(Icons.arrow_forward, color: scheme.primary),
       done: Text('Empezar', style: action),
-      skip: Text('Saltar', style: TextStyle(color: glass.secondary)),
-      curve: Curves.fastLinearToSlowEaseIn,
+      skip: Text(
+        'Saltar',
+        style: theme.textTheme.titleMedium
+            ?.copyWith(color: scheme.onSurfaceVariant),
+      ),
+      curve: NCurve.emphasizedDecelerate,
       dotsDecorator: DotsDecorator(
         activeColor: scheme.primary,
-        color: glass.secondary.withValues(alpha: 0.4),
+        color: scheme.onSurfaceVariant.withValues(alpha: 0.4),
         size: const Size(8, 8),
         activeSize: const Size(22, 8),
-        activeShape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(8),
-        ),
+        activeShape: NShape.rounded(NShape.full),
       ),
     );
   }

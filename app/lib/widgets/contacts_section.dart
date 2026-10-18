@@ -1,14 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../core/glass.dart';
 import '../core/routes.dart';
-import '../core/states.dart';
-import '../core/tokens.dart';
 import '../screens/contact_screen.dart';
 import '../screens/invite_screen.dart';
 import '../screens/pairing_screen.dart';
 import '../services/contacts.dart';
+import '../ui/patterns.dart';
+import '../ui/tokens.dart';
 
 /// Lista de contactos de la home: un toque para volver a hablar con alguien.
 class ContactsSection extends StatelessWidget {
@@ -25,7 +24,7 @@ class ContactsSection extends StatelessWidget {
     final contacts = context.watch<ContactsService>();
     if (!contacts.available) return const SizedBox.shrink();
     final theme = Theme.of(context);
-    final glass = GlassTextTheme.of(context);
+    final scheme = theme.colorScheme;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -37,7 +36,7 @@ class ContactsSection extends StatelessWidget {
                 'Contactos',
                 style: theme.textTheme.titleMedium?.copyWith(
                   fontWeight: FontWeight.w800,
-                  color: glass.primary,
+                  color: scheme.onSurface,
                 ),
               ),
             ),
@@ -56,24 +55,27 @@ class ContactsSection extends StatelessWidget {
             ),
           ],
         ),
-        const SizedBox(height: Spacing.sm),
+        const SizedBox(height: NSpace.sm),
         if (contacts.contacts.isEmpty)
           Text(
             'Cuando hables con alguien se guardará aquí, para volver a '
             'llamarle con un toque. También puedes añadir a alguien '
             'enviándole tu enlace.',
-            style:
-                theme.textTheme.bodyMedium?.copyWith(color: glass.secondary),
+            style: theme.textTheme.bodyMedium
+                ?.copyWith(color: scheme.onSurfaceVariant),
           )
         else
-          GlassSurface(
-            padding: const EdgeInsets.symmetric(
-                horizontal: Spacing.lg, vertical: Spacing.xs),
-            child: Column(
-              children: [
-                for (final contact in contacts.contacts)
-                  _ContactRow(contact: contact, enabled: enabled),
-              ],
+          Card(
+            clipBehavior: Clip.antiAlias,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: NSpace.lg, vertical: NSpace.xs),
+              child: Column(
+                children: [
+                  for (final contact in contacts.contacts)
+                    _ContactRow(contact: contact, enabled: enabled),
+                ],
+              ),
             ),
           ),
       ],
@@ -112,7 +114,7 @@ class _ContactRow extends StatelessWidget {
           onSubmitted: (v) => Navigator.pop(dialog, v),
         ),
         actions: [
-          DialogActions(
+          UIDialogActions(
             cancelLabel: 'Cancelar',
             onCancel: () => Navigator.pop(dialog),
             confirmLabel: 'Guardar',
@@ -127,7 +129,7 @@ class _ContactRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final glass = GlassTextTheme.of(context);
+    final scheme = theme.colorScheme;
     // Creado al enseñar el enlace de contacto: todavía no lo ha abierto nadie.
     final pending =
         contact.device.isEmpty && contact.name == ContactsService.pendingName;
@@ -135,7 +137,7 @@ class _ContactRow extends StatelessWidget {
         contact.name.isEmpty ? '?' : contact.name.characters.first.toUpperCase();
 
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: Spacing.sm),
+      padding: const EdgeInsets.symmetric(vertical: NSpace.sm),
       child: Row(
         children: [
           CircleAvatar(
@@ -144,15 +146,15 @@ class _ContactRow extends StatelessWidget {
             child: Text(
               initial,
               style: TextStyle(
-                color: glass.primary,
+                color: scheme.onSurface,
                 fontWeight: FontWeight.w800,
               ),
             ),
           ),
-          const SizedBox(width: Spacing.md),
+          const SizedBox(width: NSpace.md),
           Expanded(
             child: InkWell(
-              borderRadius: BorderRadius.circular(Radii.sm),
+              borderRadius: BorderRadius.circular(NShape.small),
               onTap: () => Navigator.push(
                 context,
                 ForwardRoute(
@@ -168,7 +170,7 @@ class _ContactRow extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: theme.textTheme.bodyLarge?.copyWith(
                     fontWeight: FontWeight.w600,
-                    color: glass.primary,
+                    color: scheme.onSurface,
                   ),
                 ),
                 Text(
@@ -178,7 +180,7 @@ class _ContactRow extends StatelessWidget {
                           ? 'Silenciado'
                           : _lastSeen(contact.lastSeen),
                   style: theme.textTheme.bodySmall
-                      ?.copyWith(color: glass.secondary),
+                      ?.copyWith(color: scheme.onSurfaceVariant),
                 ),
               ],
               ),
@@ -186,7 +188,7 @@ class _ContactRow extends StatelessWidget {
           ),
           PopupMenuButton<String>(
             tooltip: 'Más',
-            icon: Icon(Icons.more_vert, color: glass.secondary),
+            icon: Icon(Icons.more_vert, color: scheme.onSurfaceVariant),
             onSelected: (action) {
               if (action == 'details') {
                 Navigator.push(

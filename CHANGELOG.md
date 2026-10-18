@@ -6,6 +6,41 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
 
 ### Added
 
+**Gravital Experience UI — sistema de diseño de las interfaces Flutter**
+- `docs/gravital-experience-ui.md` es la regla de diseño del proyecto: tokens,
+  componentes, patrones y un checklist por pantalla. Toda pantalla nueva nace
+  sobre ella.
+- Nueva capa `app/lib/ui/`: `tokens.dart` (espaciado, formas, resortes, clases
+  de ventana), `semantic_colors.dart` (los siete estados del dominio: hablando,
+  turno, llamando, conexión degradada…), `theme.dart`, `patterns.dart` (estados
+  de pantalla, diálogos) y `components/` (PTT, llamadas, salas, métricas).
+- El tema se genera ahora con `ColorScheme.fromSeed` en HCT a partir del teal de
+  marca, en claro, oscuro y alto contraste, en vez de paletas escritas a mano.
+  Los contrastes dejan de medirse uno a uno: se comprueban en `theme_test.dart`.
+- Retroceso predictivo en Android y transiciones de resortes M3 en toda la app.
+
+### Changed
+
+**Interfaz reconstruida sobre Gravital Experience UI**
+- Reemplazado el sistema de vidrio (glassmorphism) por contención tonal de
+  Material 3: superficies `surfaceContainer*`, elevación 0 por defecto y sombra
+  sólo en FAB, menús y elementos arrastrables. Los archivos `core/glass.dart`,
+  `core/palette.dart`, `core/theme.dart`, `core/states.dart` y `core/tokens.dart`
+  se han eliminado; sus equivalentes viven ahora en `lib/ui/`.
+- Botones y campos con forma de píldora y esquinas de la escala oficial M3
+  Expressive; diálogos de 28 dp, tarjetas de 12 dp.
+- Cifras tabulares en toda la escala tipográfica: el RTT y la duración ya no
+  desplazan la fila al pasar de 9 a 10.
+- El margen lateral de las pantallas pasa a ser adaptativo (16 dp en compact,
+  24 dp desde medium).
+
+### Fixed
+
+- Las tarjetas de acción de la inicio se anunciaban como botones sin nombre:
+  la etiqueta y la acción quedaban en dos nodos de semántica distintos. Ahora
+  se emiten como uno y los iconos de la barra llevan etiqueta.
+- El botón de hablar repetía tres veces su texto al lector de pantalla.
+
 **Burbuja para hablar con la app oculta (Android)**
 - Al salir de la app con una sala abierta queda una burbuja flotante encima de
   las demás apps: mantenerla pulsada es el botón de hablar, tocarla vuelve a

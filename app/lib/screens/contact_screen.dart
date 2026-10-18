@@ -2,12 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
-import '../core/glass.dart';
 import '../core/routes.dart';
-import '../core/states.dart';
-import '../core/tokens.dart';
 import '../services/contacts.dart';
 import '../services/session_controller.dart';
+import '../ui/patterns.dart';
+import '../ui/tokens.dart';
 import 'pairing_screen.dart';
 
 /// Ficha de un contacto: lo que se sabe de él y lo que el usuario decide
@@ -52,24 +51,13 @@ class _ContactScreenState extends State<ContactScreen> {
       _contacts.edit(widget.contactId, note: _note.text);
 
   Future<void> _remove(Contact contact) async {
-    final sure = await showDialog<bool>(
-      context: context,
-      builder: (dialog) => AlertDialog(
-        title: Text('¿Eliminar a ${contact.name}?'),
-        content: const Text(
-          'Dejaréis de poder llamaros. Para volver a hablar habrá que '
+    final sure = await ConfirmDialog.show(
+      context,
+      title: '¿Eliminar a ${contact.name}?',
+      message: 'Dejaréis de poder llamaros. Para volver a hablar habrá que '
           'compartir una invitación nueva.',
-        ),
-        actions: [
-          DialogActions(
-            cancelLabel: 'Cancelar',
-            onCancel: () => Navigator.pop(dialog, false),
-            confirmLabel: 'Eliminar',
-            onConfirm: () => Navigator.pop(dialog, true),
-            destructive: true,
-          ),
-        ],
-      ),
+      confirmLabel: 'Eliminar',
+      destructive: true,
     );
     if (sure != true || !mounted) return;
     final navigator = Navigator.of(context);
@@ -80,7 +68,6 @@ class _ContactScreenState extends State<ContactScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final glass = GlassTextTheme.of(context);
     final contact = context.watch<ContactsService>().byId(widget.contactId);
     final busy = context.select<SessionController, bool>(
       (c) => c.busy || c.isLive,
@@ -101,7 +88,7 @@ class _ContactScreenState extends State<ContactScreen> {
       appBar: AppBar(title: const Text('Contacto')),
       body: SafeArea(
         child: ListView(
-          padding: const EdgeInsets.all(Spacing.xl),
+          padding: const EdgeInsets.all(NSpace.xl),
           children: [
             Center(
               child: CircleAvatar(
@@ -111,14 +98,16 @@ class _ContactScreenState extends State<ContactScreen> {
                 child: Text(
                   initial,
                   style: theme.textTheme.headlineMedium?.copyWith(
-                    color: glass.primary,
+                    color: theme.colorScheme.onSurface,
                     fontWeight: FontWeight.w800,
                   ),
                 ),
               ),
             ),
-            const SizedBox(height: Spacing.lg),
-            GlassSurface(
+            const SizedBox(height: NSpace.lg),
+            Card(
+              color: theme.colorScheme.surfaceContainerLow,
+              shape: NShape.rounded(NShape.medium),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -136,7 +125,7 @@ class _ContactScreenState extends State<ContactScreen> {
                       _saveName();
                     },
                   ),
-                  const SizedBox(height: Spacing.md),
+                  const SizedBox(height: NSpace.md),
                   TextField(
                     controller: _note,
                     maxLength: 280,
@@ -155,41 +144,47 @@ class _ContactScreenState extends State<ContactScreen> {
                 ],
               ),
             ),
-            const SizedBox(height: Spacing.lg),
-            GlassSurface(
-              padding: const EdgeInsets.symmetric(
-                horizontal: Spacing.lg,
-                vertical: Spacing.xs,
-              ),
-              child: Column(
-                children: [
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Contestar sin preguntar'),
-                    subtitle: const Text(
-                      'Cuando llame, entras directamente a escucharle, como '
-                      'un walkie-talkie.',
+            const SizedBox(height: NSpace.lg),
+            Card(
+              color: theme.colorScheme.surfaceContainerLow,
+              shape: NShape.rounded(NShape.medium),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: NSpace.lg,
+                  vertical: NSpace.xs,
+                ),
+                child: Column(
+                  children: [
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Contestar sin preguntar'),
+                      subtitle: const Text(
+                        'Cuando llame, entras directamente a escucharle, como '
+                        'un walkie-talkie.',
+                      ),
+                      value: contact.autoAnswer,
+                      onChanged: contact.muted
+                          ? null
+                          : (on) => _contacts.edit(contact.id, autoAnswer: on),
                     ),
-                    value: contact.autoAnswer,
-                    onChanged: contact.muted
-                        ? null
-                        : (on) => _contacts.edit(contact.id, autoAnswer: on),
-                  ),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Silenciar sus llamadas'),
-                    subtitle: const Text(
-                      'No suena ni avisa cuando llama. Tú puedes seguir '
-                      'llamándole.',
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Silenciar sus llamadas'),
+                      subtitle: const Text(
+                        'No suena ni avisa cuando llama. Tú puedes seguir '
+                        'llamándole.',
+                      ),
+                      value: contact.muted,
+                      onChanged: (on) => _contacts.edit(contact.id, muted: on),
                     ),
-                    value: contact.muted,
-                    onChanged: (on) => _contacts.edit(contact.id, muted: on),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
-            const SizedBox(height: Spacing.lg),
-            GlassSurface(
+            const SizedBox(height: NSpace.lg),
+            Card(
+              color: theme.colorScheme.surfaceContainerLow,
+              shape: NShape.rounded(NShape.medium),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -209,7 +204,7 @@ class _ContactScreenState extends State<ContactScreen> {
                 ],
               ),
             ),
-            const SizedBox(height: Spacing.xl),
+            const SizedBox(height: NSpace.xl),
             FilledButton.icon(
               onPressed: busy || pending
                   ? null
@@ -225,7 +220,7 @@ class _ContactScreenState extends State<ContactScreen> {
               icon: const Icon(Icons.call),
               label: Text('Llamar a ${contact.name}'),
             ),
-            const SizedBox(height: Spacing.md),
+            const SizedBox(height: NSpace.md),
             OutlinedButton.icon(
               onPressed: () => _remove(contact),
               icon: const Icon(Icons.delete_outline),
@@ -265,9 +260,8 @@ class _Fact extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final glass = GlassTextTheme.of(context);
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: Spacing.sm),
+      padding: const EdgeInsets.symmetric(vertical: NSpace.sm),
       child: Row(
         children: [
           Expanded(
@@ -277,18 +271,18 @@ class _Fact extends StatelessWidget {
                 Text(
                   label,
                   style: theme.textTheme.bodySmall
-                      ?.copyWith(color: glass.secondary),
+                      ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                 ),
                 Text(
                   value,
                   style: theme.textTheme.bodyLarge
-                      ?.copyWith(color: glass.primary),
+                      ?.copyWith(color: theme.colorScheme.onSurface),
                 ),
                 if (hint != null)
                   Text(
                     hint!,
                     style: theme.textTheme.bodySmall
-                        ?.copyWith(color: glass.secondary),
+                        ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                   ),
               ],
             ),
@@ -296,7 +290,8 @@ class _Fact extends StatelessWidget {
           if (copy)
             IconButton(
               tooltip: 'Copiar',
-              icon: Icon(Icons.copy, size: 18, color: glass.secondary),
+              icon: Icon(Icons.copy,
+                  size: 18, color: theme.colorScheme.onSurfaceVariant),
               onPressed: () => Clipboard.setData(ClipboardData(text: value)),
             ),
         ],
