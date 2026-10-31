@@ -29,6 +29,14 @@ void main() {
       expect(err!.message, contains('sin http://'));
     });
 
+    test('acepta la URL https de un relay web, sin ruta', () {
+      expect(validateHost('https://talk.gravitalcloud.com', fieldName: 'x'),
+          isNull);
+      expect(validateHost('wss://relay.up.railway.app', fieldName: 'x'), isNull);
+      expect(validateHost('https://talk.gravitalcloud.com/api', fieldName: 'x'),
+          isNotNull);
+    });
+
     test('rechaza rutas y espacios', () {
       expect(
         validateHost('relay.com/path', fieldName: 'x')!.message,

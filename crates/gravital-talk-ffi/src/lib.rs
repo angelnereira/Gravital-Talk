@@ -23,6 +23,7 @@ use std::sync::{Arc, Mutex};
 
 mod audio;
 mod voice;
+mod ws_bridge;
 
 use gravital_talk::{
     discover_local_addr, discover_public_addr, reach, Config as RustConfig, HandshakeMode,
@@ -1916,6 +1917,60 @@ pub unsafe extern "C" fn gs_audio_stats(
 #[no_mangle]
 pub const extern "C" fn gs_ping() -> c_int {
     0
+}
+
+// ── Relay por WebSocket ─────────────────────────────────────────────────────
+
+/// Abre un puente hacia un relay publicado por WebSocket (`/ws`).
+///
+/// Para relays detrás de plataformas que sólo publican HTTP(S) y no dejan
+/// entrar UDP (Railway). Escribe en `out_port` un puerto UDP de `127.0.0.1`:
+/// la sesión se conecta ahí (`gs_session_connect(h, "127.0.0.1", port)`) como
+/// si fuera el relay. El cifrado de extremo a extremo no cambia.
+///
+/// `url` es `wss://host/ws` (o `ws://` sin TLS). La primera conexión se hace
+/// antes de volver: `GS_ERR_IO` si el relay no responde. Después, si la
+/// conexión se cae, el puente reconecta solo. Se cierra con
+/// `gs_ws_bridge_stop`.
+///
+/// # Safety
+/// `url` debe ser una C-string NUL-terminada; `out_port`, un `u16` escribible.
+#[no_mangle]
+pub unsafe extern "C" fn gs_ws_bridge_start(url: *const c_char, out_port: *mut u16) -> GsStatus {
+    if url.is_null() || out_port.is_null() {
+        return GsStatus::GS_ERR_NULL_POINTER;
+    }
+    // SAFETY: `url` no es nulo y es una C-string NUL-terminada (contrato).
+    let Ok(url) = unsafe { CStr::from_ptr(url) }.to_str() else {
+        return GsStatus::GS_ERR_INVALID_ARGUMENT;
+    };
+    if !(url.starts_with("ws://") || url.starts_with("wss://")) {
+        set_last_error("la URL del relay debe empezar por ws:// o wss://");
+        return GsStatus::GS_ERR_INVALID_ARGUMENT;
+    }
+    match ws_bridge::start(url) {
+        Ok(port) => {
+            // SAFETY: `out_port` no es nulo y apunta a un `u16` escribible.
+            unsafe { *out_port = port };
+            GsStatus::GS_OK
+        }
+        Err(e) => {
+            set_last_error(e);
+            GsStatus::GS_ERR_IO
+        }
+    }
+}
+
+/// Cierra el puente abierto con `gs_ws_bridge_start` en `port`.
+///
+/// `GS_ERR_INVALID_ARGUMENT` si no hay ningún puente en ese puerto.
+#[no_mangle]
+pub extern "C" fn gs_ws_bridge_stop(port: u16) -> GsStatus {
+    if ws_bridge::stop(port) {
+        GsStatus::GS_OK
+    } else {
+        GsStatus::GS_ERR_INVALID_ARGUMENT
+    }
 }
 
 #[cfg(feature = "android")]

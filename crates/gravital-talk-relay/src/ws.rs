@@ -66,6 +66,25 @@ async fn handle_connection(
         crate::tls::MaybeTls::Plain(s) => Box::new(s),
     };
     let ws = tokio_tungstenite::accept_async(stream).await?;
+    serve(ws, peer_addr, udp_socket, router, rate_limit).await
+}
+
+/// Atiende un WebSocket ya abierto: cada mensaje binario es un paquete del
+/// protocolo y se encamina igual que si hubiera llegado por UDP.
+///
+/// Lo usan el listener WebSocket propio y la ruta `/ws` del HTTP de
+/// observabilidad (la que sirve detrás de un proxy HTTP que sólo publica un
+/// puerto, como Railway).
+pub async fn serve<S>(
+    ws: tokio_tungstenite::WebSocketStream<S>,
+    peer_addr: std::net::SocketAddr,
+    udp_socket: Arc<UdpSocket>,
+    router: Arc<Router>,
+    rate_limit: Option<Arc<RateLimiter>>,
+) -> anyhow::Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin + 'static,
+{
     router.metrics().ws_connections.inc();
     let (mut ws_sink, mut ws_stream) = ws.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<Bytes>();
@@ -82,7 +101,14 @@ async fn handle_connection(
     });
 
     while let Some(msg) = ws_stream.next().await {
-        match msg? {
+        let msg = match msg {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::debug!(?peer_addr, ?e, "ws read error");
+                break;
+            }
+        };
+        match msg {
             Message::Binary(data) => {
                 // DoS: presupuesto de paquetes por IP.
                 if let Some(rl) = &rate_limit {
@@ -98,7 +124,7 @@ async fn handle_connection(
 
                 router.metrics().packets_in.inc();
                 router.metrics().bytes_in.inc_by(data.len() as u64);
-                let bytes = Bytes::from(data.to_vec());
+                let bytes = Bytes::from(data);
 
                 let session_id = match PacketView::decode(&bytes) {
                     Ok(view) => view.header().session_id,
@@ -123,14 +149,12 @@ async fn handle_connection(
                 }
             }
             Message::Close(_) => break,
-            Message::Ping(_) => {}
             _ => {}
         }
     }
 
     drop(tx);
     let _ = writer.await;
-    let _ = peer_addr;
     Ok(())
 }
 

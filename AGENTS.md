@@ -523,3 +523,12 @@ sin él lanza `SecurityException`. Se gobierna desde Dart por
 - `docker compose --profile observability` expone Prometheus :9091 y Grafana :3001; el relay expone 9000/udp,
   9090/ws, 9100/http.
 - El relay con gRPC requiere `--features grpc` (el `Dockerfile` lo acepta vía `--build-arg CARGO_FEATURES`).
+## Gravital Cloud (relay en Railway)
+
+- El relay de la app vive en Railway (proyecto `gravital-talk`, servicio `gs-relay`) en
+  `https://talk.gravitalcloud.com`. Guía en `docs/deploy-railway.md`.
+- Railway no deja entrar UDP: el audio llega por WebSocket a `/ws` del puerto HTTP. En la
+  app, un servidor con URL `https://…` es un relay web (`WebRelay`): la sesión habla con
+  `127.0.0.1:N`, el puente `gs_ws_bridge_start` de la FFI. No toques la sesión para esto.
+- El servidor de encuentro (`rv=`, UDP) y gRPC **no** funcionan en Railway.
+- Prueba de punta a punta sin red: `cargo test -p gravital-talk-ffi --test ws_relay`.

@@ -27,6 +27,9 @@ enum PairingMode {
 
   /// Entrar en la sala de otro.
   join,
+
+  /// Crear una sala en Gravital Cloud: se entra desde cualquier red.
+  cloud,
 }
 
 /// Emparejamiento en un paso.
@@ -68,6 +71,7 @@ class PairingScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return switch (mode) {
       PairingMode.host => _HostView(callee: callee),
+      PairingMode.cloud => const _HostView(cloud: true),
       PairingMode.join => _JoinView(invite: invite, caller: caller),
     };
   }
@@ -83,9 +87,12 @@ void _goToSession(BuildContext context) {
 // ── Crear ──────────────────────────────────────────────────────────────────
 
 class _HostView extends StatefulWidget {
-  const _HostView({this.callee});
+  const _HostView({this.callee, this.cloud = false});
 
   final Contact? callee;
+
+  /// La sala se crea en Gravital Cloud en vez de en este dispositivo.
+  final bool cloud;
 
   @override
   State<_HostView> createState() => _HostViewState();
@@ -113,7 +120,9 @@ class _HostViewState extends State<_HostView> {
   late final ContactsService _contacts;
 
   Future<void> _open() async {
-    final ok = await _controller.createRoom();
+    final ok = widget.cloud
+        ? await _controller.createCloudRoom()
+        : await _controller.createRoom();
     if (!mounted) return;
     if (ok && _controller.isLive) {
       _handedOff = true;
@@ -157,7 +166,9 @@ class _HostViewState extends State<_HostView> {
     }
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Tu sala')),
+      appBar: AppBar(
+        title: Text(widget.cloud ? 'Tu sala en la nube' : 'Tu sala'),
+      ),
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(

@@ -23,6 +23,18 @@ ndk-context             = { version = "0.1", optional = true }
 # Códec de voz en Rust puro: Opus + reducción de ruido, para todos los targets.
 gravital-talk-codec     = { workspace = true, default-features = false, features = ["voice"] }
 tracing                 = { workspace = true }
+# Puente UDP local <-> WebSocket seguro (`gs_ws_bridge_*`): deja usar un relay
+# publicado sólo por HTTPS (Railway no deja entrar UDP). rustls con `ring`:
+# compila para Android sin cmake ni OpenSSL.
+tokio-tungstenite       = { workspace = true, features = ["connect", "__rustls-tls"] }
+futures-util            = { version = "0.3", default-features = false, features = ["sink", "std"] }
+rustls                  = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+webpki-roots            = "0.26"
+
+[dev-dependencies]
+# Prueba de extremo a extremo del puente contra un relay de verdad.
+gravital-talk-relay     = { workspace = true }
+gravital-talk-transport = { workspace = true }
 
 [build-dependencies]
 cbindgen = { workspace = true }

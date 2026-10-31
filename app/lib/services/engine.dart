@@ -133,6 +133,11 @@ abstract class SessionEngine {
   Future<void> accept(String host, int port);
   Future<void> acceptAny();
 
+  /// Abre el camino hacia un relay publicado por WebSocket ([url]
+  /// `wss://…/ws`) y devuelve el puerto local de `127.0.0.1` al que hay que
+  /// hacer `connect`/`accept`. Se cierra con [close].
+  Future<int> openWebRelay(String url);
+
   Future<void> pttPress();
   Future<void> pttRelease();
   Future<bool> peerPttActive();
@@ -570,8 +575,32 @@ class FfiSessionEngine implements SessionEngine, KnockCodec {
     return w;
   }
 
+  /// Puerto del puente WebSocket abierto, si lo hay.
+  int? _webRelayPort;
+
+  @override
+  Future<int> openWebRelay(String url) async {
+    _closeWebRelay();
+    final res = await Isolate.run(
+      () => NativeBridge.tryLoad()?.runWsBridgeStart(url),
+    );
+    if (res == null || res.error != null || res.port == 0) {
+      throw NativeException(GsStatus.io,
+          'relay web inalcanzable: ${res?.error ?? 'sin librería nativa'}');
+    }
+    _webRelayPort = res.port;
+    return res.port;
+  }
+
+  void _closeWebRelay() {
+    final port = _webRelayPort;
+    _webRelayPort = null;
+    if (port != null) _bridge.wsBridgeStop(port);
+  }
+
   @override
   Future<void> close() async {
+    _closeWebRelay();
     await _stopAudio();
     try {
       _alive.close();
@@ -804,6 +833,9 @@ class DemoSessionEngine implements SessionEngine {
   @override
   Future<NetworkReachability?> diagnoseReachability() async =>
       NetworkReachability.lanOnly;
+
+  @override
+  Future<int> openWebRelay(String url) async => 9000;
 
   @override
   Future<void> close() async {

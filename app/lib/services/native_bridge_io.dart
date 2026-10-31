@@ -173,6 +173,10 @@ typedef _TonePcmC = Int32 Function(
     Int32, Uint32, Pointer<Int16>, UintPtr, Pointer<UintPtr>);
 typedef _TonePcmD = int Function(
     int, int, Pointer<Int16>, int, Pointer<UintPtr>);
+typedef _WsBridgeStartC = Int32 Function(Pointer<Utf8>, Pointer<Uint16>);
+typedef _WsBridgeStartD = int Function(Pointer<Utf8>, Pointer<Uint16>);
+typedef _WsBridgeStopC = Int32 Function(Uint16);
+typedef _WsBridgeStopD = int Function(int);
 typedef _CrashLogC = Int32 Function(Pointer<Utf8>);
 typedef _CrashLogD = int Function(Pointer<Utf8>);
 typedef _DiscoverLocalC = Int32 Function(Pointer<Utf8>, UintPtr);
@@ -302,7 +306,17 @@ class NativeBridge {
             lib.lookupFunction<_ReachC, _ReachD>('gs_diagnose_reachability'),
         _preferredHostPort =
             lib.lookupFunction<_PreferredPortC, _PreferredPortD>('gs_preferred_host_port'),
-        _ping = lib.lookupFunction<_IntC, _IntD>('gs_ping');
+        _ping = lib.lookupFunction<_IntC, _IntD>('gs_ping'),
+        // Opcionales: una librería anterior no los trae y la app sigue
+        // funcionando, sólo sin relay web.
+        _wsBridgeStart = lib.providesSymbol('gs_ws_bridge_start')
+            ? lib.lookupFunction<_WsBridgeStartC, _WsBridgeStartD>(
+                'gs_ws_bridge_start')
+            : null,
+        _wsBridgeStop = lib.providesSymbol('gs_ws_bridge_stop')
+            ? lib.lookupFunction<_WsBridgeStopC, _WsBridgeStopD>(
+                'gs_ws_bridge_stop')
+            : null;
 
   final Pointer<Utf8> Function() version;
   final int Function() protocolVersion;
@@ -359,6 +373,8 @@ class NativeBridge {
   final _ReachD _diagnoseReachability;
   final _PreferredPortD _preferredHostPort;
   final _IntD _ping;
+  final _WsBridgeStartD? _wsBridgeStart;
+  final _WsBridgeStopD? _wsBridgeStop;
 
   /// Versión SemVer de la librería nativa.
   String get nativeVersion => version().toDartString();
@@ -511,6 +527,32 @@ class NativeBridge {
     final st = _sessionAcceptAny(ptr);
     return (status: st, error: st == GsStatus.ok ? null : lastError());
   }
+
+  /// Abre un puente local hacia un relay por WebSocket ([url] `wss://…/ws`).
+  ///
+  /// Devuelve el puerto UDP de `127.0.0.1` al que conectar la sesión. Hace la
+  /// primera conexión antes de volver, así que bloquea: llamar desde un
+  /// isolate worker. El puente es del proceso, no del isolate.
+  ({int port, String? error}) runWsBridgeStart(String url) {
+    final start = _wsBridgeStart;
+    if (start == null) {
+      return (port: 0, error: 'la librería nativa no trae relay web');
+    }
+    final cUrl = url.toNativeUtf8();
+    final out = calloc<Uint16>();
+    try {
+      final st = start(cUrl, out);
+      return st == GsStatus.ok
+          ? (port: out.value, error: null)
+          : (port: 0, error: lastError() ?? GsStatus.describe(st));
+    } finally {
+      calloc.free(cUrl);
+      calloc.free(out);
+    }
+  }
+
+  /// Cierra el puente del puerto [port].
+  void wsBridgeStop(int port) => _wsBridgeStop?.call(port);
 
   /// Último error reportado por la librería (y lo limpia).
   String? lastError() {

@@ -2,6 +2,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/constants.dart';
 import '../models/connection.dart';
+import 'web_relay.dart';
 
 /// Persistencia de ajustes y perfiles de conexión.
 class SettingsStore {
@@ -57,7 +58,8 @@ class SettingsStore {
   Future<ServerProfile> loadServerProfile() async {
     final p = await _prefs;
     return ServerProfile(
-      host: p.getString(PrefKeys.serverHost) ?? '',
+      // Sin servidor guardado, el relay de Gravital Talk en Railway.
+      host: p.getString(PrefKeys.serverHost) ?? WebRelay.defaultUrl,
       udpPort: p.getInt(PrefKeys.serverUdpPort) ?? DefaultPorts.udp,
       observabilityPort:
           p.getInt(PrefKeys.serverObsPort) ?? DefaultPorts.observability,

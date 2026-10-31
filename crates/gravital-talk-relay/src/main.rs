@@ -40,6 +40,11 @@ struct Args {
     #[arg(long)]
     grpc_bind: Option<std::net::SocketAddr>,
 
+    /// Toma la IP del cliente de `X-Forwarded-For` en la ruta `/ws`.
+    /// Sólo detrás de un proxy de confianza (Railway, un balanceador propio).
+    #[arg(long, env = "GS_TRUST_PROXY", default_value_t = false)]
+    trust_proxy: bool,
+
     /// Certificado PEM (feature `tls`) → WSS en el puerto WS y TLS en gRPC.
     #[arg(long)]
     tls_cert: Option<PathBuf>,
@@ -131,10 +136,20 @@ async fn main() -> Result<()> {
         ws_listener,
         udp_socket.clone(),
         router.clone(),
-        rate_limit,
+        rate_limit.clone(),
         tls_acceptor.clone(),
     ));
-    let obs_task = tokio::spawn(observability::run(obs_listener, router.clone()));
+    // `/ws` en el puerto HTTP: es el único que publican plataformas como
+    // Railway, que no dejan entrar UDP.
+    let obs_task = tokio::spawn(observability::run_with_ws(
+        obs_listener,
+        router.clone(),
+        Some(observability::WsRoute {
+            udp_socket: udp_socket.clone(),
+            rate_limit,
+            trust_proxy: args.trust_proxy,
+        }),
+    ));
 
     // Plano de control gRPC (feature `grpc`).
     #[cfg(feature = "grpc")]

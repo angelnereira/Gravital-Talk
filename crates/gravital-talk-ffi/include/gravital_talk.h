@@ -747,6 +747,31 @@ GsStatus gs_audio_stats(GsSessionHandle *handle, GsAudioStats *out);
  */
 int gs_ping(void);
 
+/*
+ Abre un puente hacia un relay publicado por WebSocket (`/ws`).
+
+ Para relays detrás de plataformas que sólo publican HTTP(S) y no dejan
+ entrar UDP (Railway). Escribe en `out_port` un puerto UDP de `127.0.0.1`:
+ la sesión se conecta ahí (`gs_session_connect(h, "127.0.0.1", port)`) como
+ si fuera el relay. El cifrado de extremo a extremo no cambia.
+
+ `url` es `wss://host/ws` (o `ws://` sin TLS). La primera conexión se hace
+ antes de volver: `GS_ERR_IO` si el relay no responde. Después, si la
+ conexión se cae, el puente reconecta solo. Se cierra con
+ `gs_ws_bridge_stop`.
+
+ # Safety
+ `url` debe ser una C-string NUL-terminada; `out_port`, un `u16` escribible.
+ */
+GsStatus gs_ws_bridge_start(const char *url, uint16_t *out_port);
+
+/*
+ Cierra el puente abierto con `gs_ws_bridge_start` en `port`.
+
+ `GS_ERR_INVALID_ARGUMENT` si no hay ningún puente en ese puerto.
+ */
+GsStatus gs_ws_bridge_stop(uint16_t port);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif  // __cplusplus

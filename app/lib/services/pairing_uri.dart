@@ -26,6 +26,7 @@
 library;
 
 import '../core/constants.dart';
+import 'web_relay.dart';
 
 /// Esquema del URI de emparejamiento.
 const pairingScheme = 'gravital-talk';
@@ -242,7 +243,9 @@ class PairingUri {
   /// No es el URI: una persona no lee `gravital-talk://pair?…` por teléfono.
   String toHumanReadable() {
     final parts = <String>['Sala $room'];
-    if (host.isNotEmpty) {
+    if (WebRelay.matches(host)) {
+      parts.add('Gravital Cloud');
+    } else if (host.isNotEmpty) {
       final port = udpPort ?? DefaultPorts.udp;
       parts.add('servidor $host:$port');
     }

@@ -6,6 +6,25 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
 
 ### Added
 
+**Gravital Cloud: relay en Railway y salas desde cualquier red**
+- `gs-relay` acepta el audio por WebSocket también en la ruta `/ws` de su puerto
+  HTTP (el de `/healthz` y `/api/rooms`). Es lo que permite publicarlo en
+  plataformas que sólo exponen un puerto HTTPS y no dejan entrar UDP, como
+  Railway. Nueva opción `--trust-proxy` (`GS_TRUST_PROXY`) para tomar la IP del
+  cliente de `X-Forwarded-For` detrás de un proxy.
+- FFI: `gs_ws_bridge_start(url, &port)` / `gs_ws_bridge_stop(port)`. Abren un
+  puente local UDP↔WebSocket (`wss://` con rustls + `ring` y raíces de
+  `webpki-roots`): la sesión se conecta a `127.0.0.1:port` como si fuera el
+  relay, sin cambios en el protocolo ni en el cifrado de extremo a extremo.
+  Reconecta solo si la conexión se cae.
+- App: «Sala en la nube» en la pantalla de inicio. Crea la sala en el relay de
+  Gravital Cloud (`https://talk.gravitalcloud.com`) y la invitación lleva su
+  URL: quien la abre entra desde cualquier red, sin abrir puertos. El campo de
+  servidor acepta ahora una URL `https://` de relay web, que es además el
+  servidor por defecto.
+- `docker/Dockerfile.railway` y `railway.toml` para desplegar el relay en
+  Railway; guía en `docs/deploy-railway.md`.
+
 **Gravital Experience UI — sistema de diseño de las interfaces Flutter**
 - `docs/gravital-experience-ui.md` es la regla de diseño del proyecto: tokens,
   componentes, patrones y un checklist por pantalla. Toda pantalla nueva nace

@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import 'web_relay.dart';
+
 /// Interfaz del plano de control del relay (REST o gRPC).
 ///
 /// La app usa REST por defecto (funciona en web y sin feature `grpc` en el
@@ -44,8 +46,9 @@ class RoomApi implements RoomControlApi {
   final http.Client _client;
   static const _timeout = Duration(seconds: 5);
 
+  /// Con un relay web ([WebRelay]) se usa su URL y se ignora [port].
   Uri _uri(String host, int port, String path) =>
-      Uri.parse('http://$host:$port$path');
+      WebRelay.parse(host)?.api(path) ?? Uri.parse('http://$host:$port$path');
 
   /// `POST /api/rooms` — registra una sala con el `session_id` del host.
   @override
@@ -132,8 +135,12 @@ class FallbackRoomApi implements RoomControlApi {
   final RoomControlApi rest;
   bool _grpcAvailable = true;
 
-  Future<T> _call<T>(Future<T> Function(RoomControlApi api) op) async {
-    if (_grpcAvailable) {
+  Future<T> _call<T>(
+    Future<T> Function(RoomControlApi api) op, {
+    required String host,
+  }) async {
+    // Un relay web sólo publica HTTP(S): no hay gRPC que probar.
+    if (_grpcAvailable && !WebRelay.matches(host)) {
       try {
         return await op(grpc);
       } on Object {
@@ -153,8 +160,10 @@ class FallbackRoomApi implements RoomControlApi {
     required int sessionId,
     String token = '',
   }) =>
-      _call((api) => api.createRoom(
-          host: host, port: port, sessionId: sessionId, token: token));
+      _call(
+          (api) => api.createRoom(
+              host: host, port: port, sessionId: sessionId, token: token),
+          host: host);
 
   @override
   Future<RoomInfo> resolveRoom({
@@ -163,14 +172,16 @@ class FallbackRoomApi implements RoomControlApi {
     required String code,
     String token = '',
   }) =>
-      _call((api) =>
-          api.resolveRoom(host: host, port: port, code: code, token: token));
+      _call(
+          (api) =>
+              api.resolveRoom(host: host, port: port, code: code, token: token),
+          host: host);
 
   @override
   Future<bool> healthy({required String host, required int port}) async {
     // Si gRPC responde sano, es la fuente; si no (relay sin feature `grpc`
     // o caído), se consulta REST antes de dar un veredicto.
-    if (_grpcAvailable) {
+    if (_grpcAvailable && !WebRelay.matches(host)) {
       try {
         if (await grpc.healthy(host: host, port: port)) return true;
       } on Object {

@@ -7,6 +7,11 @@
 //! - `GET  /api/rooms`         → listar todas las salas
 //! - `GET  /api/rooms/{code}`  → resolver código → session_id
 //! - `DELETE /api/rooms/{code}` → eliminar sala
+//! - `GET  /ws` (upgrade)     → WebSocket de audio, igual que el listener WS
+//!
+//! `/ws` existe para plataformas que sólo publican **un** puerto HTTP y nada
+//! de UDP (Railway): la app abre ahí el WebSocket y el relay lo trata como
+//! cualquier otro peer.
 
 use std::convert::Infallible;
 use std::sync::Arc;
@@ -17,26 +22,53 @@ use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use prometheus::Encoder;
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, UdpSocket};
+use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
+use tokio_tungstenite::tungstenite::protocol::Role;
 
+use crate::rate_limit::RateLimiter;
 use crate::rooms;
 use crate::router::Router;
 
+/// Lo que necesita la ruta `/ws` para encaminar paquetes.
+#[derive(Clone)]
+pub struct WsRoute {
+    /// Socket UDP del relay: destino de los paquetes hacia peers UDP.
+    pub udp_socket: Arc<UdpSocket>,
+    pub rate_limit: Option<Arc<RateLimiter>>,
+    /// Si es `true`, la IP del cliente se toma de `X-Forwarded-For`.
+    /// Sólo detrás de un proxy de confianza: el cliente puede falsearla.
+    pub trust_proxy: bool,
+}
+
+/// HTTP de observabilidad sin la ruta `/ws`.
 pub async fn run(listener: TcpListener, router: Arc<Router>) -> anyhow::Result<()> {
+    run_with_ws(listener, router, None).await
+}
+
+/// HTTP de observabilidad; con `ws` también acepta WebSocket en `/ws`.
+pub async fn run_with_ws(
+    listener: TcpListener,
+    router: Arc<Router>,
+    ws: Option<WsRoute>,
+) -> anyhow::Result<()> {
     let local = listener.local_addr()?;
     tracing::info!(
         ?local,
+        ws = ws.is_some(),
         "Observability HTTP listening on /metrics + /healthz + /api/rooms"
     );
 
     loop {
-        let (tcp, _) = listener.accept().await?;
+        let (tcp, peer_addr) = listener.accept().await?;
         let router = router.clone();
+        let ws = ws.clone();
         tokio::spawn(async move {
             let io = TokioIo::new(tcp);
-            let svc = service_fn(move |req| handle(req, router.clone()));
+            let svc = service_fn(move |req| handle(req, router.clone(), ws.clone(), peer_addr));
             if let Err(e) = hyper::server::conn::http1::Builder::new()
                 .serve_connection(io, svc)
+                .with_upgrades()
                 .await
             {
                 tracing::debug!(?e, "http connection error");
@@ -45,10 +77,94 @@ pub async fn run(listener: TcpListener, router: Arc<Router>) -> anyhow::Result<(
     }
 }
 
+/// `true` si la petición pide pasar a WebSocket.
+fn is_ws_upgrade<B>(req: &Request<B>) -> bool {
+    let has = |name: hyper::header::HeaderName, needle: &str| {
+        req.headers()
+            .get_all(name)
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .any(|v| v.split(',').any(|t| t.trim().eq_ignore_ascii_case(needle)))
+    };
+    has(hyper::header::CONNECTION, "upgrade") && has(hyper::header::UPGRADE, "websocket")
+}
+
+/// IP del cliente: la del socket o, detrás de un proxy, la primera de
+/// `X-Forwarded-For`.
+fn client_addr<B>(
+    req: &Request<B>,
+    peer_addr: std::net::SocketAddr,
+    trust_proxy: bool,
+) -> std::net::SocketAddr {
+    if !trust_proxy {
+        return peer_addr;
+    }
+    req.headers()
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .and_then(|ip| ip.trim().parse::<std::net::IpAddr>().ok())
+        .map_or(peer_addr, |ip| {
+            std::net::SocketAddr::new(ip, peer_addr.port())
+        })
+}
+
+/// Contesta el upgrade y deja el WebSocket en manos de [`crate::ws::serve`].
+fn upgrade_ws(
+    mut req: Request<hyper::body::Incoming>,
+    router: Arc<Router>,
+    route: WsRoute,
+    peer_addr: std::net::SocketAddr,
+) -> Response<Full<Bytes>> {
+    let Some(key) = req.headers().get(hyper::header::SEC_WEBSOCKET_KEY) else {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            r#"{"error":"missing Sec-WebSocket-Key"}"#,
+        );
+    };
+    let accept = derive_accept_key(key.as_bytes());
+    let client = client_addr(&req, peer_addr, route.trust_proxy);
+    tokio::spawn(async move {
+        match hyper::upgrade::on(&mut req).await {
+            Ok(upgraded) => {
+                let io = TokioIo::new(upgraded);
+                let ws =
+                    tokio_tungstenite::WebSocketStream::from_raw_socket(io, Role::Server, None)
+                        .await;
+                if let Err(e) =
+                    crate::ws::serve(ws, client, route.udp_socket, router, route.rate_limit).await
+                {
+                    tracing::warn!(?client, ?e, "ws (/ws) connection error");
+                }
+            }
+            Err(e) => tracing::debug!(?client, ?e, "ws upgrade failed"),
+        }
+    });
+    Response::builder()
+        .status(StatusCode::SWITCHING_PROTOCOLS)
+        .header(hyper::header::CONNECTION, "Upgrade")
+        .header(hyper::header::UPGRADE, "websocket")
+        .header(hyper::header::SEC_WEBSOCKET_ACCEPT, accept)
+        .body(Full::new(Bytes::new()))
+        .unwrap()
+}
+
 async fn handle(
     req: Request<hyper::body::Incoming>,
     router: Arc<Router>,
+    ws: Option<WsRoute>,
+    peer_addr: std::net::SocketAddr,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
+    if req.uri().path() == "/ws" {
+        return Ok(match ws {
+            Some(route) if is_ws_upgrade(&req) => upgrade_ws(req, router, route, peer_addr),
+            Some(_) => json_response(
+                StatusCode::UPGRADE_REQUIRED,
+                r#"{"error":"websocket upgrade required"}"#,
+            ),
+            None => json_response(StatusCode::NOT_FOUND, r#"{"error":"not found"}"#),
+        });
+    }
     let method = req.method().clone();
     let path = req.uri().path().to_string();
     let query_token: Option<String> = req.uri().query().and_then(|q| {

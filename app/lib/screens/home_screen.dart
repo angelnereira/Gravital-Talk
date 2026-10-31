@@ -164,7 +164,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     const SizedBox(height: NSpace.sm),
                     Text(
                       'Voz directa entre dos dispositivos, cifrada de extremo '
-                      'a extremo. Sin cuentas ni servidores.',
+                      'a extremo. Sin cuentas; el servidor es opcional.',
                       style: theme.textTheme.bodyLarge?.copyWith(
                         color: scheme.onSurfaceVariant,
                       ),
@@ -197,6 +197,15 @@ class _HomeScreenState extends State<HomeScreen> {
                 title: 'Escanear',
                 subtitle: 'Lee el código de otra pantalla o pega un enlace',
                 onTap: canPair ? () => _open(PairingMode.join) : null,
+              ),
+              const SizedBox(height: NSpace.md),
+              _ActionTile(
+                icon: Icons.cloud_outlined,
+                title: 'Sala en la nube',
+                subtitle: 'Desde cualquier red, por Gravital Cloud',
+                onTap: canPair && c.engineKind != EngineKind.demo
+                    ? () => _open(PairingMode.cloud)
+                    : null,
               ),
               const SizedBox(height: NSpace.xxl),
               ContactsSection(

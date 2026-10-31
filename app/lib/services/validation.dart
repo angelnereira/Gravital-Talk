@@ -14,12 +14,24 @@ class FieldError {
 
 /// Valida un host o dirección IP.
 ///
-/// Acepta nombres de servidor (`relay.midominio.dev`) e IPv4. Rechaza cadenas
+/// Acepta nombres de servidor (`relay.midominio.dev`), IPv4 y la URL `https://`
+/// de un relay web (sin ruta). Rechaza cadenas
 /// vacías, esquemas incluidos por error (`http://…`, frecuente al copiar de un
 /// navegador) y espacios.
 FieldError? validateHost(String? value, {required String fieldName}) {
   final host = (value ?? '').trim();
   if (host.isEmpty) return FieldError('Falta $fieldName');
+
+  // Un relay web va con su URL segura (`https://talk.gravitalcloud.com`):
+  // sólo publica HTTPS y el esquema es lo que lo distingue.
+  final url = Uri.tryParse(host);
+  if (url != null &&
+      (url.scheme == 'https' || url.scheme == 'wss') &&
+      url.host.isNotEmpty &&
+      (url.path.isEmpty || url.path == '/') &&
+      !host.contains(' ')) {
+    return null;
+  }
 
   // Pegar "http://relay:9100" en el campo de host es un error típico al copiar
   // de un navegador, y el fallo posterior en red no lo explica.

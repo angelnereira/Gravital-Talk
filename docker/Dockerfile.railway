@@ -1,0 +1,39 @@
+# syntax=docker/dockerfile:1.7
+# ─────────────────────────────────────────────────────────────────────
+# gs-relay para Railway.
+#
+# Railway sólo publica un puerto HTTP(S) y no deja entrar UDP. El relay sirve
+# en ese puerto la API de salas, /healthz, /metrics y el audio por WebSocket
+# (/ws); la app llega por wss:// con el puente de `gs_ws_bridge_start`.
+#
+# Distinto de docker/Dockerfile: sin cachés montadas (Railway exige un formato
+# propio de id) y sólo con el binario del relay.
+FROM rust:1.99-slim-bookworm AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+COPY proto ./proto
+
+RUN cargo build --release --locked -p gravital-talk-relay --bin gs-relay \
+    && cp target/release/gs-relay /gs-relay
+
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin gravital
+
+COPY --from=builder /gs-relay /usr/local/bin/gs-relay
+
+USER gravital
+ENV GS_LOG=info \
+    GS_TRUST_PROXY=true \
+    PORT=9100
+
+# Railway inyecta PORT: el HTTP (API + /ws) escucha ahí. UDP y el listener WS
+# propio siguen abiertos dentro del contenedor, pero Railway no los publica.
+CMD ["sh", "-c", "exec /usr/local/bin/gs-relay --observability-bind 0.0.0.0:${PORT}"]

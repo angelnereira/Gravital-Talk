@@ -23,6 +23,9 @@ class NativeBridge {
 
   String? discoverLocalAddress() => null;
   void setCrashLogPath(String path) {}
+  ({int port, String? error}) runWsBridgeStart(String url) =>
+      (port: 0, error: 'no disponible');
+  void wsBridgeStop(int port) {}
   Uint8List? tonePcm({required bool end, required int sampleRate}) => null;
   Uint8List? contactId(Uint8List secret) => null;
   Uint8List? knockSeal(Uint8List secret, Uint8List payload) => null;

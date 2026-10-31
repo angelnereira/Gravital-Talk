@@ -15,6 +15,7 @@ import 'pairing_uri.dart';
 import 'room_api.dart';
 import 'room_events.dart';
 import 'settings_store.dart';
+import 'web_relay.dart';
 
 /// Lo que se sabe del otro extremo al conectar: con esto se guarda como
 /// contacto.
@@ -109,9 +110,17 @@ class SessionController extends ChangeNotifier {
   /// `true` si el router abrió el puerto de la sala (UPnP).
   bool _portOpened = false;
 
+  /// `true` si la sala en curso vive en Gravital Cloud (relay web).
+  bool _cloudRoom = false;
+
+  /// `true` si la sala en curso vive en Gravital Cloud.
+  bool get cloudRoom => _cloudRoom;
+
   /// `true` si a esta sala se puede entrar desde otra red sin más pasos: el
-  /// router abrió el puerto, o hay un servidor que presenta a los dos.
-  bool get reachableFromOtherNetworks => _rendezvousActive || _portOpened;
+  /// router abrió el puerto, hay un servidor que presenta a los dos, o la
+  /// sala vive en Gravital Cloud.
+  bool get reachableFromOtherNetworks =>
+      _rendezvousActive || _portOpened || _cloudRoom;
 
   /// Respuesta de este dispositivo a la invitación, mientras se une.
   PairingAnswer? _answer;
@@ -392,6 +401,7 @@ class SessionController extends ChangeNotifier {
   ///
   /// `null` si no hay sala que compartir.
   PairingUri? get pairingUri {
+    if (_cloudRoom) return _cloudPairingUri;
     final code = _roomCode;
     if (code == null || code.isEmpty || _publicEndpoint.isEmpty) return null;
     if (_role != ConnectionRole.host) return null;
@@ -408,6 +418,40 @@ class SessionController extends ChangeNotifier {
       name: deviceName,
       device: deviceId,
     );
+  }
+
+  /// Invitación de una sala en Gravital Cloud: la URL del relay, el código y
+  /// el secreto. No lleva direcciones: el relay es el punto de encuentro.
+  PairingUri? get _cloudPairingUri {
+    final code = _roomCode;
+    if (code == null || code.isEmpty || _role != ConnectionRole.host) {
+      return null;
+    }
+    return PairingUri(
+      host: _server.host,
+      room: code,
+      token: _server.token,
+      name: deviceName,
+      device: deviceId,
+    );
+  }
+
+  /// Crea una sala en Gravital Cloud (el relay de Railway).
+  ///
+  /// A diferencia de [createRoom], se entra desde cualquier red sin abrir
+  /// puertos: el audio pasa por el relay, cifrado de extremo a extremo con el
+  /// secreto de la sala (el relay no lo conoce). Devuelve cuando alguien se
+  /// une, igual que [createRoom].
+  Future<bool> createCloudRoom({String? relayUrl}) {
+    final url = relayUrl ?? WebRelay.defaultUrl;
+    _server = _server.copyWith(
+      host: url,
+      roomCode: '',
+      token: _generateRoomToken(),
+    );
+    _store.saveServerProfile(_server);
+    _cloudRoom = true;
+    return hostServer();
   }
 
   /// Se une a partir de lo escaneado, pegado o recibido por enlace.
@@ -434,6 +478,11 @@ class SessionController extends ChangeNotifier {
       token: parsed.token ?? '',
     ));
     _joinedWith = parsed;
+    // Sala en Gravital Cloud: se entra por el relay, no por direcciones.
+    if (WebRelay.matches(parsed.host)) {
+      _cloudRoom = true;
+      return joinServer();
+    }
     return _joinCandidates(
       parsed.candidates(_server.udpPort),
       rendezvous: parsed.rendezvous,
@@ -607,7 +656,9 @@ class SessionController extends ChangeNotifier {
 
       var code = roomCode;
       if (code == null || code.isEmpty) {
-        _log.info('Creando sala en ${profile.host}:${profile.observabilityPort}…');
+        _log.info(WebRelay.matches(profile.host)
+            ? 'Creando sala en ${profile.host}…'
+            : 'Creando sala en ${profile.host}:${profile.observabilityPort}…');
         final room = await _roomApi.createRoom(
           host: profile.host,
           port: profile.observabilityPort,
@@ -621,7 +672,10 @@ class SessionController extends ChangeNotifier {
       _engine.setSessionId(sid);
       // Observar la sala recién creada: sin esto la lista de participantes
       // nunca recibe eventos, aunque el relay los esté emitiendo.
-      await _observeRoom(profile.host, code);
+      if (!WebRelay.matches(profile.host)) {
+        // Un relay web no publica gRPC: no hay stream que observar.
+        await _observeRoom(profile.host, code);
+      }
       _log.success('Sala $code lista (session_id=$sid). Esperando peers…');
       _updateServerProfile(roomCode: code);
       _mode = ConnectionMode.server;
@@ -629,7 +683,8 @@ class SessionController extends ChangeNotifier {
       _startTicker();
       notifyListeners();
 
-      await _engine.accept(profile.host, profile.udpPort);
+      final (host, port) = await _relayEndpoint(profile);
+      await _engine.accept(host, port);
       _onConnected('Sala activa · peers conectados');
     });
   }
@@ -664,9 +719,22 @@ class SessionController extends ChangeNotifier {
       _startTicker();
       notifyListeners();
 
-      await _engine.connect(profile.host, profile.udpPort);
+      final (host, port) = await _relayEndpoint(profile);
+      await _engine.connect(host, port);
       _onConnected('Conectado a la sala');
     });
+  }
+
+  /// Dirección a la que habla la sesión para llegar al relay.
+  ///
+  /// Con un relay UDP es la del perfil. Con un relay web (Railway, sin UDP)
+  /// se abre el puente WebSocket y la sesión habla con él en `127.0.0.1`.
+  Future<(String, int)> _relayEndpoint(ServerProfile profile) async {
+    final web = WebRelay.parse(profile.host);
+    if (web == null) return (profile.host, profile.udpPort);
+    _log.info('Relay web: audio por ${web.webSocketUrl}');
+    final port = await _engine.openWebRelay(web.webSocketUrl);
+    return ('127.0.0.1', port);
   }
 
   // ── Modo P2P directo ────────────────────────────────────────────────────
@@ -793,6 +861,7 @@ class SessionController extends ChangeNotifier {
     _stunEndpoint = null;
     _rendezvousActive = false;
     _portOpened = false;
+    _cloudRoom = false;
     _answer = null;
     _stalled = false;
     _relayed = false;

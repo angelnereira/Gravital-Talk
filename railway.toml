@@ -1,0 +1,12 @@
+# Despliegue de gs-relay en Railway (proyecto gravital-talk).
+# Ver docs/deploy-railway.md.
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "docker/Dockerfile.railway"
+watchPatterns = ["crates/gravital-talk-core/**", "crates/gravital-talk-transport/**", "crates/gravital-talk-relay/**", "Cargo.lock", "docker/Dockerfile.railway"]
+
+[deploy]
+healthcheckPath = "/healthz"
+healthcheckTimeout = 60
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
