@@ -526,7 +526,8 @@ sin él lanza `SecurityException`. Se gobierna desde Dart por
 ## Gravital Cloud (relay en Railway)
 
 - El relay de la app vive en Railway (proyecto `gravital-talk`, servicio `gs-relay`) en
-  `https://talk.gravitalcloud.com`. Guía en `docs/deploy-railway.md`.
+  `https://gs-relay-production.up.railway.app` (también `talk.gravitalcloud.com`). Guía en
+  `docs/deploy-railway.md`.
 - Railway no deja entrar UDP: el audio llega por WebSocket a `/ws` del puerto HTTP. En la
   app, un servidor con URL `https://…` es un relay web (`WebRelay`): la sesión habla con
   `127.0.0.1:N`, el puente `gs_ws_bridge_start` de la FFI. No toques la sesión para esto.

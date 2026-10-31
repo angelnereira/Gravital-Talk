@@ -18,7 +18,8 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
   relay, sin cambios en el protocolo ni en el cifrado de extremo a extremo.
   Reconecta solo si la conexión se cae.
 - App: «Sala en la nube» en la pantalla de inicio. Crea la sala en el relay de
-  Gravital Cloud (`https://talk.gravitalcloud.com`) y la invitación lleva su
+  Gravital Cloud (Railway, `gs-relay-production.up.railway.app`; también
+  `talk.gravitalcloud.com`) y la invitación lleva su
   URL: quien la abre entra desde cualquier red, sin abrir puertos. El campo de
   servidor acepta ahora una URL `https://` de relay web, que es además el
   servidor por defecto.

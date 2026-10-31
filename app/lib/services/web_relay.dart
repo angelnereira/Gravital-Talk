@@ -12,7 +12,11 @@ class WebRelay {
   final Uri base;
 
   /// Relay de Gravital Talk en Railway: el servidor por defecto de la app.
-  static const defaultUrl = 'https://talk.gravitalcloud.com';
+  ///
+  /// Es el dominio que da Railway, que funciona sin depender del DNS de
+  /// `gravitalcloud.com`. `https://talk.gravitalcloud.com` apunta al mismo
+  /// servicio y se puede usar igual en el campo de servidor.
+  static const defaultUrl = 'https://gs-relay-production.up.railway.app';
 
   /// Interpreta [host] como relay web. `null` si es un host normal (UDP).
   ///

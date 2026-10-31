@@ -2,7 +2,8 @@
 
 El relay de Gravital Talk (`gs-relay`) corre en Railway en el proyecto
 **gravital-talk**, servicio **gs-relay**, y se publica en
-`https://talk.gravitalcloud.com`.
+`https://gs-relay-production.up.railway.app` (el servidor por defecto de la app)
+y en `https://talk.gravitalcloud.com`.
 
 ## Por qué WebSocket
 
@@ -48,10 +49,17 @@ Variables del servicio:
 
 ## Dominio
 
-`talk.gravitalcloud.com` es un dominio propio del servicio. Necesita un
-registro DNS `CNAME talk → <destino que indica Railway>` en el proveedor de
-`gravitalcloud.com` (si es Cloudflare, en modo *DNS only*). Mientras no exista,
-el servicio responde en su dominio `*.up.railway.app`.
+`talk.gravitalcloud.com` es un dominio propio del servicio. Necesita dos
+registros en el DNS de `gravitalcloud.com` (si es Cloudflare, en modo
+*DNS only*):
+
+| Tipo | Nombre | Valor |
+|---|---|---|
+| CNAME | `talk` | `je05aiq1.up.railway.app` |
+| TXT | `_railway-verify.talk` | `railway-verify=1f348b950d87841f8cdbac41348f1f082013111c6afcb8ed887b894b55d6efec` |
+
+Mientras no existan, el servicio responde en `gs-relay-production.up.railway.app`,
+que es el que lleva la app por defecto.
 
 ## Comprobar
 
