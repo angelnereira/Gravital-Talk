@@ -258,6 +258,13 @@ pub struct Session {
     multi_peer: AtomicBool,
     /// Ir siempre por el relay, sin intentar caminos directos.
     relay_only: AtomicBool,
+    /// Reenvío ciego oportunista en malla para participantes de la misma sala.
+    mesh_relay: AtomicBool,
+    /// Anillo de secuencias vistas en la malla para deduplicación sin allocs.
+    mesh_seen: std::sync::Mutex<[u32; 128]>,
+    mesh_seen_idx: AtomicU32,
+    /// Modo de bajo consumo / emergencia de 72 h.
+    low_power: AtomicBool,
     /// Último latido enviado y último acuse recibido, en µs desde `epoch`.
     last_keepalive: AtomicU64,
     last_ack: AtomicU64,
@@ -352,6 +359,10 @@ impl Session {
             last_register: AtomicU64::new(0),
             multi_peer: AtomicBool::new(false),
             relay_only: AtomicBool::new(false),
+            mesh_relay: AtomicBool::new(false),
+            mesh_seen: std::sync::Mutex::new([0u32; 128]),
+            mesh_seen_idx: AtomicU32::new(0),
+            low_power: AtomicBool::new(false),
             last_keepalive: AtomicU64::new(0),
             last_ack: AtomicU64::new(0),
             own_public: std::sync::Mutex::new(None),
@@ -402,6 +413,8 @@ impl Session {
         self.peer_seen.lock().await.clear();
         self.replay_by_peer.lock().await.clear();
         self.book.lock().await.clear();
+        *self.mesh_seen.lock().unwrap_or_else(|p| p.into_inner()) = [0u32; 128];
+        self.mesh_seen_idx.store(0, Ordering::Release);
 
         // Contadores de secuencia: empiezan de cero, como en `new()`.
         self.session_id.store(0, Ordering::Release);
@@ -554,6 +567,38 @@ impl Session {
     /// lleve claves por peer, esto sólo se activa donde se quiere a propósito.
     pub fn set_multi_peer(&self, enabled: bool) {
         self.multi_peer.store(enabled, Ordering::Release);
+    }
+
+    /// Activa o desactiva la retransmisión ciega en malla (Opportunistic Room Relay).
+    pub fn set_mesh_relay(&self, enabled: bool) {
+        self.mesh_relay.store(enabled, Ordering::Release);
+    }
+
+    #[must_use]
+    pub fn is_mesh_relay(&self) -> bool {
+        self.mesh_relay.load(Ordering::Acquire)
+    }
+
+    /// Activa o desactiva el modo de bajo consumo / emergencia de 72 h.
+    pub fn set_low_power(&self, enabled: bool) {
+        self.low_power.store(enabled, Ordering::Release);
+    }
+
+    #[must_use]
+    pub fn is_low_power(&self) -> bool {
+        self.low_power.load(Ordering::Acquire)
+    }
+
+    /// Comprueba si esta secuencia ya fue vista en la malla; si no, la anota.
+    /// Retorna `true` si es nueva (no duplicada).
+    pub fn check_and_mark_mesh(&self, seq: u32) -> bool {
+        let mut seen = self.mesh_seen.lock().unwrap_or_else(|p| p.into_inner());
+        if seen.contains(&seq) {
+            return false;
+        }
+        let idx = (self.mesh_seen_idx.fetch_add(1, Ordering::Relaxed) as usize) % seen.len();
+        seen[idx] = seq;
+        true
     }
 
     /// Guarda las claves negociadas con `peer`.
@@ -752,10 +797,27 @@ impl Session {
         let now = self.micros_since_epoch();
         let since = |mark: &AtomicU64| now.saturating_sub(mark.load(Ordering::Acquire)) / 1_000;
 
-        // Un latido por segundo, se esté enviando audio o no: además de
-        // mantener el NAT abierto, su acuse es la única prueba de que lo que
+        let low_power = self.is_low_power();
+        let keepalive_interval = if low_power {
+            5_000
+        } else {
+            KEEPALIVE_INTERVAL_MS
+        };
+        let active_register_interval = if low_power {
+            15_000
+        } else {
+            ACTIVE_REGISTER_MS
+        };
+        let advert_interval = if low_power {
+            15_000
+        } else {
+            ADVERTISE_INTERVAL_MS
+        };
+
+        // En modo normal un latido por segundo; en bajo consumo/emergencia cada 5 s:
+        // además de mantener el NAT abierto, su acuse es la única prueba de que lo que
         // sale de aquí llega.
-        if since(&self.last_keepalive) >= KEEPALIVE_INTERVAL_MS {
+        if since(&self.last_keepalive) >= keepalive_interval {
             if self.last_keepalive.swap(now, Ordering::AcqRel) == 0 {
                 // Primer latido: el plazo del acuse cuenta desde ahora.
                 self.last_ack.store(now, Ordering::Release);
@@ -767,9 +829,9 @@ impl Session {
 
         if let Some(server) = self.rendezvous_server() {
             let every = if stale {
-                KEEPALIVE_INTERVAL_MS
+                keepalive_interval
             } else {
-                ACTIVE_REGISTER_MS
+                active_register_interval
             };
             if since(&self.last_register) >= every {
                 self.last_register.store(now, Ordering::Release);
@@ -803,7 +865,7 @@ impl Session {
         // la única forma de que el otro sepa dónde buscar cuando deje de
         // hacerlo. Avisar "he cambiado de red" después del cambio no sirve si
         // el aviso tiene que viajar por el camino que se acaba de perder.
-        if !stale && since(&self.last_advert) >= ADVERTISE_INTERVAL_MS {
+        if !stale && since(&self.last_advert) >= advert_interval {
             self.last_advert.store(now, Ordering::Release);
             let addrs = self.own_addresses().await;
             if !addrs.is_empty() {
@@ -838,10 +900,18 @@ impl Session {
     /// - Sigue abriendo el NAT hacia las direcciones de quienes aún no han
     ///   entrado: la sala admite gente mientras dure.
     async fn maintain_room(&self, now: u64) {
+        let low_power = self.is_low_power();
+        let peer_gone_limit = if low_power { 60_000 } else { PEER_GONE_MS };
+        let room_probe_interval = if low_power {
+            5_000
+        } else {
+            KEEPALIVE_INTERVAL_MS
+        };
+
         let gone: Vec<SocketAddr> = {
             let seen = self.peer_seen.lock().await;
             seen.iter()
-                .filter(|(_, at)| now.saturating_sub(**at) / 1_000 >= PEER_GONE_MS)
+                .filter(|(_, at)| now.saturating_sub(**at) / 1_000 >= peer_gone_limit)
                 .map(|(addr, _)| *addr)
                 .collect()
         };
@@ -850,7 +920,7 @@ impl Session {
         }
 
         let since = now.saturating_sub(self.last_room_probe.load(Ordering::Acquire)) / 1_000;
-        if since < KEEPALIVE_INTERVAL_MS {
+        if since < room_probe_interval {
             return;
         }
         self.last_room_probe.store(now, Ordering::Release);
@@ -874,7 +944,12 @@ impl Session {
     /// camino. Sin la segunda comprobación, ese extremo oye al otro, cree que
     /// todo va bien y no busca alternativa.
     fn path_is_stale(&self, now: u64) -> bool {
-        let silent_for = |mark: u64| mark != 0 && now.saturating_sub(mark) / 1_000 >= PATH_STALE_MS;
+        let stale_limit = if self.is_low_power() {
+            15_000
+        } else {
+            PATH_STALE_MS
+        };
+        let silent_for = |mark: u64| mark != 0 && now.saturating_sub(mark) / 1_000 >= stale_limit;
         silent_for(self.last_rx.load(Ordering::Acquire))
             || silent_for(self.last_ack.load(Ordering::Acquire))
     }
@@ -2471,6 +2546,7 @@ impl Session {
         Ok(())
     }
 
+    #[cfg(feature = "noise")]
     async fn handshake_noise_server_after_hello1(
         &self,
         peer: SocketAddr,
@@ -2591,6 +2667,7 @@ impl Session {
         // de control también consumen tx_sequence, pero nunca audio_tx_seq).
         let audio_seq = self.audio_tx_seq.fetch_add(1, Ordering::Relaxed);
         let seq = self.tx_sequence.fetch_add(1, Ordering::Relaxed);
+        self.check_and_mark_mesh(seq);
         let ts = self.micros_since_epoch();
         let sid = self.session_id.load(Ordering::Acquire);
 
@@ -2720,6 +2797,7 @@ impl Session {
         fec_payload.extend_from_slice(&parity.payload);
 
         let seq = self.tx_sequence.fetch_add(1, Ordering::Relaxed);
+        self.check_and_mark_mesh(seq);
         let ts = self.micros_since_epoch();
         let header = PacketHeader {
             version: 1,
@@ -2850,8 +2928,13 @@ impl Session {
     /// Procesa un único datagrama entrante (heartbeat + mantenimiento de sesión).
     pub async fn poll_once(&self) -> Result<(), TransportError> {
         let mut buf = vec![0u8; self.config.mtu];
+        let timeout_ms = if self.is_low_power() {
+            5_000
+        } else {
+            HEARTBEAT_INTERVAL_MS
+        };
         let recv_res = timeout(
-            Duration::from_millis(HEARTBEAT_INTERVAL_MS),
+            Duration::from_millis(timeout_ms),
             self.transport.recv(&mut buf),
         )
         .await;
@@ -2910,6 +2993,21 @@ impl Session {
             .lock()
             .await
             .insert(from, self.micros_since_epoch());
+
+        // Reenvío ciego en malla (Opportunistic Room Relay): si está activo y el
+        // paquete pertenece a esta sala, se retransmite sin descifrar a los demás peers.
+        if self.is_mesh_relay() {
+            let sid = self.session_id();
+            if sid != 0 && view.header().session_id == sid {
+                let seq = view.header().sequence;
+                if self.check_and_mark_mesh(seq) {
+                    let targets = self.book.lock().await.others(from);
+                    for target in targets {
+                        let _ = self.transport.send_to(raw_buf, target).await;
+                    }
+                }
+            }
+        }
 
         // Anti-replay: una vez establecidas las claves, cada secuencia sólo se
         // acepta una vez (ventana deslizante). Protege contra reinyección de
@@ -3189,7 +3287,12 @@ impl Session {
     async fn check_liveness(&self) -> Result<(), TransportError> {
         let now = self.micros_since_epoch();
         let last = self.last_rx.load(Ordering::Acquire);
-        if last != 0 && now.saturating_sub(last) > HEARTBEAT_TIMEOUT_MS * 1_000 {
+        let timeout_limit = if self.is_low_power() {
+            HEARTBEAT_TIMEOUT_MS * 3 * 1_000
+        } else {
+            HEARTBEAT_TIMEOUT_MS * 1_000
+        };
+        if last != 0 && now.saturating_sub(last) > timeout_limit {
             self.state
                 .lock()
                 .await
@@ -3215,6 +3318,7 @@ impl Session {
         peer: SocketAddr,
     ) -> Result<(), TransportError> {
         let seq = self.tx_sequence.fetch_add(1, Ordering::Relaxed);
+        self.check_and_mark_mesh(seq);
         let ts = self.micros_since_epoch();
         let header = PacketHeader::new(msg.code(), session_id, seq, ts);
         let mut buf = BytesMut::with_capacity(self.config.mtu);
@@ -3354,5 +3458,52 @@ mod tests {
         let b = rand_u32_secure();
         // Con probabilidad 1 - 1/2^32 ≈ 1, serán distintos.
         assert_ne!(a, b);
+    }
+
+    struct DummyTransport;
+    #[async_trait::async_trait]
+    impl Transport for DummyTransport {
+        async fn send(&self, _buf: &[u8]) -> Result<usize, TransportError> {
+            Ok(0)
+        }
+        async fn send_to(&self, _buf: &[u8], _target: SocketAddr) -> Result<usize, TransportError> {
+            Ok(0)
+        }
+        async fn recv(&self, _buf: &mut [u8]) -> Result<(usize, SocketAddr), TransportError> {
+            std::future::pending().await
+        }
+        fn local_addr(&self) -> Result<SocketAddr, TransportError> {
+            Ok("127.0.0.1:0".parse().unwrap())
+        }
+        async fn close(&self) -> Result<(), TransportError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn mesh_deduplication_ring_buffer() {
+        let session = Session::new(Arc::new(DummyTransport), Config::default());
+        assert!(!session.is_mesh_relay());
+        session.set_mesh_relay(true);
+        assert!(session.is_mesh_relay());
+
+        // Primera vez que se ve una secuencia: nueva
+        assert!(session.check_and_mark_mesh(100));
+        assert!(session.check_and_mark_mesh(101));
+        // Duplicados
+        assert!(!session.check_and_mark_mesh(100));
+        assert!(!session.check_and_mark_mesh(101));
+        // Secuencia diferente
+        assert!(session.check_and_mark_mesh(102));
+    }
+
+    #[test]
+    fn low_power_mode_toggle() {
+        let session = Session::new(Arc::new(DummyTransport), Config::default());
+        assert!(!session.is_low_power());
+        session.set_low_power(true);
+        assert!(session.is_low_power());
+        session.set_low_power(false);
+        assert!(!session.is_low_power());
     }
 }

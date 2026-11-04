@@ -100,6 +100,7 @@ class AppSettings {
     this.pttBubble = true,
     this.headsetPtt = true,
     this.volumePtt = false,
+    this.lowPowerMode = false,
   });
 
   /// Valores que usa la app cuando nadie ha configurado nada.
@@ -147,6 +148,10 @@ class AppSettings {
   /// sistema.
   final bool volumePtt;
 
+  /// Modo de ahorro de energía (72 h): espacia los latidos de mantenimiento
+  /// para prolongar la autonomía en escenarios de emergencia y redes aisladas.
+  final bool lowPowerMode;
+
   AppSettings copyWith({
     int? sampleRate,
     int? channels,
@@ -162,6 +167,7 @@ class AppSettings {
     bool? pttBubble,
     bool? headsetPtt,
     bool? volumePtt,
+    bool? lowPowerMode,
   }) {
     return AppSettings(
       sampleRate: sampleRate ?? this.sampleRate,
@@ -178,6 +184,7 @@ class AppSettings {
       pttBubble: pttBubble ?? this.pttBubble,
       headsetPtt: headsetPtt ?? this.headsetPtt,
       volumePtt: volumePtt ?? this.volumePtt,
+      lowPowerMode: lowPowerMode ?? this.lowPowerMode,
     );
   }
 

@@ -7,6 +7,20 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
 ### Added
 
 **Gravital Experience UI — sistema de diseño de las interfaces Flutter**
+- **Retransmisión ciega en malla dentro de sala (Opportunistic Room Relay):**
+  Retransmisión de paquetes UDP pertenecientes a la sala sin clave adicional, con
+  deduplicación en anillo acotado (`check_and_mark_mesh`) que previene bucles y
+  amplía la cobertura de malla en escenarios de emergencia sin carga criptográfica extra.
+- **Modo de ahorro de energía / emergencia (72 h):**
+  Intervalos adaptativos de sondeo y latidos en silencio (`set_low_power`,
+  `gs_session_set_low_power`), espaciando los latidos de mantenimiento a 5 s y
+  el umbral de desconexión a 60 s, optimizando el consumo de batería en redes aisladas.
+- **Notas PTT diferidas (Store-and-Forward Voice Bursts):**
+  Almacenamiento persistente de notas de voz cifradas de extremo a extremo cuando
+  un contacto no está en línea, con entrega automática al avistarlo en la red local o
+  buzón (`voice_burst`) y confirmación por acuse de recibo (`voice_burst_ack`).
+- `docs/adr/008-offline-first-emergency-mode.md` y `docs/emergency-mode.md`:
+  documentación de arquitectura y guía de operación en emergencias de 72 h.
 - `docs/gravital-experience-ui.md` es la regla de diseño del proyecto: tokens,
   componentes, patrones y un checklist por pantalla. Toda pantalla nueva nace
   sobre ella.
@@ -36,6 +50,15 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
 
 ### Fixed
 
+- **Salas en redes sin Internet ni ruta por defecto:** abrir una sala con un
+  teléfono haciendo de punto Wi-Fi sin datos móviles (o en un router aislado sin
+  puerta de enlace `0.0.0.0/0`) fallaba con «No hay red» porque
+  `discover_local_addr` sólo probaba la ruta hacia `8.8.8.8`. Ahora sonda las
+  subredes locales en la tabla de rutas del kernel y respalda el resultado con
+  las interfaces activas del dispositivo. Además, STUN corta en el primer
+  timeout de DNS con un tope estricto de 2,8 s (sin retener el socket de la
+  sesión) y el invitado omite STUN cuando la invitación es puramente local.
+  Documentado en `docs/emergency-mode.md` y `docs/adr/008-offline-first-emergency-mode.md`.
 - Las tarjetas de acción de la inicio se anunciaban como botones sin nombre:
   la etiqueta y la acción quedaban en dos nodos de semántica distintos. Ahora
   se emiten como uno y los iconos de la barra llevan etiqueta.

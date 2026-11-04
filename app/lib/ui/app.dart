@@ -17,6 +17,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'fonts.dart';
 import 'theme.dart';
 
 /// Prepara el binding, el modo borde a borde y el overlay del sistema.
@@ -24,6 +25,7 @@ import 'theme.dart';
 /// Idempotente: llamarla más de una vez no cambia nada.
 void prepareApp() {
   WidgetsFlutterBinding.ensureInitialized();
+  registerFontLicense();
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(

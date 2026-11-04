@@ -33,6 +33,7 @@ class SettingsStore {
       pttBubble: p.getBool(PrefKeys.pttBubble) ?? true,
       headsetPtt: p.getBool(PrefKeys.headsetPtt) ?? true,
       volumePtt: p.getBool(PrefKeys.volumePtt) ?? false,
+      lowPowerMode: p.getBool(PrefKeys.lowPowerMode) ?? false,
     );
   }
 
@@ -49,6 +50,7 @@ class SettingsStore {
     await p.setBool(PrefKeys.pttBubble, s.pttBubble);
     await p.setBool(PrefKeys.headsetPtt, s.headsetPtt);
     await p.setBool(PrefKeys.volumePtt, s.volumePtt);
+    await p.setBool(PrefKeys.lowPowerMode, s.lowPowerMode);
     await p.setString(PrefKeys.codec, s.codec.name);
     await p.setString(PrefKeys.themeMode, s.themeMode.name);
     await p.setString(PrefKeys.rendezvous, s.rendezvous);

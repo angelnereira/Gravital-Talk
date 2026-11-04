@@ -24,6 +24,38 @@ const STUN_SERVERS: &[&str] = &[
     "stun2.l.google.com:19302",
 ];
 
+/// Tope para resolver un nombre STUN por DNS.
+const DNS_TIMEOUT: Duration = Duration::from_millis(1200);
+
+/// Tope para una consulta STUN en un socket efímero.
+const EXCHANGE_TIMEOUT: Duration = Duration::from_millis(1500);
+
+/// Tope por intento STUN cuando se usa el socket de la sesión.
+const SESSION_EXCHANGE_TIMEOUT: Duration = Duration::from_millis(1000);
+
+/// Tope total para `discover_public_addr_on`.
+///
+/// Nunca debe acercarse a los 6 s que espera la app antes de empezar el
+/// handshake: si este futuro siguiera leyendo del socket de la sesión cuando
+/// arranca `accept_any` o `connect_any`, competiría por los paquetes entrantes.
+const SESSION_TOTAL_TIMEOUT: Duration = Duration::from_millis(2800);
+
+/// Destinos representativos de subredes privadas y de punto de acceso móvil
+/// (Android `192.168.43.0/24` y `192.168.49.0/24`, NetworkManager `10.42.0.0/24`,
+/// iOS `172.20.10.0/28`, LAN domésticas habituales y link-local).
+const FALLBACK_ROUTE_TARGETS: &[Ipv4Addr] = &[
+    Ipv4Addr::new(8, 8, 8, 8),
+    Ipv4Addr::new(192, 168, 43, 1),
+    Ipv4Addr::new(192, 168, 49, 1),
+    Ipv4Addr::new(192, 168, 1, 1),
+    Ipv4Addr::new(192, 168, 0, 1),
+    Ipv4Addr::new(10, 42, 0, 1),
+    Ipv4Addr::new(172, 20, 10, 1),
+    Ipv4Addr::new(10, 0, 0, 1),
+    Ipv4Addr::new(172, 16, 0, 1),
+    Ipv4Addr::new(169, 254, 1, 1),
+];
+
 /// Error del cliente STUN.
 #[derive(Debug, thiserror::Error)]
 pub enum StunError {
@@ -43,29 +75,62 @@ pub enum StunError {
     Transport(String),
 }
 
-/// Descubre la dirección **local** (LAN) que usaría este dispositivo para
-/// salir a Internet.
+/// Descubre la dirección **local** (LAN) de este dispositivo.
 ///
-/// No habla con nadie: crea un socket efímero, lo "conecta" a una IP pública
-/// y lee su dirección local. `connect` en UDP no envía nada, sólo hace que el
-/// kernel elija la interfaz de salida; `local_addr()` devuelve entonces la IP
-/// que tiene ese interfaz.
+/// No envía ningún paquete a la red: crea un socket UDP efímero, pide al
+/// kernel que seleccione la ruta hacia un destino y lee `local_addr()`.
 ///
-/// Existe porque cuando el descubrimiento por STUN no está disponible (o da la
-/// IP pública del router, que no siempre vuelve a entrar), dos dispositivos en
-/// la misma WiFi sólo se pueden conectar por la LAN. Sin esto, el QR se queda
-/// con un host de relleno con el que nadie puede conectar.
+/// Primero prueba `8.8.8.8:53` (ruta por defecto). Si el dispositivo está en
+/// una red aislada sin salida a Internet ni puerta de enlace por defecto —por
+/// ejemplo, un teléfono haciendo de punto Wi-Fi sin datos móviles o un router
+/// de emergencia sin WAN—, `connect(8.8.8.8)` falla con `ENETUNREACH`. En ese
+/// caso sonda las subredes privadas habituales en la tabla de rutas del kernel
+/// hasta dar con la interfaz activa.
 pub async fn discover_local_addr() -> Result<SocketAddr, StunError> {
     let sock = UdpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)).await?;
-    // 8.8.8.8:53 no recibe nada: sólo fuerza la selección de ruta.
-    match sock
-        .connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), 53))
-        .await
-    {
-        Ok(()) => Ok(sock.local_addr()?),
-        // Si no hay ruta (sin red), al menos devolvemos algo utilizable.
-        Err(_) => Ok(sock.local_addr()?),
+    if let Some(addr) = probe_local_addr_targets(&sock, FALLBACK_ROUTE_TARGETS).await {
+        return Ok(addr);
     }
+    // Android 11+ elige al azar una subred /24 dentro de 192.168.0.0/16 al
+    // abrir un punto de acceso Wi-Fi.256 consultas a la tabla de rutas del
+    // kernel cuestan menos de 0,5 ms y no emiten tráfico.
+    for third in 2..=254u8 {
+        let candidate = Ipv4Addr::new(192, 168, third, 1);
+        if let Some(addr) = probe_single_target(&sock, candidate).await {
+            return Ok(addr);
+        }
+    }
+    for second in 17..=31u8 {
+        let candidate = Ipv4Addr::new(172, second, 0, 1);
+        if let Some(addr) = probe_single_target(&sock, candidate).await {
+            return Ok(addr);
+        }
+    }
+    Ok(sock.local_addr()?)
+}
+
+async fn probe_local_addr_targets(sock: &UdpSocket, targets: &[Ipv4Addr]) -> Option<SocketAddr> {
+    for &target in targets {
+        if let Some(addr) = probe_single_target(sock, target).await {
+            return Some(addr);
+        }
+    }
+    None
+}
+
+async fn probe_single_target(sock: &UdpSocket, target: Ipv4Addr) -> Option<SocketAddr> {
+    if sock
+        .connect(SocketAddr::new(IpAddr::V4(target), 53))
+        .await
+        .is_ok()
+    {
+        if let Ok(addr) = sock.local_addr() {
+            if !addr.ip().is_unspecified() && !addr.ip().is_loopback() {
+                return Some(addr);
+            }
+        }
+    }
+    None
 }
 
 /// Descubre la dirección IP pública del socket local UDP usando STUN.
@@ -84,15 +149,20 @@ pub async fn discover_public_addr(local_port: u16) -> Result<SocketAddr, StunErr
     let sock = UdpSocket::bind(bind_addr).await?;
 
     for server in STUN_SERVERS {
-        // Resolver el nombre DNS del servidor.
-        let server_addr = match tokio::net::lookup_host(*server).await {
-            Ok(mut addrs) => match addrs.next() {
+        // Resolver el nombre DNS del servidor con tope de tiempo: sin Internet,
+        // el resolvedor del sistema puede tardar decenas de segundos.
+        let Ok(lookup) = timeout(DNS_TIMEOUT, tokio::net::lookup_host(*server)).await else {
+            tracing::debug!("STUN resolve {server}: timeout");
+            break;
+        };
+        let server_addr = match lookup {
+            Ok(mut addrs) => match addrs.find(SocketAddr::is_ipv4) {
                 Some(a) => a,
                 None => continue,
             },
             Err(e) => {
                 tracing::debug!("STUN resolve {server}: {e}");
-                continue;
+                break;
             }
         };
 
@@ -101,7 +171,7 @@ pub async fn discover_public_addr(local_port: u16) -> Result<SocketAddr, StunErr
         let request = build_binding_request(&tx_id);
 
         match timeout(
-            Duration::from_secs(5),
+            EXCHANGE_TIMEOUT,
             do_stun_exchange(&sock, server_addr, &request, &tx_id),
         )
         .await
@@ -109,7 +179,7 @@ pub async fn discover_public_addr(local_port: u16) -> Result<SocketAddr, StunErr
             Ok(Ok(addr)) => return Ok(addr),
             Ok(Err(e)) => {
                 tracing::debug!("STUN {server} error: {e}");
-                continue;
+                break;
             }
             Err(_) => {
                 tracing::debug!("STUN {server} timed out");
@@ -134,20 +204,35 @@ pub async fn discover_public_addr(local_port: u16) -> Result<SocketAddr, StunErr
 pub async fn discover_public_addr_on(
     transport: &dyn crate::traits::Transport,
 ) -> Result<SocketAddr, StunError> {
+    timeout(
+        SESSION_TOTAL_TIMEOUT,
+        discover_public_addr_on_inner(transport),
+    )
+    .await
+    .unwrap_or(Err(StunError::Timeout))
+}
+
+async fn discover_public_addr_on_inner(
+    transport: &dyn crate::traits::Transport,
+) -> Result<SocketAddr, StunError> {
     let transport_err = |e: crate::error::TransportError| StunError::Transport(e.to_string());
     let mut buf = [0u8; 512];
 
     for server in STUN_SERVERS {
         // Sólo IPv4: el socket de la sesión se abre en IPv4, y a un servidor
-        // IPv6 no llegaría.
-        let lookup = timeout(Duration::from_secs(2), tokio::net::lookup_host(*server)).await;
-        let Ok(Ok(mut addrs)) = lookup else { continue };
+        // IPv6 no llegaría. Si el DNS expira o falla en el primero, no tiene
+        // sentido repetir contra el mismo resolvedor para `stun1` y `stun2`.
+        let Ok(Ok(mut addrs)) = timeout(DNS_TIMEOUT, tokio::net::lookup_host(*server)).await else {
+            break;
+        };
         let Some(server_addr) = addrs.find(SocketAddr::is_ipv4) else {
             continue;
         };
 
         let tx_id = random_tx_id();
         let request = build_binding_request(&tx_id);
+        // Si no hay ruta hacia fuera (`ENETUNREACH`), abortamos en el acto sin
+        // agotar más servidores.
         transport
             .send_to(&request, server_addr)
             .await
@@ -161,7 +246,7 @@ pub async fn discover_public_addr_on(
                 }
             }
         };
-        match timeout(Duration::from_millis(1200), exchange).await {
+        match timeout(SESSION_EXCHANGE_TIMEOUT, exchange).await {
             Ok(Ok(addr)) => return Ok(addr),
             Ok(Err(e)) => return Err(e),
             Err(_) => tracing::debug!("STUN {server} sin respuesta"),
@@ -416,5 +501,70 @@ mod tests {
             // Sin red no se puede probar el exito, solo que no reviente.
             _ => eprintln!("sin acceso a STUN: se omite la comprobacion de exito"),
         }
+    }
+
+    #[tokio::test]
+    async fn sondar_rutas_locales_salta_loopback_y_encuentra_interfaz_activa() {
+        let sock = UdpSocket::bind("0.0.0.0:0").await.expect("bind");
+        // 127.0.0.1 enlaza a loopback (que no sirve para el QR de la sala) y se
+        // descarta; los siguientes destinos encuentran la interfaz de red real.
+        let targets = [
+            Ipv4Addr::new(127, 0, 0, 1),
+            Ipv4Addr::new(192, 168, 1, 1),
+            Ipv4Addr::new(8, 8, 8, 8),
+        ];
+        if let Some(addr) = probe_local_addr_targets(&sock, &targets).await {
+            assert!(!addr.ip().is_unspecified());
+            assert!(!addr.ip().is_loopback());
+        }
+    }
+
+    #[tokio::test]
+    async fn stun_en_transporte_sin_salida_termina_antes_del_tope_de_la_app() {
+        struct BlackholeTransport;
+
+        #[async_trait::async_trait]
+        impl crate::traits::Transport for BlackholeTransport {
+            async fn send(&self, buf: &[u8]) -> Result<usize, crate::error::TransportError> {
+                Ok(buf.len())
+            }
+
+            async fn send_to(
+                &self,
+                buf: &[u8],
+                _addr: SocketAddr,
+            ) -> Result<usize, crate::error::TransportError> {
+                Ok(buf.len())
+            }
+
+            async fn recv(
+                &self,
+                _buf: &mut [u8],
+            ) -> Result<(usize, SocketAddr), crate::error::TransportError> {
+                std::future::pending().await
+            }
+
+            async fn close(&self) -> Result<(), crate::error::TransportError> {
+                Ok(())
+            }
+
+            fn local_addr(&self) -> Result<SocketAddr, crate::error::TransportError> {
+                Ok(SocketAddr::new(
+                    IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10)),
+                    9000,
+                ))
+            }
+        }
+
+        let start = std::time::Instant::now();
+        let res = discover_public_addr_on(&BlackholeTransport).await;
+        let elapsed = start.elapsed();
+
+        assert!(res.is_err());
+        // Debe soltar el socket mucho antes del timeout de 6 s de la app.
+        assert!(
+            elapsed < Duration::from_millis(3500),
+            "discover_public_addr_on tardo demasiado sin Internet: {elapsed:?}"
+        );
     }
 }

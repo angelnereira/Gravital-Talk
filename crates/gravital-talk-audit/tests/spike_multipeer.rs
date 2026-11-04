@@ -87,6 +87,7 @@ async fn speaker(freq_hz: f64, hold: Duration) -> anyhow::Result<u64> {
 }
 
 /// Receptor: abre sesión, escucha `hold` y analiza el audio recibido.
+#[allow(dead_code)]
 async fn listener(hold: Duration) -> anyhow::Result<(u64, AudioStats)> {
     let transport = UdpTransport::bind(UdpConfig {
         bind_addr: SocketAddr::from(([127, 0, 0, 1], 0)),

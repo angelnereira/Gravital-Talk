@@ -109,6 +109,12 @@ abstract class SessionEngine {
   /// Aplica en caliente los ajustes de audio que no requieren reconectar.
   void applyAudioSettings(AppSettings settings);
 
+  /// Activa o desactiva el modo de bajo consumo / emergencia de 72 h.
+  void setLowPower(bool enabled);
+
+  /// Activa o desactiva la retransmisión ciega en malla (Opportunistic Room Relay).
+  void setMeshRelay(bool enabled);
+
   /// `true` si el audio va por un relay y no directo.
   bool get relayed;
 
@@ -294,6 +300,7 @@ class FfiSessionEngine implements SessionEngine, KnockCodec {
       bindPort: bindPort,
     );
     _session!.setVoiceProfile(settings.voiceProfile.code);
+    _session!.setLowPower(settings.lowPowerMode);
   }
 
   /// Arranca el audio de la sesión recién conectada.
@@ -365,7 +372,12 @@ class FfiSessionEngine implements SessionEngine, KnockCodec {
   Future<void> setSessionId(int id) async => _alive.setSessionId(id);
 
   @override
-  Future<void> setRoomToken(String? token) async => _alive.setRoomToken(token);
+  Future<void> setRoomToken(String? token) async {
+    _alive.setRoomToken(token);
+    if (token != null && token.isNotEmpty) {
+      _alive.setMeshRelay(true);
+    }
+  }
 
   @override
   Future<void> connect(String host, int port) =>
@@ -405,12 +417,36 @@ class FfiSessionEngine implements SessionEngine, KnockCodec {
 
   @override
   void applyAudioSettings(AppSettings settings) {
+    _settings = settings;
     final session = _session;
     if (session == null) return;
     try {
       session.setVoiceProfile(settings.voiceProfile.code);
+      session.setLowPower(settings.lowPowerMode);
     } on NativeException {
       // Sesión ya cerrada: los ajustes se aplicarán a la siguiente.
+    }
+  }
+
+  @override
+  void setLowPower(bool enabled) {
+    final session = _session;
+    if (session == null) return;
+    try {
+      session.setLowPower(enabled);
+    } on NativeException {
+      // Sesión ya cerrada o no activa.
+    }
+  }
+
+  @override
+  void setMeshRelay(bool enabled) {
+    final session = _session;
+    if (session == null) return;
+    try {
+      session.setMeshRelay(enabled);
+    } on NativeException {
+      // Sesión ya cerrada o no activa.
     }
   }
 
@@ -695,6 +731,12 @@ class DemoSessionEngine implements SessionEngine {
 
   @override
   void applyAudioSettings(AppSettings settings) {}
+
+  @override
+  void setLowPower(bool enabled) {}
+
+  @override
+  void setMeshRelay(bool enabled) {}
 
   @override
   bool get relayed => false;

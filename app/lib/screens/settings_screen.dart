@@ -375,6 +375,21 @@ class _SettingsScreenState extends State<SettingsScreen>
                     trailing: const Icon(Icons.chevron_right),
                     onTap: () => _editRendezvous(c),
                   ),
+                  _Row(
+                    icon: Icons.battery_saver_outlined,
+                    title: 'Modo de ahorro de energía (72 h)',
+                    subtitle: 'Espacia los latidos y comprobaciones en silencio '
+                        'para prolongar la batería del dispositivo en redes '
+                        'aisladas y situaciones de emergencia.',
+                    trailing: Switch(
+                      value: s.lowPowerMode,
+                      onChanged: (on) =>
+                          c.updateSettings(s.copyWith(lowPowerMode: on)),
+                    ),
+                    onTap: () => c.updateSettings(
+                      s.copyWith(lowPowerMode: !s.lowPowerMode),
+                    ),
+                  ),
                 ],
               ),
               _Section(

@@ -13,6 +13,36 @@ import 'knock_codec.dart';
 import 'mailbox.dart';
 import 'session_controller.dart';
 
+/// Mensaje o nota de voz diferida (Store-and-Forward Voice Burst).
+@immutable
+class VoiceBurst {
+  const VoiceBurst({
+    required this.id,
+    required this.contactId,
+    required this.timestamp,
+    required this.audio,
+  });
+
+  factory VoiceBurst.fromJson(Map<String, dynamic> j) => VoiceBurst(
+        id: j['id'] as String,
+        contactId: j['contactId'] as String,
+        timestamp: j['timestamp'] as int,
+        audio: base64Decode(j['audio'] as String),
+      );
+
+  final String id;
+  final String contactId;
+  final int timestamp;
+  final Uint8List audio;
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'contactId': contactId,
+        'timestamp': timestamp,
+        'audio': base64Encode(audio),
+      };
+}
+
 /// Un dispositivo con el que ya se habló y al que se puede volver a llamar.
 @immutable
 class Contact {
@@ -278,6 +308,7 @@ class ContactsService extends ChangeNotifier {
   static const _deviceNameKey = 'device.name';
   static const _backgroundKey = 'contacts.background';
   static const _pendingKey = 'contacts.pendingLink';
+  static const _burstsKey = 'contacts.pendingBursts';
 
   /// Nombre de un contacto del que aún no se sabe nada: quien abra el enlace
   /// lo sustituye por el suyo al saludar.
@@ -292,9 +323,14 @@ class ContactsService extends ChangeNotifier {
 
   RawDatagramSocket? _socket;
   List<Contact> _contacts = const [];
+  List<VoiceBurst> _pendingBursts = [];
+  final Set<String> _receivedBurstIds = {};
   String _deviceId = '';
   String _deviceName = '';
   bool _background = true;
+
+  /// Notas de voz diferidas recibidas.
+  final ValueNotifier<List<VoiceBurst>> receivedBursts = ValueNotifier(const []);
 
   /// Contacto de la llamada en curso (hecha o aceptada): al conectar no se
   /// crea uno nuevo, se actualiza ese.
@@ -382,6 +418,15 @@ class ContactsService extends ChangeNotifier {
     } on Object {
       // Lista ilegible: mejor empezar vacía que no arrancar.
       _contacts = const [];
+    }
+    try {
+      final rawBursts = jsonDecode(prefs.getString(_burstsKey) ?? '[]') as List;
+      _pendingBursts = [
+        for (final b in rawBursts)
+          VoiceBurst.fromJson(b as Map<String, dynamic>),
+      ];
+    } on Object {
+      _pendingBursts = [];
     }
     _controller
       ..deviceId = _deviceId
@@ -825,18 +870,68 @@ class ContactsService extends ChangeNotifier {
     _callTimer = null;
   }
 
-  Future<void> _send(Contact contact, String type, {String? invite}) async {
+  /// Lista de notas de voz diferidas pendientes de entregar.
+  List<VoiceBurst> get pendingVoiceBursts => List.unmodifiable(_pendingBursts);
+
+  /// Almacena y envía una nota de voz diferida a un contacto.
+  Future<void> sendVoiceBurst(Contact contact, Uint8List audioData) async {
+    final burst = VoiceBurst(
+      id: 'vb_${DateTime.now().millisecondsSinceEpoch}_${Random().nextInt(10000)}',
+      contactId: contact.id,
+      timestamp: DateTime.now().millisecondsSinceEpoch,
+      audio: audioData,
+    );
+    _pendingBursts.add(burst);
+    await _saveBursts();
+    await _dispatchBurst(contact, burst);
+    notifyListeners();
+  }
+
+  Future<void> _dispatchBurst(Contact contact, VoiceBurst burst) async {
+    await _send(
+      contact,
+      'voice_burst',
+      extra: {
+        'burst_id': burst.id,
+        'audio': base64Encode(burst.audio),
+      },
+    );
+  }
+
+  Future<void> _saveBursts() async {
+    await prefs?.setString(
+      _burstsKey,
+      jsonEncode([for (final b in _pendingBursts) b.toJson()]),
+    );
+  }
+
+  void _flushPendingBursts(Contact contact) {
+    final bursts =
+        _pendingBursts.where((b) => b.contactId == contact.id).toList();
+    for (final b in bursts) {
+      unawaited(_dispatchBurst(contact, b));
+    }
+  }
+
+  Future<void> _send(
+    Contact contact,
+    String type, {
+    String? invite,
+    Map<String, dynamic>? extra,
+  }) async {
     final codec = this.codec;
     if (codec == null) return;
     final ip = await _controller.localIp();
-    final payload = utf8.encode(jsonEncode({
+    final map = <String, dynamic>{
       't': type,
       'dev': _deviceId,
       'name': _deviceName,
       'ts': DateTime.now().millisecondsSinceEpoch,
       'ip': ?ip,
       'uri': ?invite,
-    }));
+      ...?extra,
+    };
+    final payload = utf8.encode(jsonEncode(map));
     final sealed = codec.knockSeal(
       Uint8List.fromList(utf8.encode(contact.secret)),
       Uint8List.fromList(payload),
@@ -931,6 +1026,45 @@ class ContactsService extends ChangeNotifier {
       lastSeen: DateTime.now().millisecondsSinceEpoch,
     );
     unawaited(_put(updated));
+    _flushPendingBursts(updated);
+
+    if (msg['t'] == 'voice_burst_ack') {
+      final burstId = msg['burst_id'];
+      if (burstId is String) {
+        _pendingBursts.removeWhere((b) => b.id == burstId);
+        unawaited(_saveBursts());
+        notifyListeners();
+      }
+      return;
+    }
+
+    if (msg['t'] == 'voice_burst') {
+      final burstId = msg['burst_id'];
+      final audioBase64 = msg['audio'];
+      if (burstId is String && audioBase64 is String) {
+        unawaited(
+            _send(updated, 'voice_burst_ack', extra: {'burst_id': burstId}));
+        if (_receivedBurstIds.add(burstId)) {
+          try {
+            final burst = VoiceBurst(
+              id: burstId,
+              contactId: updated.id,
+              timestamp: ts,
+              audio: base64Decode(audioBase64),
+            );
+            receivedBursts.value = [...receivedBursts.value, burst];
+            if (WidgetsBinding.instance.lifecycleState !=
+                AppLifecycleState.resumed) {
+              unawaited(BackgroundSession.notifyInfo(
+                updated.name,
+                'Nota de voz recibida',
+              ));
+            }
+          } catch (_) {}
+        }
+      }
+      return;
+    }
 
     final invite = msg['uri'];
     if (msg['t'] == 'hello') {
@@ -1027,6 +1161,7 @@ class ContactsService extends ChangeNotifier {
     incoming.removeListener(_onIncomingChanged);
     accepted.dispose();
     autoCall.dispose();
+    receivedBursts.dispose();
     _socket?.close();
     incoming.dispose();
     super.dispose();

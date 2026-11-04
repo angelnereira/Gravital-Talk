@@ -528,4 +528,25 @@ void main() {
     expect(find.text('Ana quiere hablar'), findsNothing);
     expect(d.contacts.incoming.value, isNull);
   });
+
+  test('notas de voz diferidas se almacenan, se envían y se confirman', () async {
+    final (a, b) = await pair();
+    final link = await b.contacts.contactLink();
+    final bobInA = await a.contacts.addFromLink(link!);
+    expect(bobInA, isNotNull);
+
+    // Ana graba y envía una nota de voz diferida para Bob
+    final audioData = Uint8List.fromList([1, 2, 3, 4, 5, 6, 7, 8]);
+    await a.contacts.sendVoiceBurst(bobInA!, audioData);
+
+    // Bob debe recibir la nota
+    expect(b.contacts.receivedBursts.value.length, 1);
+    expect(b.contacts.receivedBursts.value.first.audio, audioData);
+
+    // Esperar a que el ACK de vuelta termine de procesarse
+    await pumpEventQueue();
+
+    // Ana debe haber recibido el ACK de Bob y vaciado los pendientes
+    expect(a.contacts.pendingVoiceBursts, isEmpty);
+  });
 }

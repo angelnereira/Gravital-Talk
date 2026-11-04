@@ -108,6 +108,8 @@ class NativeSession {
   void setSessionId(int id) => _unavailable();
   void setRoomToken(String? token) => _unavailable();
   void setHandshakeMode(int mode) => _unavailable();
+  void setLowPower(bool enabled) => _unavailable();
+  void setMeshRelay(bool enabled) => _unavailable();
   void sendAudio(List<int> data) => _unavailable();
   List<int>? recvAudio({int maxBytes = 8192}) => _unavailable();
   List<int>? recvAudioTimeout({int maxBytes = 8192, int timeoutMs = 250}) =>

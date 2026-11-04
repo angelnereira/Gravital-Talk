@@ -323,7 +323,11 @@ class SessionController extends ChangeNotifier {
     // El QR lleva la dirección de este dispositivo en la red local. No la
     // pública: la que da STUN es la del router, y sin reenvío de puertos no
     // entra nadie por ella (ni siquiera desde la misma wifi en muchos routers).
-    final lanIp = await _engine.discoverLocalEndpoint();
+    var lanIp = await _engine.discoverLocalEndpoint();
+    if (lanIp == null || lanIp.isEmpty) {
+      final locals = await localAddresses();
+      if (locals.isNotEmpty) lanIp = locals.first;
+    }
     if (lanIp == null || lanIp.isEmpty) {
       throw StateError(
         'No hay red. Conéctate a una wifi para que puedan unirse a tu sala.',
@@ -434,9 +438,13 @@ class SessionController extends ChangeNotifier {
       token: parsed.token ?? '',
     ));
     _joinedWith = parsed;
+    final hasRemotePath =
+        (parsed.publicEndpoint != null && parsed.publicEndpoint!.isNotEmpty) ||
+        (parsed.rendezvous != null && parsed.rendezvous!.isNotEmpty);
     return _joinCandidates(
       parsed.candidates(_server.udpPort),
       rendezvous: parsed.rendezvous,
+      needsPublicAddr: hasRemotePath,
     );
   }
 
@@ -488,7 +496,11 @@ class SessionController extends ChangeNotifier {
   }
 
   /// Entra en la sala probando todas las direcciones de la invitación.
-  Future<bool> _joinCandidates(List<String> candidates, {String? rendezvous}) {
+  Future<bool> _joinCandidates(
+    List<String> candidates, {
+    String? rendezvous,
+    bool needsPublicAddr = true,
+  }) {
     return _guard(() async {
       final profile = _server;
       await _engine.createSession(_settings);
@@ -504,12 +516,19 @@ class SessionController extends ChangeNotifier {
       _role = ConnectionRole.join;
 
       // La respuesta a la invitación: por dónde se llega a ESTE dispositivo.
-      // Si los dos están tras un NAT, es lo que el anfitrión necesita para
-      // abrir el suyo hacia aquí.
-      final public = await _engine
-          .discoverPublicEndpoint()
-          .timeout(const Duration(seconds: 6), onTimeout: () => null);
-      final lanIp = await _engine.discoverLocalEndpoint();
+      // Si la invitación sólo trae la IP local del anfitrión (sin `pub` ni
+      // `rv`, p. ej. en una red sin salida a Internet), no esperamos a STUN:
+      // la conexión va directo por la LAN.
+      final public = needsPublicAddr
+          ? await _engine
+              .discoverPublicEndpoint()
+              .timeout(const Duration(seconds: 6), onTimeout: () => null)
+          : null;
+      var lanIp = await _engine.discoverLocalEndpoint();
+      if (lanIp == null || lanIp.isEmpty) {
+        final locals = await localAddresses();
+        if (locals.isNotEmpty) lanIp = locals.first;
+      }
       final port = await _engine.localPort();
       final own = <String>[
         ?public,

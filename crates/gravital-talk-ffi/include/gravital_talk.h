@@ -302,6 +302,16 @@ GsStatus gs_session_set_room_token(GsSessionHandle *handle, const char *token);
 GsStatus gs_session_set_handshake_mode(GsSessionHandle *handle, uint8_t mode);
 
 /*
+ Activa o desactiva el modo de bajo consumo / emergencia de 72 h.
+ */
+GsStatus gs_session_set_low_power(GsSessionHandle *handle, bool enabled);
+
+/*
+ Activa o desactiva la retransmisión ciega en malla (Opportunistic Room Relay).
+ */
+GsStatus gs_session_set_mesh_relay(GsSessionHandle *handle, bool enabled);
+
+/*
  Rellena `out` con un snapshot atómico de métricas.
  */
 GsStatus gs_session_metrics(GsSessionHandle *handle, GsMetrics *out);

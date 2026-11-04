@@ -627,6 +627,34 @@ pub unsafe extern "C" fn gs_session_set_handshake_mode(
     GsStatus::GS_OK
 }
 
+/// Activa o desactiva el modo de bajo consumo / emergencia de 72 h.
+#[no_mangle]
+pub unsafe extern "C" fn gs_session_set_low_power(
+    handle: *mut GsSessionHandle,
+    enabled: bool,
+) -> GsStatus {
+    if handle.is_null() {
+        return GsStatus::GS_ERR_NULL_POINTER;
+    }
+    let inner = unsafe { &*(handle as *mut SessionInner) };
+    inner.session.set_low_power(enabled);
+    GsStatus::GS_OK
+}
+
+/// Activa o desactiva la retransmisión ciega en malla (Opportunistic Room Relay).
+#[no_mangle]
+pub unsafe extern "C" fn gs_session_set_mesh_relay(
+    handle: *mut GsSessionHandle,
+    enabled: bool,
+) -> GsStatus {
+    if handle.is_null() {
+        return GsStatus::GS_ERR_NULL_POINTER;
+    }
+    let inner = unsafe { &*(handle as *mut SessionInner) };
+    inner.session.set_mesh_relay(enabled);
+    GsStatus::GS_OK
+}
+
 /// Rellena `out` con un snapshot atómico de métricas.
 #[no_mangle]
 pub unsafe extern "C" fn gs_session_metrics(

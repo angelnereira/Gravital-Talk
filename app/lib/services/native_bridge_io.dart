@@ -149,6 +149,8 @@ typedef _SetRoomTokenC = Int32 Function(Pointer<Void>, Pointer<Utf8>);
 typedef _SetRoomTokenD = int Function(Pointer<Void>, Pointer<Utf8>);
 typedef _SetHandshakeModeC = Int32 Function(Pointer<Void>, Uint8);
 typedef _SetHandshakeModeD = int Function(Pointer<Void>, int);
+typedef _SetBoolC = Int32 Function(Pointer<Void>, Bool);
+typedef _SetBoolD = int Function(Pointer<Void>, bool);
 typedef _MetricsC = Int32 Function(Pointer<Void>, Pointer<GsMetricsNative>);
 typedef _MetricsD = int Function(Pointer<Void>, Pointer<GsMetricsNative>);
 typedef _LocalPortC = Int32 Function(Pointer<Void>, Pointer<Uint16>);
@@ -238,6 +240,10 @@ class NativeBridge {
             'gs_session_set_room_token'),
         _setHandshakeMode = lib.lookupFunction<_SetHandshakeModeC, _SetHandshakeModeD>(
             'gs_session_set_handshake_mode'),
+        _setLowPower = lib.lookupFunction<_SetBoolC, _SetBoolD>(
+            'gs_session_set_low_power'),
+        _setMeshRelay = lib.lookupFunction<_SetBoolC, _SetBoolD>(
+            'gs_session_set_mesh_relay'),
         _sessionMetrics = lib
             .lookupFunction<_MetricsC, _MetricsD>('gs_session_metrics'),
         _sessionLocalPort = lib
@@ -323,6 +329,8 @@ class NativeBridge {
   final _SetSessionIdD _setSessionId;
   final _SetRoomTokenD _setRoomToken;
   final _SetHandshakeModeD _setHandshakeMode;
+  final _SetBoolD _setLowPower;
+  final _SetBoolD _setMeshRelay;
   final _MetricsD _sessionMetrics;
   final _LocalPortD _sessionLocalPort;
   final _HandleD _pttPress;
@@ -749,6 +757,18 @@ class NativeSession {
   void setHandshakeMode(int mode) {
     _ensureAlive();
     _bridge._check(_bridge._setHandshakeMode(_handle, mode));
+  }
+
+  /// Activa o desactiva el modo de bajo consumo / emergencia de 72 h.
+  void setLowPower(bool enabled) {
+    _ensureAlive();
+    _bridge._check(_bridge._setLowPower(_handle, enabled));
+  }
+
+  /// Activa o desactiva la retransmisión ciega en malla (Opportunistic Room Relay).
+  void setMeshRelay(bool enabled) {
+    _ensureAlive();
+    _bridge._check(_bridge._setMeshRelay(_handle, enabled));
   }
 
   /// Envía un frame PCM.
