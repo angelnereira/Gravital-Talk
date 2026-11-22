@@ -6,6 +6,11 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
 
 ### Added
 
+- Gobernanza y mejora continua Kaizen: `.kaizen/RULES.md` como fuente única de
+  reglas, `scripts/kaizen` (`check`, `baseline`, `metrics`, `retro`, `start`,
+  `init`), hooks de git, descriptores de PR versionados, línea base de calidad y
+  compuertas en GitHub Actions. Los commits siguen usando Conventional Commits.
+
 **Gravital Experience UI — sistema de diseño de las interfaces Flutter**
 - **Retransmisión ciega en malla dentro de sala (Opportunistic Room Relay):**
   Retransmisión de paquetes UDP pertenecientes a la sala sin clave adicional, con

@@ -27,22 +27,22 @@ Este documento cubre el modelo de amenazas del **protocolo** Gravital Talk y su 
 
 | Propiedad                           | Estado | Nota                                              |
 |-------------------------------------|--------|---------------------------------------------------|
-| **Integridad por paquete**          | ✅     | CRC-16 detecta errores de transmisión, no ataques. |
-| **Autenticación de origen**         | ❌     | Sin cripto. Cualquiera puede spoofear con `session_id` + `sequence` válidos. |
-| **Confidencialidad**                | ❌     | Payload en texto claro.                            |
+| **Integridad por paquete**          | **Sí**  | CRC-16 detecta errores de transmisión, no ataques. |
+| **Autenticación de origen**         | **No**  | Sin cripto. Cualquiera puede spoofear con `session_id` + `sequence` válidos. |
+| **Confidencialidad**                | **No**  | Payload en texto claro.                            |
 | **Resistencia a replay**            | Parcial | `sequence` + ventana de replay previene replay trivial dentro de una sesión, no inter-sesión. |
-| **Resistencia a amplificación UDP** | ✅     | Handshake 3-way con cookie; el servidor nunca envía más bytes al cliente que los recibidos hasta confirmar ownership. |
-| **Forward secrecy**                 | ❌     | No aplica hasta capa cripto.                       |
-| **Aislamiento de sesiones**         | ✅     | `session_id` es un espacio de 2³². Colisiones prevenidas por el servidor. |
+| **Resistencia a amplificación UDP** | **Sí**  | Handshake 3-way con cookie; el servidor nunca envía más bytes al cliente que los recibidos hasta confirmar ownership. |
+| **Forward secrecy**                 | **No**  | No aplica hasta capa cripto.                       |
+| **Aislamiento de sesiones**         | **Sí**  | `session_id` es un espacio de 2³². Colisiones prevenidas por el servidor. |
 
 ### 4.2 Roadmap (v0.4+)
 
-- **Handshake Noise** ✅ (0.3): patrón `NN`/`NNpsk0` como modo por defecto
+- **Handshake Noise** **Sí** (0.3): patrón `NN`/`NNpsk0` como modo por defecto
   (`Auto`), claves HKDF desde el `handshake_hash`, confirmación mutua;
   legacy v1 como fallback (sin downgrade con token).
-- **AEAD por paquete** ✅ (0.2+): ChaCha20-Poly1305 con nonce explícito y
+- **AEAD por paquete** **Sí** (0.2+): ChaCha20-Poly1305 con nonce explícito y
   header como AAD.
-- **Autenticación de sala** ✅ (0.3): token como PSK de Noise (`NNpsk0`);
+- **Autenticación de sala** **Sí** (0.3): token como PSK de Noise (`NNpsk0`);
   el relay guarda solo su hash y lo exige al resolver el código.
 - **Rotación de claves** periódica dentro de la sesión (pendiente).
 

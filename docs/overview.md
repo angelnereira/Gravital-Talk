@@ -34,21 +34,21 @@ Objetivos:
 
 | Aspecto | RTP | WebRTC | Opus Native | **Gravital Talk** |
 |---------|-----|--------|-------------|---------------------|
-| Portabilidad server → browser | ❌ | ✅ | ❌ | ✅ |
-| Especificación simple | ✅ | ❌ | ✅ | ✅ |
-| Métricas nativas | Parcial (RTCP) | ✅ | ❌ | ✅ |
-| Integridad por paquete | ❌ | ✅ (SRTP) | ❌ | ✅ |
-| Codec-agnóstico | ✅ | ❌ | ❌ | ✅ |
-| SDKs idiomáticos | Fragmentado | Fragmentado | ❌ | ✅ |
+| Portabilidad server → browser | **No** | **Sí** | **No** | **Sí** |
+| Especificación simple | **Sí** | **No** | **Sí** | **Sí** |
+| Métricas nativas | Parcial (RTCP) | **Sí** | **No** | **Sí** |
+| Integridad por paquete | **No** | **Sí** (SRTP) | **No** | **Sí** |
+| Codec-agnóstico | **Sí** | **No** | **No** | **Sí** |
+| SDKs idiomáticos | Fragmentado | Fragmentado | **No** | **Sí** |
 | Dependencia de servicios | — | Señalización STUN/TURN | — | Opcional (relay fallback) |
-| NAT traversal | ❌ | ✅ (ICE/TURN) | ❌ | Parcial (STUN P2P, relay fallback) |
+| NAT traversal | **No** | **Sí** (ICE/TURN) | **No** | Parcial (STUN P2P, relay fallback) |
 
 ## Roadmap resumido
 
-- **0.1.0-alpha.1** ✅ Protocolo core + transporte UDP/WebSocket + SDKs Python/Web + CLI MVP.
-- **0.2.0-alpha.1** ✅ Codec Opus + audio I/O hardware (`cpal`) + CLI productivo con `--device`/`--codec`.
-- **0.2.0-alpha.2** ✅ Negociación de codec en handshake + resampler `rubato` + relay productivo (`gravital-talk-relay`) con Prometheus + Dockerfile + Helm chart + módulos Terraform AWS/Hetzner/DigitalOcean + cloud-init Raspberry Pi + workflows release/docs/terraform.
-- **0.2.0-alpha.3** ✅ Emparejamiento P2P por QR/código sin relay obligatorio + cliente STUN RFC 5389 + `handshake_open()` + Android PairingActivity completa + CI auto-build de binarios a `outputs/`.
+- **0.1.0-alpha.1** **Sí** Protocolo core + transporte UDP/WebSocket + SDKs Python/Web + CLI MVP.
+- **0.2.0-alpha.1** **Sí** Codec Opus + audio I/O hardware (`cpal`) + CLI productivo con `--device`/`--codec`.
+- **0.2.0-alpha.2** **Sí** Negociación de codec en handshake + resampler `rubato` + relay productivo (`gravital-talk-relay`) con Prometheus + Dockerfile + Helm chart + módulos Terraform AWS/Hetzner/DigitalOcean + cloud-init Raspberry Pi + workflows release/docs/terraform.
+- **0.2.0-alpha.3** **Sí** Emparejamiento P2P por QR/código sin relay obligatorio + cliente STUN RFC 5389 + `handshake_open()` + Android PairingActivity completa + CI auto-build de binarios a `outputs/`.
 - **0.3** Cifrado Noise + rate limiting + NAT traversal ICE/TURN para redes simétricas.
 - **0.4** SDKs Swift/Kotlin/Node + landing page + publicación crates.io/PyPI/npm.
 - **1.0** Protocolo estable, SemVer compliance, auditoría de seguridad externa.

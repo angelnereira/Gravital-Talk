@@ -27,15 +27,15 @@ Los crates dependientes (`transport`, `metrics`, `ffi`, `cli`) sí usan `std` li
 ## Alternativas
 
 ### A. `std` obligatorio
-- ✅ API más rica (`Read`/`Write`, `Instant`).
-- ❌ Bloquea embebido.
-- ❌ En WASM, `std::time::Instant` tiene coste extra (llamada a `performance.now`).
+- **Sí:** API más rica (`Read`/`Write`, `Instant`).
+- **No:** Bloquea embebido.
+- **No:** En WASM, `std::time::Instant` tiene coste extra (llamada a `performance.now`).
 - **Rechazada.**
 
 ### B. `no_std` puro sin `alloc`
-- ✅ Compatible con firmware sin allocator.
-- ❌ API torpe (todo sobre buffers del caller, complica fragment reassembly).
-- ❌ El segmento de mercado que lo requiere es marginal.
+- **Sí:** Compatible con firmware sin allocator.
+- **No:** API torpe (todo sobre buffers del caller, complica fragment reassembly).
+- **No:** El segmento de mercado que lo requiere es marginal.
 - **Rechazada** — alcanzable bajo demanda con una feature `no-alloc` futura.
 
 ## Consecuencias

@@ -1,0 +1,48 @@
+name: kaizen-gates
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  descriptor-closing:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validar descriptores
+        run: scripts/kaizen check --only descriptors
+
+  content-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validar politicas de contenido
+        run: scripts/kaizen check --only policy
+
+  ratchet:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Anade aqui los pasos de setup del lenguaje (toolchain, dependencias).
+      # Repo Rust: rust-toolchain.toml fija 1.99.0; instalar libopus-dev/libasound2-dev.
+      - name: Validar linea base de calidad
+        run: scripts/kaizen check --only ratchet
+
+  metrics:
+    if: github.event_name == 'push'
+    needs: [content-policy, ratchet]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Anade aqui los pasos de setup del lenguaje.
+      - name: Registrar metricas
+        run: |
+          scripts/kaizen metrics
+          git config user.name "kaizen-bot"
+          git config user.email "kaizen-bot@users.noreply.github.com"
+          git add docs/kaizen/data/metrics.jsonl
+          git diff --cached --quiet || git commit -m "Registrar metricas de calidad" && git push

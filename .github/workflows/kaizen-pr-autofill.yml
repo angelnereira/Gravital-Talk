@@ -1,0 +1,32 @@
+name: kaizen-pr-autofill
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  autofill:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Copiar descriptor al cuerpo del PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          FLAT="${BRANCH//\//-}"
+          FILE="docs/kaizen/pr-drafts/${FLAT}.md"
+          if [ -f "$FILE" ]; then
+            gh pr edit "$PR" --repo "$REPO" --body-file "$FILE"
+          else
+            gh pr comment "$PR" --repo "$REPO" --body "Falta el descriptor \`$FILE\`. Sin descriptor no hay PR (regla K-4)."
+            exit 1
+          fi

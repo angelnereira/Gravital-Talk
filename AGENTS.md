@@ -523,3 +523,15 @@ sin él lanza `SecurityException`. Se gobierna desde Dart por
 - `docker compose --profile observability` expone Prometheus :9091 y Grafana :3001; el relay expone 9000/udp,
   9090/ws, 9100/http.
 - El relay con gRPC requiere `--features grpc` (el `Dockerfile` lo acepta vía `--build-arg CARGO_FEATURES`).
+
+## Kaizen
+Sigue estrictamente `.kaizen/RULES.md` en todo el trabajo de este repositorio.
+Flujo: rama + descriptor en `docs/kaizen/pr-drafts/` -> cambios pequeños -> `scripts/kaizen check` -> PR.
+Comandos: `scripts/kaizen start <rama>`, `check`, `baseline`, `metrics`, `retro`.
+Nunca uses `--no-verify`, nunca relajes `.kaizen/baseline.json` sin aprobación humana, nunca declares un test como pasado sin haberlo ejecutado.
+
+### Precedencia con las convenciones de este repo
+- Los commits siguen siendo Conventional Commits `tipo(scope): descripción` en español (ver "Convenciones" más arriba), añadiendo `Closes #NNN` / `Fixes #NNN` / `Resolves #NNN` cuando corresponda. K-3 de `RULES.md` aplica en lo demás: resumen de hasta 256 caracteres, un cambio lógico que compila y pasa tests, y las políticas de contenido.
+- Las ADR canónicas del proyecto siguen en `docs/adr/`; las plantillas de Kaizen están en `docs/kaizen/adr/`.
+- En una rama de trabajo, `scripts/kaizen check` exige el descriptor `docs/kaizen/pr-drafts/<rama-aplanada>.md`.
+- `scripts/kaizen init` activa los hooks con `core.hooksPath=.githooks`; `pre-push` ejecuta el check completo.

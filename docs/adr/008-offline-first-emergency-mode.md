@@ -26,18 +26,18 @@ Las directrices internacionales de preparación civil para escenarios de **72 ho
 ## Alternativas consideradas
 
 ### A. Mantener `connect(8.8.8.8:53)` y exigir puerta de enlace configurada en el router
-- ✅ Cero cambios en `stun.rs`.
-- ❌ Un teléfono en modo *hotspot* sin datos móviles no instala ruta por defecto en el kernel y no puede alojar salas en una emergencia.
+- **Sí:** Cero cambios en `stun.rs`.
+- **No:** Un teléfono en modo *hotspot* sin datos móviles no instala ruta por defecto en el kernel y no puede alojar salas en una emergencia.
 - **Rechazada.**
 
 ### B. Eliminar STUN por defecto al crear una sala y pedir un interruptor manual «Salir a Internet»
-- ✅ Apertura instantánea sin red.
-- ❌ Empeora el caso cotidiano entre redes distintas cuando sí hay Internet y el usuario olvida activar el interruptor.
+- **Sí:** Apertura instantánea sin red.
+- **No:** Empeora el caso cotidiano entre redes distintas cuando sí hay Internet y el usuario olvida activar el interruptor.
 - **Rechazada:** es preferible el fallo rápido automático cuando no hay salida.
 
 ### C. Integrar transporte LoRa directo para el flujo de voz Opus actual
-- ✅ Largo alcance con muy bajo consumo energético.
-- ❌ El flujo de voz Opus de la app (~16–24 kbps más cabeceras de 24 B + tag AEAD de 16 B a 50 paquetes/s) excede en un orden de magnitud la capacidad efectiva de LoRa en modos de largo alcance (0,3–5 kbps con límites de ciclo de trabajo).
+- **Sí:** Largo alcance con muy bajo consumo energético.
+- **No:** El flujo de voz Opus de la app (~16–24 kbps más cabeceras de 24 B + tag AEAD de 16 B a 50 paquetes/s) excede en un orden de magnitud la capacidad efectiva de LoRa en modos de largo alcance (0,3–5 kbps con límites de ciclo de trabajo).
 - **Rechazada para el canal de voz estándar:** cualquier transporte sub-2 kbps requerirá un perfil de códec específico de muy baja tasa (p. ej. Codec2 o ráfagas diferidas comprimidas).
 
 ## Consecuencias

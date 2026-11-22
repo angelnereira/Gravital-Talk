@@ -17,22 +17,22 @@ El protocolo se implementa **una sola vez en Rust**. La portabilidad se logra me
 ## Alternativas consideradas
 
 ### A. Reimplementar el protocolo en cada lenguaje
-- ✅ API nativa perfecta en cada plataforma.
-- ❌ N implementaciones = N bugs, N especificaciones de facto, N auditorías.
-- ❌ Drift entre implementaciones inevitable.
+- **Sí:** API nativa perfecta en cada plataforma.
+- **No:** N implementaciones = N bugs, N especificaciones de facto, N auditorías.
+- **No:** Drift entre implementaciones inevitable.
 - **Rechazada.**
 
 ### B. Go como lenguaje principal
-- ✅ Fácil cross-compilation.
-- ❌ Runtime pesado (GC, goroutines) inapropiado para real-time de baja latencia.
-- ❌ FFI penosa (cgo overhead, bindings frágiles).
-- ❌ No `no_std` equivalente → no usable en embebido ni WASM ligero.
+- **Sí:** Fácil cross-compilation.
+- **No:** Runtime pesado (GC, goroutines) inapropiado para real-time de baja latencia.
+- **No:** FFI penosa (cgo overhead, bindings frágiles).
+- **No:** No `no_std` equivalente → no usable en embebido ni WASM ligero.
 - **Rechazada.**
 
 ### C. C/C++ como lenguaje principal
-- ✅ FFI trivial (no hay capa).
-- ❌ Memoria manual → clase entera de bugs que Rust previene por compilación.
-- ❌ Tooling (build system, paquetes, testing) inferior.
+- **Sí:** FFI trivial (no hay capa).
+- **No:** Memoria manual → clase entera de bugs que Rust previene por compilación.
+- **No:** Tooling (build system, paquetes, testing) inferior.
 - **Rechazada.**
 
 ## Consecuencias

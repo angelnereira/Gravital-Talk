@@ -32,21 +32,21 @@ Header de **24 bytes**:
 ## Alternativas
 
 ### A. Header de 16 bytes (estilo compacto)
-- ✅ Menor overhead.
-- ❌ `timestamp` u32 en ms → wraparound ~50 días, imposible con sesiones largas.
-- ❌ Menor alineación natural.
+- **Sí:** Menor overhead.
+- **No:** `timestamp` u32 en ms → wraparound ~50 días, imposible con sesiones largas.
+- **No:** Menor alineación natural.
 - **Rechazada.**
 
 ### B. Header de 20 bytes (estilo RTP)
-- ✅ Compatibilidad mental con RTP.
-- ❌ No alinea `timestamp`.
-- ❌ No hay espacio para `checksum` dedicado (RTP confía en UDP; no aceptable para WebSocket o transportes futuros sin CRC nativo).
+- **Sí:** Compatibilidad mental con RTP.
+- **No:** No alinea `timestamp`.
+- **No:** No hay espacio para `checksum` dedicado (RTP confía en UDP; no aceptable para WebSocket o transportes futuros sin CRC nativo).
 - **Rechazada.**
 
 ### C. Header de 32 bytes (con MAC/KID)
-- ✅ Espacio para cripto desde v0.1.
-- ❌ +33% de overhead inmediato sin beneficio en 0.1.
-- ❌ Cambios tardíos del MAC format obligarían a migrar igual.
+- **Sí:** Espacio para cripto desde v0.1.
+- **No:** +33% de overhead inmediato sin beneficio en 0.1.
+- **No:** Cambios tardíos del MAC format obligarían a migrar igual.
 - **Rechazada** — la capa cripto irá en un sub-header opcional.
 
 ## Consecuencias

@@ -17,21 +17,21 @@ El trait `Transport` abstrae el medio, permitiendo combinar peers con transporte
 ## Alternativas consideradas
 
 ### A. TCP en todas partes
-- ✅ Fiable, fácil de debug, NAT-friendly.
-- ❌ Retransmisiones de paquetes viejos añaden latencia catastrófica en audio real-time.
-- ❌ Head-of-line blocking.
+- **Sí:** Fiable, fácil de debug, NAT-friendly.
+- **No:** Retransmisiones de paquetes viejos añaden latencia catastrófica en audio real-time.
+- **No:** Head-of-line blocking.
 - **Rechazada.**
 
 ### B. QUIC directo en todos los peers
-- ✅ Semántica datagram + control stream en un mismo canal. TLS integrado.
-- ❌ Soporte móvil inmaduro (no en todas las versiones de iOS/Android).
-- ❌ WebTransport aún no universal en navegadores.
-- ❌ `quinn` + stack TLS añaden ~3-5 MB al binario.
+- **Sí:** Semántica datagram + control stream en un mismo canal. TLS integrado.
+- **No:** Soporte móvil inmaduro (no en todas las versiones de iOS/Android).
+- **No:** WebTransport aún no universal en navegadores.
+- **No:** `quinn` + stack TLS añaden ~3-5 MB al binario.
 - **Rechazada para 0.1.** Reevaluar en 0.3.
 
 ### C. SCTP
-- ✅ Mensajes discretos + ordenamiento parcial configurable.
-- ❌ Casi sin soporte en internet público (NATs bloquean).
+- **Sí:** Mensajes discretos + ordenamiento parcial configurable.
+- **No:** Casi sin soporte en internet público (NATs bloquean).
 - **Rechazada.**
 
 ## Consecuencias

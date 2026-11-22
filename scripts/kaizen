@@ -1,0 +1,182 @@
+#!/usr/bin/env bash
+# kaizen: CLI de gobernanza y mejora continua
+set -euo pipefail
+ROOT="$(git rev-parse --show-toplevel)"; cd "$ROOT"
+[ -f .kaizen/config.env ] && . .kaizen/config.env
+KZ_DRAFTS_DIR="${KZ_DRAFTS_DIR:-docs/kaizen/pr-drafts}"
+KZ_DEFAULT_BRANCH="${KZ_DEFAULT_BRANCH:-main}"
+KZ_SRC_GLOBS="${KZ_SRC_GLOBS:-src lib app pkg crates}"
+BASE=".kaizen/baseline.json"
+FAIL=0
+fail() { echo "FALLA: $*" >&2; FAIL=1; }
+ok()   { [ "${QUIET:-0}" = "1" ] || echo "ok: $*"; }
+
+src_dirs() { for d in $KZ_SRC_GLOBS; do [ -d "$d" ] && printf '%s ' "$d"; done; }
+count_debt() { local d; d="$(src_dirs)"; [ -z "$d" ] && { echo 0; return; }
+  grep -rEI 'TODO|FIXME|HACK|XXX' $d 2>/dev/null | wc -l | tr -d ' '; }
+count_loc() { local d; d="$(src_dirs)"; [ -z "$d" ] && { echo 0; return; }
+  find $d -type f -not -path '*/node_modules/*' -not -path '*/target/*' -exec cat {} + 2>/dev/null | wc -l | tr -d ' '; }
+run_num() { [ -n "${1:-}" ] && bash -c "$1" 2>/dev/null | tail -n1 | tr -d '% ' || echo ""; }
+jget() { grep -oE "\"$1\": *[0-9.]+" "$BASE" 2>/dev/null | grep -oE '[0-9.]+$' || echo ""; }
+
+flat_branch() { git rev-parse --abbrev-ref HEAD | tr '/' '-'; }
+
+check_descriptors() {
+  local f any=0
+  for f in "$KZ_DRAFTS_DIR"/*.md; do
+    [ -e "$f" ] || continue
+    case "$(basename "$f")" in _TEMPLATE.md|README.md) continue;; esac
+    any=1
+    grep -q '^## Cierre de issues' "$f" || fail "$f: falta la seccion '## Cierre de issues'"
+    grep -qE '(Closes|Fixes|Resolves) #[0-9]+|Closes: none' "$f" || fail "$f: falta keyword de cierre o 'Closes: none'"
+    grep -q '^## Resumen' "$f" || fail "$f: falta la seccion '## Resumen'"
+    grep -q '^## Plan de prueba' "$f" || fail "$f: falta la seccion '## Plan de prueba'"
+  done
+  [ $any = 1 ] && ok "descriptores validados" || ok "sin descriptores pendientes"
+  # En una rama de trabajo debe existir su descriptor
+  local br; br="$(git rev-parse --abbrev-ref HEAD)"
+  if [ "$br" != "$KZ_DEFAULT_BRANCH" ] && [ "$br" != "HEAD" ] && [ "${CI:-}" != "true" ]; then
+    [ -f "$KZ_DRAFTS_DIR/$(flat_branch).md" ] || fail "falta el descriptor $KZ_DRAFTS_DIR/$(flat_branch).md"
+  fi
+}
+
+check_policy() {
+  local files; files="$(git ls-files -- "$KZ_DRAFTS_DIR" docs .kaizen 2>/dev/null || true)"
+  if [ "${KZ_POLICY_NO_EMOJI:-0}" = "1" ] && [ -n "$files" ]; then
+    # Los avisos van a stderr: no se pueden descartar en un pipeline, por eso
+    # se guarda la lista y se marca FAIL en este proceso, no en una subshell.
+    local emojis
+    emojis="$(echo "$files" | xargs grep -lP '[\x{1F300}-\x{1FAFF}\x{2600}-\x{27BF}]' 2>/dev/null || true)"
+    if [ -n "$emojis" ]; then
+      printf '%s\n' "$emojis" | while read -r x; do echo "FALLA: emoji en $x" >&2; done
+      FAIL=1
+    fi
+  fi
+  if [ "${KZ_POLICY_NO_AI_ATTRIBUTION:-0}" = "1" ] && [ -n "$files" ]; then
+    if echo "$files" | xargs grep -liE 'generated (with|by) (claude|codex|openai|copilot|opencode)|co-authored-by:.*(claude|codex|copilot)' 2>/dev/null | grep -q .; then
+      fail "atribucion a herramientas de IA en documentos"; fi
+  fi
+  if [ -n "${KZ_POLICY_BRANCH_PREFIXES_BLOCKED:-}" ]; then
+    local p
+    for p in $KZ_POLICY_BRANCH_PREFIXES_BLOCKED; do
+      ls "$KZ_DRAFTS_DIR" 2>/dev/null | grep -q "^${p//\//-}" && fail "descriptor con prefijo de rama bloqueado: $p"
+    done
+  fi
+  ok "politicas de contenido"
+}
+
+check_ratchet() {
+  [ -f "$BASE" ] || { ok "sin linea base (ejecuta: scripts/kaizen baseline)"; return; }
+  local debt cov warn bdebt bcov bwarn
+  debt="$(count_debt)"; bdebt="$(jget debt_max)"
+  [ -n "$bdebt" ] && { [ "$debt" -le "$bdebt" ] && ok "deuda $debt <= $bdebt" || fail "deuda subio: $debt > $bdebt"; }
+  if [ -n "${KZ_COVERAGE_CMD:-}" ]; then
+    cov="$(run_num "$KZ_COVERAGE_CMD")"; bcov="$(jget coverage_min)"
+    if [ -n "$cov" ] && [ -n "$bcov" ]; then
+      awk "BEGIN{exit !($cov >= $bcov)}" && ok "cobertura $cov >= $bcov" || fail "cobertura bajo: $cov < $bcov"; fi
+  fi
+  if [ -n "${KZ_WARNINGS_CMD:-}" ]; then
+    warn="$(run_num "$KZ_WARNINGS_CMD")"; bwarn="$(jget warnings_max)"
+    if [ -n "$warn" ] && [ -n "$bwarn" ]; then
+      awk "BEGIN{exit !($warn <= $bwarn)}" && ok "advertencias $warn <= $bwarn" || fail "advertencias subieron: $warn > $bwarn"; fi
+  fi
+}
+
+check_tests() {
+  [ -n "${KZ_FMT_CMD:-}" ]  && { bash -c "$KZ_FMT_CMD"  >/dev/null 2>&1 && ok "formato" || fail "formato"; }
+  [ -n "${KZ_LINT_CMD:-}" ] && { bash -c "$KZ_LINT_CMD" >/dev/null 2>&1 && ok "lint"    || fail "lint"; }
+  [ -n "${KZ_TEST_CMD:-}" ] && { bash -c "$KZ_TEST_CMD" >/dev/null 2>&1 && ok "tests"   || fail "tests"; }
+}
+
+cmd_check() {
+  local only=""
+  while [ $# -gt 0 ]; do case "$1" in --only) only="$2"; shift;; --quiet) QUIET=1;; esac; shift; done
+  case "$only" in
+    descriptors) check_descriptors;;
+    policy) check_policy;;
+    ratchet) check_ratchet;;
+    "") check_descriptors; check_policy; check_tests; check_ratchet;;
+    *) echo "uso: check [--only descriptors|policy|ratchet] [--quiet]"; exit 2;;
+  esac
+  [ $FAIL = 0 ] || { echo "kaizen check: FALLO" >&2; exit 1; }
+  ok "kaizen check: todo en verde"
+}
+
+cmd_baseline() {
+  mkdir -p .kaizen
+  local debt cov warn
+  debt="$(count_debt)"
+  cov="$(run_num "${KZ_COVERAGE_CMD:-}")"; warn="$(run_num "${KZ_WARNINGS_CMD:-}")"
+  # El ratchet solo sube: no se permite empeorar una linea base existente
+  local old; old="$(jget debt_max)"
+  [ -n "$old" ] && [ "$debt" -gt "$old" ] && { echo "kaizen: la deuda ($debt) supera la base ($old); la linea base no se relaja." >&2; debt="$old"; }
+  {
+    echo "{"
+    echo "  \"updated\": \"$(date -u +%FT%TZ)\","
+    echo "  \"debt_max\": $debt$([ -n "$cov$warn" ] && echo ,)"
+    [ -n "$cov" ]  && echo "  \"coverage_min\": $cov$([ -n "$warn" ] && echo ,)"
+    [ -n "$warn" ] && echo "  \"warnings_max\": $warn"
+    echo "}"
+  } > "$BASE"
+  echo "linea base escrita en $BASE"; cat "$BASE"
+}
+
+cmd_metrics() {
+  mkdir -p docs/kaizen/data
+  local issues=""; command -v gh >/dev/null 2>&1 && issues="$(gh issue list --state open --json number --jq 'length' 2>/dev/null || true)"
+  local cov warn
+  cov="$(run_num "${KZ_COVERAGE_CMD:-}")"; warn="$(run_num "${KZ_WARNINGS_CMD:-}")"
+  printf '{"date":"%s","commit":"%s","loc":%s,"debt":%s,"coverage":%s,"warnings":%s,"open_issues":%s}\n' \
+    "$(date -u +%FT%TZ)" "$(git rev-parse --short HEAD)" "$(count_loc)" "$(count_debt)" \
+    "${cov:-null}" "${warn:-null}" "${issues:-null}" >> docs/kaizen/data/metrics.jsonl
+  tail -n1 docs/kaizen/data/metrics.jsonl
+}
+
+cmd_retro() {
+  local since="${1:-14 days ago}"
+  echo "# Datos del periodo (desde: $since)"
+  echo "- Commits: $(git log --since="$since" --oneline | wc -l | tr -d ' ')"
+  echo "- Autores: $(git log --since="$since" --format=%an | sort -u | wc -l | tr -d ' ')"
+  echo "- Archivos cambiados: $(git log --since="$since" --name-only --format= | sort -u | grep -c . || true)"
+  echo "- Cierres de issues en commits: $(git log --since="$since" --format=%B | grep -ciE '(closes|fixes|resolves) #[0-9]+' || true)"
+  echo "- Reverts: $(git log --since="$since" --oneline -i --grep='^revert' | wc -l | tr -d ' ')"
+  echo "- Archivos mas modificados (posibles puntos calientes):"
+  git log --since="$since" --name-only --format= | grep . | sort | uniq -c | sort -rn | head -5 | sed 's/^/    /'
+  echo "- Ultimas metricas:"; tail -n2 docs/kaizen/data/metrics.jsonl 2>/dev/null | sed 's/^/    /' || true
+  echo; echo "Usa docs/kaizen/retros/_TEMPLATE.md y acuerda como maximo 3 mejoras."
+}
+
+cmd_start() {
+  local br="${1:?uso: start <rama>}"
+  git checkout -b "$br"
+  mkdir -p "$KZ_DRAFTS_DIR"
+  local flat="${br//\//-}"
+  cp "$KZ_DRAFTS_DIR/_TEMPLATE.md" "$KZ_DRAFTS_DIR/$flat.md"
+  echo "rama $br creada; completa $KZ_DRAFTS_DIR/$flat.md"
+}
+
+cmd_init() {
+  git config core.hooksPath .githooks
+  chmod +x .githooks/* scripts/kaizen 2>/dev/null || true
+  echo "hooks activados (core.hooksPath=.githooks)"
+}
+
+case "${1:-help}" in
+  check) shift; cmd_check "$@";;
+  baseline) cmd_baseline;;
+  metrics) cmd_metrics;;
+  retro) shift; cmd_retro "$@";;
+  start) shift; cmd_start "$@";;
+  init) cmd_init;;
+  *) cat <<'EOF'
+kaizen <comando>
+  init        activa los git hooks
+  start <br>  crea rama + descriptor desde la plantilla
+  check       valida descriptores, politicas, formato/lint/tests y ratchet
+              [--only descriptors|policy|ratchet] [--quiet]
+  baseline    escribe/sube la linea base de calidad
+  metrics     agrega una linea a docs/kaizen/data/metrics.jsonl
+  retro [desde]  resumen de datos para la retrospectiva
+EOF
+   ;;
+esac

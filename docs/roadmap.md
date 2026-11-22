@@ -17,7 +17,7 @@ se rompen).
 
 ## Hito 0.3.0-alpha.1 — en curso
 
-### Modo servidor (sala) ✅ hecho
+### Modo servidor (sala) **Sí** hecho
 - [x] `Session::set_preset_session_id` — handshake con `session_id` compartido.
 - [x] Relay enruta el handshake (el servidor se registra con Heartbeat).
 - [x] Test e2e `relay_routed_session` (handshake + audio cifrado vía relay).
@@ -26,7 +26,7 @@ se rompen).
       resumen de frames y métricas (rtt/jitter/loss/MOS).
 - [x] FFI `gs_session_set_session_id` (ABI C v1, compatible hacia atrás).
 
-### App Flutter multiplataforma ✅ hecho (scaffold completo)
+### App Flutter multiplataforma **Sí** hecho (scaffold completo)
 - [x] `app/` (android, ios, linux, macos, windows, web).
 - [x] Screens: inicio, configuración servidor (crear/unirse sala + QR),
       configuración P2P (host/join), sesión en vivo (PTT + métricas),
@@ -42,11 +42,11 @@ se rompen).
       (staticlib + hook de Xcode), workflow `flutter-android.yml` (APK con
       `.so` nativos en CI).
 
-### Contratos (gRPC candidato) ✅ hecho
+### Contratos (gRPC candidato) **Sí** hecho
 - [x] `proto/gravital/v1/server_control.proto`, `pairing.proto`.
 - [x] Evaluación `docs/grpc-evaluation.md` (control sí, media no).
 
-### Docker ✅ hecho
+### Docker **Sí** hecho
 - [x] `docker/Dockerfile` (relay + cli), `Dockerfile.dev` (tests/bench),
       `Dockerfile.fuzz` (cargo-fuzz nightly).
 - [x] `compose.yaml` perfiles: e2e, test, bench, perf (netem), security, obs.

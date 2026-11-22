@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(git rev-parse --show-toplevel)"
+# shellcheck disable=SC1091
+[ -f "$ROOT/.kaizen/config.env" ] && . "$ROOT/.kaizen/config.env"
+
+MSG_FILE="$1"
+SUBJECT="$(head -n1 "$MSG_FILE")"
+MSG="$(cat "$MSG_FILE")"
+
+if [ "${KZ_POLICY_COMMIT_MAX:-0}" -gt 0 ] && [ "${#SUBJECT}" -gt "$KZ_POLICY_COMMIT_MAX" ]; then
+  echo "kaizen: el resumen del commit excede ${KZ_POLICY_COMMIT_MAX} caracteres (${#SUBJECT})." >&2; exit 1
+fi
+if [ "${KZ_POLICY_NO_EMOJI:-0}" = "1" ] && printf '%s' "$MSG" | grep -qP '[\x{1F300}-\x{1FAFF}\x{2600}-\x{27BF}]'; then
+  echo "kaizen: el mensaje contiene emojis (politica activa)." >&2; exit 1
+fi
+if [ "${KZ_POLICY_NO_AI_ATTRIBUTION:-0}" = "1" ] && printf '%s' "$MSG" | grep -qiE 'co-authored-by:.*(claude|codex|openai|anthropic|copilot|opencode)|generated (with|by)'; then
+  echo "kaizen: el mensaje contiene atribucion a herramientas de IA (politica activa)." >&2; exit 1
+fi
+exit 0
