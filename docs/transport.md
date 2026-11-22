@@ -20,7 +20,7 @@ Para todos los nativos (Linux, macOS, Windows, Android, iOS, embebido), el trans
   - `IP_TOS = 0xB8` (DSCP EF, Expedited Forwarding) para priorizar tráfico real-time.
   - `SO_BUSY_POLL` opcional (Linux, reduce wakeup latency).
   - `IP_PKTINFO`/`IPV6_RECVPKTINFO` para saber qué interfaz recibió cada paquete (servidor multi-homed).
-- En Linux con feature `io-uring`, `UdpTransport` puede usar `tokio-uring` en lugar del runtime estándar. Elimina una syscall por paquete y permite batch submit con `SQE`.
+- **Idea futura, no implementada:** en Linux, `tokio-uring` permitiría a `UdpTransport` eliminar una syscall por paquete y hacer batch submit con `SQE`. Hoy el transporte UDP usa `tokio::net::UdpSocket`.
 
 ## 3. WebSocket para navegador
 
@@ -65,7 +65,7 @@ pub trait Transport: Send + Sync {
 
 Implementaciones:
 
-- `UdpTransport`: `tokio::net::UdpSocket` o `tokio-uring::UdpSocket`.
+- `UdpTransport`: `tokio::net::UdpSocket`. (`tokio-uring::UdpSocket` es sólo una idea futura; no hay implementación.)
 - `WebSocketTransport`: `tokio-tungstenite`.
 - `NullTransport`: para tests.
 - `MockTransport`: inyecta pérdida/jitter/reorder para testing determinista.

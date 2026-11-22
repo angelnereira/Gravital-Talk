@@ -110,8 +110,8 @@ se rompen).
 - [ ] `outputs/windows` y `outputs/macos` sin artefactos (CI pendiente).
       Issue #45 (`kaizen:ready`).
 - [ ] iOS sin SDK/App (roadmap 0.4). Issue #53 (needs-human).
-- [ ] Docs mencionan `io-uring`/`tokio-uring` sin implementación (a futuro).
-      Issue #46 (`kaizen:ready`).
+- [x] Docs aclaran que `io-uring`/`tokio-uring` es idea futura, no una feature
+      implementada (issue #46).
 - SIMD CRC (`simd-crc`) existe pero no es el camino por default (decisión deliberada).
 - [x] Fuzzing integrado como gate de PR: `.github/workflows/fuzz.yml` ejecuta
       el smoke con 15 s/target en PRs y 60 s en schedule/manual (issue #42).

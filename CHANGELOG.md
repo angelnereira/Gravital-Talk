@@ -51,6 +51,9 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
 
 ### Changed
 
+- Aclarado en `docs/transport.md` que `io-uring`/`tokio-uring` es una idea
+  futura, no una feature implementada (issue #46).
+
 **Interfaz reconstruida sobre Gravital Experience UI**
 - Reemplazado el sistema de vidrio (glassmorphism) por contención tonal de
   Material 3: superficies `surfaceContainer*`, elevación 0 por defecto y sombra
