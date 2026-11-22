@@ -1,3 +1,7 @@
+# cargo-fuzz exige que este crate sea su propio workspace: sin esta tabla
+# Cargo intenta meterlo en el workspace raiz y los targets no compilan.
+[workspace]
+
 [package]
 name    = "gravital-talk-fuzz"
 version = "0.0.1"

@@ -15,6 +15,12 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
   product), agregador de telemetría saneada `scripts/kaizen-insights.py`, agente
   de opencode con permisos acotados y workflows de iteración y auto-merge. Se
   instala en pausa y autonomía 1: hace falta una decisión humana para activarlo.
+- **Fuzzing como gate de PR** (issue #42): `fuzz.yml` ejecuta el smoke también
+  en pull requests con 15 s por target (60 s en schedule/manual), cancela
+  ejecuciones obsoletas del mismo PR y sube los crashes como artifacts. Se
+  corrigió el workspace aislado de `fuzz/Cargo.toml` y el target
+  `fuzz_floor_payload`, que impedían compilar los fuzzers. Los tres targets
+  pasan en local con 5 s cada uno.
 
 **Gravital Experience UI — sistema de diseño de las interfaces Flutter**
 - **Retransmisión ciega en malla dentro de sala (Opportunistic Room Relay):**

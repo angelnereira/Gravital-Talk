@@ -67,3 +67,7 @@ outputs/*
 
 # Estado local del orquestador Kaizen Loop (logs, contadores, pausa del disyuntor)
 .kaizen/loop/state/
+
+# Salida generada por cargo-fuzz (corpus y crashes; los crashes se suben como artifacts de CI)
+fuzz/corpus/
+fuzz/artifacts/

@@ -46,6 +46,6 @@ fuzz_target!(|data: &[u8]| {
         // Acceder al estado tampoco debe panicar.
         let _ = ctrl.state();
         let _ = ctrl.is_available();
-        let _ = ctrl.is_transmitting();
+        let _ = ctrl.is_granted();
     }
 });

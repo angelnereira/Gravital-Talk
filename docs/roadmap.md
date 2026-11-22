@@ -89,23 +89,31 @@ se rompen).
       `gravital-talk-io` (los únicos sin deps internas).
 - [ ] Publicar `gravital-talk*` en crates.io (requiere `cargo login` y
       publicar en orden: core → io → metrics/codec/transport → facade → ffi/cli/relay).
-- [ ] PyPI (`maturin`), npm (`wasm-pack`).
+      Registrado en issue #47 (needs-human).
+- [ ] PyPI (`maturin`), npm (`wasm-pack`). Issue #48 (needs-human).
 - [ ] SDK Swift (Kotlin Multiplatform o FFI iOS) y Node.js (N-API).
-- [ ] Landing `gravitaltalk.dev` + docs hosted.
+      Issue #49 (needs-human).
+- [ ] Landing `gravitaltalk.dev` + docs hosted. Issue #50 (needs-human).
 
 ## Hito 1.0.0 — Estable
 
 - [ ] Congelar wire protocol v1; `PROTOCOL_VERSION_MAX` bloqueado.
-- [ ] Auditoría de seguridad externa.
-- [ ] Fuzzing + benchmarks como gates de CI permanentes.
+      Issue #51 (needs-human).
+- [ ] Auditoría de seguridad externa. Issue #52 (needs-human).
+- [ ] Fuzzing + benchmarks como gates de CI permanentes. El gate de fuzzing
+      ya está integrado (issue #42); los benchmarks siguen en issue #43.
 - [ ] Baseline de rendimiento publicado (criterion + docker bench).
+      Issue #44 (`kaizen:ready`).
 
 ## Deuda técnica conocida (fuera de hitos)
 
-- `outputs/windows` y `outputs/macos` sin artefactos (CI pendiente).
-- iOS sin SDK/App (roadmap 0.4).
-- Docs mencionan `io-uring`/`tokio-uring` sin implementación (a futuro).
-- SIMD CRC (`simd-crc`) existe pero no es el camino por default.
-- Fuzzing: workflow `.github/workflows/fuzz.yml` (semanal/manual) listo;
-  falta integrarlo como gate de PR.
-- Benchmarks aún no comparan contra baseline en CI (solo reportan).
+- [ ] `outputs/windows` y `outputs/macos` sin artefactos (CI pendiente).
+      Issue #45 (`kaizen:ready`).
+- [ ] iOS sin SDK/App (roadmap 0.4). Issue #53 (needs-human).
+- [ ] Docs mencionan `io-uring`/`tokio-uring` sin implementación (a futuro).
+      Issue #46 (`kaizen:ready`).
+- SIMD CRC (`simd-crc`) existe pero no es el camino por default (decisión deliberada).
+- [x] Fuzzing integrado como gate de PR: `.github/workflows/fuzz.yml` ejecuta
+      el smoke con 15 s/target en PRs y 60 s en schedule/manual (issue #42).
+- [ ] Benchmarks aún no comparan contra baseline en CI (solo reportan).
+      Issue #43 (`kaizen:ready`).

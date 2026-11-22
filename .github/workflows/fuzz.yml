@@ -5,6 +5,9 @@ name: Fuzz
 # - Programado: lunes 03:00 UTC.
 
 on:
+  # Gate de PR: smoke corto contra el mismo conjunto de targets.
+  pull_request:
+    branches: [main]
   workflow_dispatch:
     inputs:
       seconds:
@@ -15,12 +18,18 @@ on:
   schedule:
     - cron: "0 3 * * 1"
 
+# El preset de PR es corto para no frenar las revisiones; el semanal/manual
+# mantiene 60 s o el valor elegido en el dispatch.
 env:
-  FUZZ_SECONDS: ${{ inputs.seconds || '60' }}
+  FUZZ_SECONDS: ${{ github.event_name == 'pull_request' && '15' || inputs.seconds || '60' }}
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   fuzz-smoke:
-    name: fuzz (${{ inputs.seconds || '60' }}s/target)
+    name: fuzz (${{ github.event_name == 'pull_request' && '15' || inputs.seconds || '60' }}s/target)
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -32,7 +41,7 @@ jobs:
       - name: Run fuzz smoke
         run: |
           docker compose --profile security run --rm \
-            -e FUZZ_SECONDS="${{ inputs.seconds || '60' }}" fuzz
+            -e FUZZ_SECONDS="${{ env.FUZZ_SECONDS }}" fuzz
 
       - name: Upload crash artifacts (si hubo)
         if: failure()
