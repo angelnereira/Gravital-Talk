@@ -10,6 +10,11 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
   reglas, `scripts/kaizen` (`check`, `baseline`, `metrics`, `retro`, `start`,
   `init`), hooks de git, descriptores de PR versionados, línea base de calidad y
   compuertas en GitHub Actions. Los commits siguen usando Conventional Commits.
+- Ciclo autónomo Kaizen Loop: reglas `.kaizen/loop/LOOP.md`, orquestador
+  `scripts/kaizen-loop`, prompts de los cinco loops (dev, ops, sweep, research,
+  product), agregador de telemetría saneada `scripts/kaizen-insights.py`, agente
+  de opencode con permisos acotados y workflows de iteración y auto-merge. Se
+  instala en pausa y autonomía 1: hace falta una decisión humana para activarlo.
 
 **Gravital Experience UI — sistema de diseño de las interfaces Flutter**
 - **Retransmisión ciega en malla dentro de sala (Opportunistic Room Relay):**

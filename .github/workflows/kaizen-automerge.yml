@@ -1,0 +1,33 @@
+name: kaizen-automerge
+on:
+  pull_request:
+    types: [labeled, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  automerge:
+    if: >
+      contains(github.event.pull_request.labels.*.name, 'kaizen:low-risk') &&
+      !github.event.pull_request.draft &&
+      startsWith(github.event.pull_request.head.ref, 'kaizen/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.base_ref }}
+          fetch-depth: 0
+      - name: Reclasificar con el script de la rama base
+        env:
+          GH_TOKEN: ${{ secrets.KAIZEN_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          BASE: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          git fetch origin "pull/${PR}/head:pr-head"
+          CLASS="$(scripts/kaizen-loop classify "origin/${BASE}" pr-head ops)"
+          echo "clase recalculada: $CLASS"
+          [ "$CLASS" = "low-risk" ] || { echo "No es bajo riesgo: requiere revision humana"; exit 1; }
+          gh pr merge "$PR" --auto --squash --repo "${{ github.repository }}"

@@ -1,0 +1,54 @@
+name: kaizen-loop
+on:
+  schedule:
+    - cron: "17 */3 * * *"
+  workflow_dispatch:
+    inputs:
+      loop:
+        description: "dev | ops | sweep | research | product (vacio = rotar)"
+        required: false
+
+concurrency:
+  group: kaizen-loop
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: read
+  variables: write
+
+jobs:
+  iterate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.KAIZEN_TOKEN }}
+      # Setup del repo: rust-toolchain.toml fija 1.99.0; el workspace completo
+      # necesita libopus-dev libasound2-dev pkg-config (ver AGENTS.md).
+      # La CLI se instala con: npm install -g opencode-ai
+      - name: Configurar credenciales de git
+        env:
+          GH_TOKEN: ${{ secrets.KAIZEN_TOKEN }}
+        run: |
+          gh auth setup-git
+          git config --global user.name "kaizen-bot"
+          git config --global user.email "kaizen-bot@users.noreply.github.com"
+      - name: Telemetria a insights (opcional, solo lectura)
+        if: ${{ hashFiles('scripts/kaizen-insights.py') != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.KAIZEN_TOKEN }}
+        run: |
+          # Adapta esta linea: exporta los eventos saneados a telemetry/events/*.jsonl desde tu almacen.
+          python3 scripts/kaizen-insights.py --create-issues || true
+      - name: Iteracion del loop
+        env:
+          GH_TOKEN: ${{ secrets.KAIZEN_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: scripts/kaizen-loop once "${{ github.event.inputs.loop }}"

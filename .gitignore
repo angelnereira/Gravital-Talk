@@ -64,3 +64,6 @@ outputs/
 outputs/*
 !outputs/README.md
 !outputs/.gitignore
+
+# Estado local del orquestador Kaizen Loop (logs, contadores, pausa del disyuntor)
+.kaizen/loop/state/
