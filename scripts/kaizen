@@ -65,6 +65,31 @@ check_policy() {
   ok "politicas de contenido"
 }
 
+check_workflows() {
+  local files
+  files="$(git ls-files -- '.github/workflows/*.yml' '.github/workflows/*.yaml' 2>/dev/null || true)"
+  [ -z "$files" ] && { ok "sin workflows que validar"; return; }
+  # PyYAML es opcional: si no esta, se dice y no se finge la validacion (L-10).
+  if ! command -v python3 >/dev/null 2>&1 || ! python3 -c 'import yaml' >/dev/null 2>&1; then
+    echo "kaizen: falta python3+PyYAML; se omite la validacion de YAML de workflows" >&2
+    return
+  fi
+  if printf '%s\n' "$files" | python3 -c '
+import sys, yaml
+bad = 0
+for line in sys.stdin:
+    path = line.strip()
+    if not path:
+        continue
+    try:
+        yaml.safe_load(open(path, encoding="utf-8"))
+    except Exception as exc:
+        print("FALLA: YAML invalido en %s: %s" % (path, exc), file=sys.stderr)
+        bad = 1
+sys.exit(bad)
+'; then ok "workflows YAML validos"; else FAIL=1; fi
+}
+
 check_ratchet() {
   [ -f "$BASE" ] || { ok "sin linea base (ejecuta: scripts/kaizen baseline)"; return; }
   local debt cov warn bdebt bcov bwarn
@@ -94,9 +119,10 @@ cmd_check() {
   case "$only" in
     descriptors) check_descriptors;;
     policy) check_policy;;
+    workflows) check_workflows;;
     ratchet) check_ratchet;;
-    "") check_descriptors; check_policy; check_tests; check_ratchet;;
-    *) echo "uso: check [--only descriptors|policy|ratchet] [--quiet]"; exit 2;;
+    "") check_descriptors; check_policy; check_workflows; check_tests; check_ratchet;;
+    *) echo "uso: check [--only descriptors|policy|workflows|ratchet] [--quiet]"; exit 2;;
   esac
   [ $FAIL = 0 ] || { echo "kaizen check: FALLO" >&2; exit 1; }
   ok "kaizen check: todo en verde"
@@ -172,8 +198,9 @@ case "${1:-help}" in
 kaizen <comando>
   init        activa los git hooks
   start <br>  crea rama + descriptor desde la plantilla
-  check       valida descriptores, politicas, formato/lint/tests y ratchet
-              [--only descriptors|policy|ratchet] [--quiet]
+  check       valida descriptores, politicas, YAML de workflows,
+              formato/lint/tests y ratchet
+              [--only descriptors|policy|workflows|ratchet] [--quiet]
   baseline    escribe/sube la linea base de calidad
   metrics     agrega una linea a docs/kaizen/data/metrics.jsonl
   retro [desde]  resumen de datos para la retrospectiva

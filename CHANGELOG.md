@@ -28,6 +28,9 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
 - **Distribución macOS/Windows** (issue #45): el release `builds` publica
   también los CLI de macOS (x86_64 y aarch64) y Windows x64 con nombres fijos,
   además del APK y el bundle de Linux. `outputs/README.md` documenta los enlaces.
+- **Validación de YAML en `kaizen check`** (issue #56): nueva compuerta
+  `--only workflows` que valida los YAML versionados de `.github/workflows/`.
+  PyYAML es opcional; si falta se reporta, no se da por buena.
 
 **Gravital Experience UI — sistema de diseño de las interfaces Flutter**
 - **Retransmisión ciega en malla dentro de sala (Opportunistic Room Relay):**
