@@ -50,7 +50,6 @@
         { "action": "shell", "resource": "make fmt-check", "effect": "allow" },
         { "action": "shell", "resource": "python3 *", "effect": "allow" },
         { "action": "shell", "resource": "gh issue *", "effect": "allow" },
-        { "action": "shell", "resource": "git push *", "effect": "deny" },
         { "action": "shell", "resource": "gh pr create *", "effect": "deny" },
         { "action": "shell", "resource": "rm *", "effect": "deny" }
       ]
