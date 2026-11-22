@@ -1,0 +1,45 @@
+name: bench-gate
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'scripts/bench-compare.py'
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    name: bench (base vs head)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Instalar dependencias nativas
+        run: sudo apt-get update && sudo apt-get install -y libopus-dev libasound2-dev pkg-config
+
+      # El baselines se mide dos veces en el MISMO runner: asi se cancela el
+      # hardware y solo se comparan los cambios del PR. El baseline versionado
+      # de docs/benchmarks.md es referencia humana, no se usa en este gate.
+      - name: Medir commit base
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git checkout --quiet "$BASE_SHA"
+          cargo bench -p gravital-talk --bench checksum --bench encode_decode -- --save-baseline base
+
+      - name: Medir head del PR
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git checkout --quiet "$HEAD_SHA"
+          cargo bench -p gravital-talk --bench checksum --bench encode_decode -- --save-baseline head
+
+      - name: Comparar (regresion >= 10 % falla)
+        run: python3 scripts/bench-compare.py --base base --head head --threshold 10

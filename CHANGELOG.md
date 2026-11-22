@@ -21,6 +21,10 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
   corrigió el workspace aislado de `fuzz/Cargo.toml` y el target
   `fuzz_floor_payload`, que impedían compilar los fuzzers. Los tres targets
   pasan en local con 5 s cada uno.
+- **Gate de benchmarks en CI** (issue #43): `bench-gate.yml` mide los benches
+  de CRC-16 y framing en el commit base y en el head del PR **en el mismo
+  runner**, y `scripts/bench-compare.py` falla si alguna mediana empeora >= 10 %.
+  El comparador se verificó en local con caso positivo (0 %) y negativo (12 %).
 
 **Gravital Experience UI — sistema de diseño de las interfaces Flutter**
 - **Retransmisión ciega en malla dentro de sala (Opportunistic Room Relay):**

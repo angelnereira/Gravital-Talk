@@ -71,8 +71,12 @@ Tiempo wall-clock medio: ≈ 1 ms (tres roundtrips UDP localhost).
 
 - Regla del repo (`AGENTS.md`): una regresión **>= 10 %** requiere justificación
   escrita en el descriptor del cambio.
-- Umbral propuesto para el gate de CI (issue #43): **> 25 %** falla el job;
-  entre 10 % y 25 % es aviso con evidencia.
-- Para actualizar esta tabla, re-ejecuta el comando del entorno, copia las
-  medianas de criterion y cambia el commit medido. Nunca se actualiza
-  automáticamente desde un PR: exige revisión humana.
+- Gate automático (issue #43, `.github/workflows/bench-gate.yml`): mide los
+  benches en el commit base y en el head del PR **en el mismo runner** y
+  compara las medianas con `scripts/bench-compare.py --threshold 10`. Una
+  regresión >= 10 % falla el job. Al medir ambos lados en el mismo hardware no
+  hace falta un runner de referencia.
+- La tabla de arriba es la baseline de referencia humana; el gate **no** la
+  usa. Para actualizarla, re-ejecuta el comando del entorno, copia las medianas
+  de criterion y cambia el commit medido. Nunca se actualiza automáticamente
+  desde un PR: exige revisión humana.
