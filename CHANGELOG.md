@@ -53,6 +53,9 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
 
 - Aclarado en `docs/transport.md` que `io-uring`/`tokio-uring` es una idea
   futura, no una feature implementada (issue #46).
+- Baseline de rendimiento publicado en `docs/benchmarks.md` con fecha, commit,
+  entorno y comandos reproducibles (issue #44). Los benches de CRC-16 y framing
+  se midieron de nuevo con criterion sobre `012f9f4`.
 
 **Interfaz reconstruida sobre Gravital Experience UI**
 - Reemplazado el sistema de vidrio (glassmorphism) por contención tonal de
