@@ -271,6 +271,23 @@ jobs:
           path: outputs/macos/${{ matrix.arch }}/${{ env.BIN_FILENAME }}
           retention-days: 30
 
+      # Igual que Android: el binario no se versiona, se publica en el release
+      # `builds` con nombre fijo para que el enlace de descarga no cambie.
+      - name: Package and upload to the Builds release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG=builds
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "Builds" \
+              --notes "Builds de prueba. Descarga gravital-talk-latest.apk en el movil."
+          fi
+          ARCHIVE="gravital-talk-latest-macos-${{ matrix.arch }}.tar.gz"
+          tar -czf "$ARCHIVE" -C "outputs/macos/${{ matrix.arch }}" "${BIN_FILENAME}"
+          gh release upload "$TAG" "${ARCHIVE}#${ARCHIVE}" --clobber
+          echo "Publicado: ${ARCHIVE}"
+
   # ══════════════════════════════════════════════════════════════════════════════
   # Binario CLI `gs.exe` para Windows x86_64
   # ══════════════════════════════════════════════════════════════════════════════
@@ -314,3 +331,21 @@ jobs:
           name: windows-x86_64-${{ github.sha }}
           path: outputs/windows/x86_64/${{ env.BIN_FILENAME }}
           retention-days: 30
+
+      # El ZIP se publica en el release `builds` con nombre fijo, igual que
+      # el APK de Android y los tarballs de macOS.
+      - name: Package and upload to the Builds release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $TAG = "builds"
+          if (-not (gh release view $TAG 2>$null)) {
+            gh release create $TAG --title "Builds" --notes "Builds de prueba. Descarga gravital-talk-latest.apk en el movil."
+          }
+          $ARCHIVE = "gravital-talk-latest-windows-x64.zip"
+          $FILE = "outputs/windows/x86_64/$env:BIN_FILENAME"
+          Compress-Archive -Path $FILE -DestinationPath $ARCHIVE -Force
+          gh release upload $TAG "${ARCHIVE}#${ARCHIVE}" --clobber
+          Write-Host "Publicado: $ARCHIVE"

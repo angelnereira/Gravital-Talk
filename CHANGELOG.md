@@ -25,6 +25,9 @@ Todos los cambios notables de Gravital Talk se documentan aquí. El formato sigu
   de CRC-16 y framing en el commit base y en el head del PR **en el mismo
   runner**, y `scripts/bench-compare.py` falla si alguna mediana empeora >= 10 %.
   El comparador se verificó en local con caso positivo (0 %) y negativo (12 %).
+- **Distribución macOS/Windows** (issue #45): el release `builds` publica
+  también los CLI de macOS (x86_64 y aarch64) y Windows x64 con nombres fijos,
+  además del APK y el bundle de Linux. `outputs/README.md` documenta los enlaces.
 
 **Gravital Experience UI — sistema de diseño de las interfaces Flutter**
 - **Retransmisión ciega en malla dentro de sala (Opportunistic Room Relay):**

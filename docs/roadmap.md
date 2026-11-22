@@ -107,8 +107,9 @@ se rompen).
 
 ## Deuda técnica conocida (fuera de hitos)
 
-- [ ] `outputs/windows` y `outputs/macos` sin artefactos (CI pendiente).
-      Issue #45 (`kaizen:ready`).
+- [x] `outputs/windows` y `outputs/macos` publicados en el release `builds`
+      con nombres fijos (issue #45). El workflow ya compilaba ambos; faltaba
+      subirlos al release como hace Android.
 - [ ] iOS sin SDK/App (roadmap 0.4). Issue #53 (needs-human).
 - [x] Docs aclaran que `io-uring`/`tokio-uring` es idea futura, no una feature
       implementada (issue #46).

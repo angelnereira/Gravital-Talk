@@ -7,13 +7,17 @@ en el release [Builds](https://github.com/angelnereira/Gravital-Talk/releases/ta
 
 ## Descargar para probar en el móvil
 
-El release `builds` mantiene dos ficheros con nombres fijos, así que el enlace
-para bajar desde el móvil no cambia nunca:
+El release `builds` mantiene ficheros con nombres fijos, así que los enlaces
+de descarga no cambian nunca:
 
 | Fichero | Para qué |
 |---|---|
-| `gravital-talk-latest.apk` | El último build. Este es el que hay que instalar. |
-| `gravital-talk-previous.apk` | El anterior, para volver atrás si algo va mal. |
+| `gravital-talk-latest.apk` | Android, el último build. Este es el que hay que instalar. |
+| `gravital-talk-previous.apk` | Android, el anterior, para volver atrás si algo va mal. |
+| `gravital-talk-latest-linux-x64.tar.gz` | Bundle de Linux x64 con audio nativo. |
+| `gravital-talk-latest-macos-x86_64.tar.gz` | CLI `gs` para Intel Mac. |
+| `gravital-talk-latest-macos-aarch64.tar.gz` | CLI `gs` para Apple Silicon. |
+| `gravital-talk-latest-windows-x64.zip` | CLI `gs.exe` para Windows 64-bit. |
 
 ```
 https://github.com/angelnereira/Gravital-Talk/releases/download/builds/gravital-talk-latest.apk
